@@ -18,6 +18,7 @@ const app = createApp({
     authDomain: env.FIREBASE_AUTH_DOMAIN,
   },
   adminUids: (env.ADMIN_UIDS || '').split(',').map(value => value.trim()).filter(Boolean),
+  trustLocalProxy: env.TRUST_LOCAL_PROXY === 'true',
   payments: razorpay({
     key: env.RAZORPAY_KEY_ID, secret: env.RAZORPAY_KEY_SECRET, webhookSecret: env.RAZORPAY_WEBHOOK_SECRET,
   }),

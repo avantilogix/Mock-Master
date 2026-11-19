@@ -103,8 +103,8 @@ export function parseQuestions(text) {
   let current;
   const lines = text.split(/[\n\f]/).map(line => line.trim()).filter(Boolean);
   for (const line of lines) {
-    const prompt = line.match(/^(?:Q\s*)?\d+[.)]\s*(.+)$/i);
-    const option = line.match(/^([A-F])[.)]\s*(.+)$/i);
+    const prompt = line.match(/^(?:Q\s*)?\d+[.)](.+)$/i);
+    const option = line.match(/^([A-F])[.)](.+)$/i);
     const answer = line.match(/^Answer:\s*([A-F])(?:[.)])?$/i);
     if (prompt) {
       if (current) fail(422, 'Each numbered question must end with an Answer: A–F line.');

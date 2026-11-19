@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
+import { rateLimit } from 'express-rate-limit';
 import { fail, importQuestions, mobile, pageCount, renderPage, validateQuestions } from './documents.js';
 
 function text(value, label, max) {
@@ -8,8 +10,9 @@ function text(value, label, max) {
   return value.trim();
 }
 
-export function createApp({ db, verifyToken, payments, firebase = {}, adminUids = [] }) {
+export function createApp({ db, verifyToken, payments, firebase = {}, adminUids = [], trustLocalProxy = false }) {
   const app = express();
+  if (trustLocalProxy) app.set('trust proxy', 'loopback');
   app.disable('x-powered-by');
   app.use((req, res, next) => {
     res.set({
@@ -26,6 +29,12 @@ export function createApp({ db, verifyToken, payments, firebase = {}, adminUids 
     next();
   });
   const raw = express.raw({ type: 'application/octet-stream', limit: '12mb', inflate: false });
+  const limit = max => rateLimit({
+    windowMs: 60_000, limit: max, standardHeaders: 'draft-8', legacyHeaders: false,
+    message: { error: 'Too many requests. Wait a minute and try again.' },
+  });
+  const authLimit = limit(120);
+  const paymentLimit = limit(20);
   const one = (sql, ...args) => db.prepare(sql).get(...args);
   const all = (sql, ...args) => db.prepare(sql).all(...args);
   const run = (sql, ...args) => db.prepare(sql).run(...args);
@@ -93,7 +102,7 @@ export function createApp({ db, verifyToken, payments, firebase = {}, adminUids 
     res.json(all(`SELECT COALESCE(NULLIF(s.name, ''), 'Student') AS name, r.rating, r.text
       FROM reviews r JOIN students s USING (uid) WHERE r.course=? ORDER BY r.rowid DESC LIMIT 100`, req.params.id));
   });
-  api.use(login);
+  api.use(authLimit, login);
   api.get('/me', (req, res) => {
     const { uid, phone, admin } = req.user;
     const { name } = one('SELECT name FROM students WHERE uid=?', uid);
@@ -133,7 +142,7 @@ export function createApp({ db, verifyToken, payments, firebase = {}, adminUids 
     run('INSERT INTO tickets (uid, text) VALUES (?, ?)', req.user.uid, text(req.body?.text, 'Support request', 2000));
     res.sendStatus(204);
   });
-  api.post('/courses/:id/order', async (req, res) => {
+  api.post('/courses/:id/order', paymentLimit, async (req, res) => {
     const { id, price } = course(req.params.id);
     const { uid } = req.user;
     if (owns(uid, id)) fail(409, 'You already own this course.');
@@ -153,7 +162,7 @@ export function createApp({ db, verifyToken, payments, firebase = {}, adminUids 
     }
     res.status(201).json(await pending.get(lock));
   });
-  api.post('/courses/:id/verify', async (req, res) => {
+  api.post('/courses/:id/verify', paymentLimit, async (req, res) => {
     const { id } = course(req.params.id);
     const body = req.body ?? {};
     const order = one('SELECT * FROM orders WHERE uid=? AND course=?', req.user.uid, id);
@@ -227,10 +236,12 @@ export function createApp({ db, verifyToken, payments, firebase = {}, adminUids 
   api.get('/admin/support', (_req, res) => res.json(all(`SELECT s.phone, t.text FROM tickets t
     JOIN students s USING (uid) ORDER BY t.id DESC LIMIT 100`)));
   api.use((_req, res) => res.status(404).json({ error: 'API route not found.' }));
-  app.get('/.well-known/assetlinks.json', (_req, res, next) => {
-    const path = fileURLToPath(new URL('../public/.well-known/assetlinks.json', import.meta.url));
-    res.sendFile(path, { dotfiles: 'allow' }, error => { if (error) next(error.status === 404 ? undefined : error); });
-  });
+  try {
+    const assetLinks = JSON.parse(readFileSync(new URL('../public/.well-known/assetlinks.json', import.meta.url), 'utf8'));
+    app.get('/.well-known/assetlinks.json', (_req, res) => res.json(assetLinks));
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
   app.use(express.static(fileURLToPath(new URL('../public/', import.meta.url)), { dotfiles: 'ignore' }));
   app.use((error, _req, res, next) => {
     if (res.headersSent) return next(error);
