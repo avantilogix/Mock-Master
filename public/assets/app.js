@@ -91,8 +91,8 @@ async function initializeProfile(current) {
     if (current.current()) {
       current.pending = false;
       const parsed = route();
-      if (['admin', 'catalog', 'course', 'profile'].includes(parsed.page)) render(main.contains(document.activeElement));
-      else if (current.me?.admin) nav.append(link('Admin', '#admin'));
+      if (parsed.page === 'signin' && current.me?.admin) location.replace('#admin');
+      else render(main.contains(document.activeElement));
     }
   }
 }
@@ -234,7 +234,17 @@ function render(focus = false) {
     case 'admin':
       if (!current) needSignIn();
       else if (!current.me) main.append(...heading('Admin workspace'), profileUnavailable());
-      else if (!current.me.admin) main.append(...heading('Admin access required'), link('Back to courses', '#catalog', 'button'));
+      else if (!current.me.admin) {
+        const refresh = button('Refresh admin access', 'secondary');
+        const feedback = status();
+        refresh.addEventListener('click', () => run(refresh, feedback, async () => {
+          await refreshProfile(current);
+          if (current.me?.admin) location.hash = '#admin';
+          else say(feedback, `Admin access is not assigned to Firebase account ID ${current.me?.uid || 'unknown'}.`, true);
+        }, 'Checking account…'));
+        main.append(...heading('Admin access required', 'The server must verify your Firebase account before the Admin tab appears.'),
+          el('div', {class: 'actions'}, refresh, link('Back to missions', '#catalog', 'button')), feedback);
+      }
       else showAdmin(main, ctx);
       break;
     default: main.append(...heading('Page not found'), link('Back to courses', '#catalog', 'button'));
