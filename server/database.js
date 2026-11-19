@@ -35,5 +35,19 @@ export function openDatabase(path) {
       id INTEGER PRIMARY KEY, uid TEXT NOT NULL REFERENCES students, text TEXT NOT NULL
     ) STRICT;
   `);
+  const orderColumns = new Set(db.prepare('PRAGMA table_info(orders)').all().map(column => column.name));
+  const additions = [
+    ['payment_status', "TEXT NOT NULL DEFAULT 'pending'"],
+    ['transaction_ref', 'TEXT NOT NULL DEFAULT \'\''],
+    ['payment_note', "TEXT NOT NULL DEFAULT ''"],
+    ['review_note', "TEXT NOT NULL DEFAULT ''"],
+    ['submitted_at', "TEXT NOT NULL DEFAULT ''"],
+    ['reviewed_at', "TEXT NOT NULL DEFAULT ''"],
+    ['reviewed_by', "TEXT NOT NULL DEFAULT ''"],
+  ];
+  for (const [name, definition] of additions) {
+    if (!orderColumns.has(name)) db.exec(`ALTER TABLE orders ADD COLUMN ${name} ${definition}`);
+  }
+  db.exec(`UPDATE orders SET payment_status='approved' WHERE payment IS NOT NULL AND payment_status!='approved'`);
   return db;
 }

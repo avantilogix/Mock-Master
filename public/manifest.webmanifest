@@ -1,12 +1,12 @@
 {
   "id": "/",
-  "name": "Mock Master",
-  "short_name": "Mock Master",
+  "name": "Mission Selection",
+  "short_name": "Mission",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
-  "background_color": "#172554",
-  "theme_color": "#172554",
+  "background_color": "#f5f7ff",
+  "theme_color": "#24347a",
   "icons": [
     {
       "src": "/icons/icon-192.png",

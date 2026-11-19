@@ -68,7 +68,7 @@ function setSession(user) {
   if (user) {
     const controller = new AbortController();
     const current = {
-      user, controller, signal: controller.signal, payments: new Map(), pending: true,
+      user, controller, signal: controller.signal, pending: true,
       current: () => session === current && !controller.signal.aborted && firebase.auth.currentUser === user
     };
     session = current;
@@ -99,10 +99,11 @@ async function initializeProfile(current) {
 
 function renderNav(parsed) {
   const catalogActive = ['catalog', 'course', 'test', 'book'].includes(parsed.page);
-  const navLink = (label, href, active) => el('a', {href, 'aria-current': active ? 'page' : null}, label);
-  nav.replaceChildren(navLink('Courses', '#catalog', catalogActive), navLink('Support', '#support', parsed.page === 'support'),
-    session ? navLink('Profile', '#profile', parsed.page === 'profile') : navLink('Sign in', '#signin', parsed.page === 'signin'));
-  if (session?.me?.admin) nav.append(navLink('Admin', '#admin', parsed.page === 'admin'));
+  const navLink = (label, icon, href, active) => el('a', {href, 'data-icon': icon, 'aria-current': active ? 'page' : null}, label);
+  nav.replaceChildren(navLink('Missions', '⌂', '#catalog', catalogActive), navLink('Support', '?', '#support', parsed.page === 'support'),
+    session ? navLink('Profile', '●', '#profile', parsed.page === 'profile') : navLink('Sign in', '●', '#signin', parsed.page === 'signin'));
+  if (session?.me?.admin) nav.append(navLink('Admin', '⚙', '#admin', parsed.page === 'admin'));
+  nav.style.setProperty('--nav-count', nav.children.length);
 }
 
 function profileUnavailable() {
@@ -140,8 +141,15 @@ function showProfile(ctx) {
       if (firebase.auth.currentUser !== (session?.user ?? null)) setSession(firebase.auth.currentUser);
     }
   });
-  main.append(...heading('Your profile', 'Manage the name shown on your reviews and course messages.'),
-    panel('Account', el('p', {}, `Mobile number: ${phone || 'Unavailable'}`), signOut));
+  const name = session.me?.name || 'Student';
+  main.append(...heading('Your learning space', 'Manage your profile and keep your preparation moving forward.'),
+    panel('Account', el('div', {class: 'profile-summary'},
+      el('div', {class: 'avatar', 'aria-hidden': 'true'}, name.slice(0, 1).toUpperCase()),
+      el('div', {}, el('h3', {}, name), el('p', {class: 'muted'}, `Mobile: ${phone || 'Unavailable'}`))),
+      el('div', {class: 'profile-purchase section'},
+        el('div', {}, el('strong', {}, String(session.me?.purchases?.length || 0)), el('span', {class: 'muted'}, 'Courses unlocked')),
+        el('div', {}, el('strong', {}, 'Secure'), el('span', {class: 'muted'}, 'Protected learning access'))),
+      el('div', {class: 'actions section'}, link('Explore courses', '#catalog', 'button'), signOut)));
   if (!session.me) {
     main.append(panel('Display name', profileUnavailable()));
     return;
@@ -160,7 +168,11 @@ function showProfile(ctx) {
 }
 
 function showSupport(ctx) {
-  main.append(...heading('Support', 'Need help with your account, a course, or a payment? Send us a message.'));
+  main.append(...heading('How can we help?', 'Find a quick answer below or send our support team a message.'),
+    el('section', {class: 'support-faq section'},
+      el('details', {}, el('summary', {}, 'When will my course unlock?'), el('p', {}, 'After the admin matches your UPI transaction and approves the request. Return to the course and check approval status.')),
+      el('details', {}, el('summary', {}, 'Why is my mobile number on book pages?'), el('p', {}, 'It identifies the licensed reader and helps protect paid content. This app serves protected page images rather than the original PDF.')),
+      el('details', {}, el('summary', {}, 'Can I use the same course on another phone?'), el('p', {}, 'Yes. Sign in with the same verified mobile number to restore the purchases linked to your account.'))));
   if (!ctx.user) {
     main.append(panel('Contact support', el('p', {}, 'Sign in so the support team can identify your account.'), signInLink()));
     return;
@@ -199,7 +211,7 @@ function render(focus = false) {
         id: courseId, signInLink, profileUnavailable, refreshProfile,
         purchased: title => {
           if (!current.current()) return;
-          notice.textContent = `Payment verified. You now have access to ${title}.`;
+          notice.textContent = `Payment approved. You now have access to ${title}.`;
           const visible = route();
           if ((visible.page === 'course' && visible.args[0] === courseId) || visible.page === 'catalog') render(true);
         }

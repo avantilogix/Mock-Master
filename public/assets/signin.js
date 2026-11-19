@@ -16,9 +16,19 @@ function authError(error) {
 }
 
 export function showSignIn(main, ctx, firebase, startAuth, initState) {
-  main.append(...heading('Sign in', 'Use your mobile number to receive a one-time code by SMS.'));
-  const section = el('div', {class: 'panel narrow'});
-  main.append(section);
+  main.append(el('section', {class: 'auth-layout'},
+    el('div', {class: 'auth-story'}, el('span', {class: 'eyebrow'}, 'Mission Selection account'),
+      ...heading('Start your mission.'),
+      el('p', {class: 'lead'}, 'Sign in securely to access purchased missions, practice tests, protected books, and course discussions.'),
+      el('div', {class: 'auth-benefits'},
+        el('span', {}, '✓ Secure mobile OTP'),
+        el('span', {}, '✓ Purchases stay with your number'),
+        el('span', {}, '✓ Continue on any supported phone'))),
+    el('div', {class: 'auth-card'}, el('div', {class: 'auth-card-title'},
+      el('span', {class: 'auth-icon', 'aria-hidden': 'true'}, 'MS'),
+      el('div', {}, el('h2', {}, 'Welcome back'), el('p', {class: 'muted'}, 'Sign in or create your student account.'))),
+      el('div', {id: 'auth-form'}))));
+  const section = main.querySelector('#auth-form');
   if (!firebase || initState !== 'ready') {
     const feedback = status();
     section.append(feedback);
@@ -31,7 +41,7 @@ export function showSignIn(main, ctx, firebase, startAuth, initState) {
     return;
   }
   const {sdk, auth} = firebase;
-  const phone = el('input', {type: 'tel', autocomplete: 'tel', required: '', placeholder: '+91'});
+  const phone = el('input', {type: 'tel', autocomplete: 'tel', inputmode: 'tel', required: '', placeholder: '+91 98765 43210'});
   const captcha = el('div', {id: 'captcha'});
   let verifier;
   const clearVerifier = () => {

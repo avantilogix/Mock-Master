@@ -3,7 +3,6 @@ import { join } from 'node:path';
 import { createApp } from './app.js';
 import { firebaseVerifier } from './auth.js';
 import { openDatabase } from './database.js';
-import { razorpay } from './payments.js';
 
 process.umask(0o077);
 const env = process.env;
@@ -19,10 +18,8 @@ const app = createApp({
   },
   adminUids: (env.ADMIN_UIDS || '').split(',').map(value => value.trim()).filter(Boolean),
   trustLocalProxy: env.TRUST_LOCAL_PROXY === 'true',
-  payments: razorpay({
-    key: env.RAZORPAY_KEY_ID, secret: env.RAZORPAY_KEY_SECRET, webhookSecret: env.RAZORPAY_WEBHOOK_SECRET,
-  }),
+  manualPayment: { upiId: env.UPI_ID, payeeName: env.UPI_PAYEE_NAME },
 });
 const port = Number(env.PORT || 3000);
 const host = env.HOST || '127.0.0.1';
-app.listen(port, host, () => console.log(`Mock Master listening on ${host}:${port}`));
+app.listen(port, host, () => console.log(`Mission Selection listening on ${host}:${port}`));

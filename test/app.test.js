@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { createHmac } from 'node:crypto';
 import { once } from 'node:events';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -9,7 +8,6 @@ import test from 'node:test';
 import { createApp } from '../server/app.js';
 import { openDatabase } from '../server/database.js';
 import { importQuestions, renderPage } from '../server/documents.js';
-import { razorpay } from '../server/payments.js';
 
 const source = '1. What is 2 + 2?\nA. 3\nB. 4\nAnswer: B';
 const questions = [{ prompt: 'What is 2 + 2?', options: ['3', '4'], answer: 1 }];
@@ -61,29 +59,15 @@ test('extracts PDF questions and bakes a viewer-specific watermark into pages', 
   assert.notDeepEqual(first, second);
 });
 
-test('checkout grants only the paying student access to their course, test and discussion', async t => {
+test('admin approval grants only the confirmed student access to their course, test and discussion', async t => {
   const db = openDatabase(':memory:');
   const users = new Map([
     ['buyer', { uid: 'buyer', phone: '+919000000001' }],
     ['other', { uid: 'other', phone: '+919000000002' }],
     ['admin', { uid: 'admin', phone: '+919000000003' }],
   ]);
-  let providerOrders = 0;
-  const payments = razorpay({
-    key: 'test-key', secret: 'mock-checkout-secret', webhookSecret: 'mock-webhook-secret',
-    fetchImpl: async (url, options) => {
-      if (url === 'https://api.razorpay.com/v1/payments/pay_test') {
-        assert.equal(options.method, 'GET');
-        return Response.json({ id: 'pay_test', order_id: 'order_test', amount: 14900, currency: 'INR', status: 'authorized' });
-      }
-      assert.equal(url, 'https://api.razorpay.com/v1/orders');
-      assert.equal(options.method, 'POST');
-      const { amount, currency } = JSON.parse(options.body);
-      providerOrders++;
-      return Response.json({ id: 'order_test', amount, currency });
-    },
-  });
-  const server = createApp({ db, verifyToken: async token => users.get(token), adminUids: ['admin'], payments })
+  const server = createApp({ db, verifyToken: async token => users.get(token), adminUids: ['admin'],
+    manualPayment: { upiId: 'mock@upi', payeeName: 'Mock Master' } })
     .listen(0, '127.0.0.1');
   await once(server, 'listening');
   t.after(() => new Promise(resolve => server.close(() => { db.close(); resolve(); })));
@@ -121,29 +105,23 @@ test('checkout grants only the paying student access to their course, test and d
   assert.equal((await request(testPath, 'buyer')).status, 403);
   assert.equal((await request(`${path}/messages`, 'buyer', 'POST', { text: 'Hello' })).status, 403);
 
-  const [a, b] = await Promise.all(Array.from({ length: 2 }, () => request(`${path}/order`, 'buyer', 'POST', { amount: 1 })));
-  for (const response of [a, b]) assert.deepEqual(await response.json(), { id: 'order_test', amount: 14900, currency: 'INR', key: 'test-key' });
-  assert.equal(providerOrders, 1);
-  const confirmation = {
-    razorpay_order_id: 'order_test',
-    razorpay_payment_id: 'pay_test',
-    razorpay_signature: createHmac('sha256', 'mock-checkout-secret').update('order_test|pay_test').digest('hex'),
-  };
-  assert.equal((await request(`${path}/verify`, 'other', 'POST', confirmation)).status, 400);
-  assert.equal((await request(`${path}/verify`, 'buyer', 'POST', confirmation)).status, 409);
-  const webhook = amount => ({
-    event: 'payment.captured',
-    payload: { payment: { entity: { id: 'pay_test', order_id: 'order_test', amount, currency: 'INR', status: 'captured' } } },
-  });
-  const signature = body => createHmac('sha256', 'mock-webhook-secret').update(JSON.stringify(body)).digest('hex');
-  assert.equal((await request('/payments/webhook', null, 'POST', webhook(14900))).status, 400);
-  assert.equal((await request('/payments/webhook', null, 'POST', webhook(1), { 'X-Razorpay-Signature': signature(webhook(1)) })).status, 409);
+  const submitted = await request(`${path}/payment`, 'buyer', 'POST', { reference: 'UPI123456789', note: 'Paid in app' });
+  assert.equal(submitted.status, 201);
+  const requestId = (await submitted.json()).id;
+  assert.equal((await request(`${path}/payment`, 'buyer', 'POST', { reference: 'UPI123456789' })).status, 409);
   assert.equal((await request(path, 'buyer')).status, 403);
-  for (let i = 0; i < 2; i++) {
-    assert.equal((await request('/payments/webhook', null, 'POST', webhook(14900),
-      { 'X-Razorpay-Signature': signature(webhook(14900)) })).status, 204);
-  }
-  assert.equal((await request(`${path}/verify`, 'buyer', 'POST', confirmation)).status, 204);
+  const pending = await (await request('/admin/payments', 'admin')).json();
+  assert.equal(pending.length, 1);
+  assert.equal(pending[0].reference, 'UPI123456789');
+  assert.equal((await request(`/admin/payments/${requestId}/reject`, 'admin', 'POST', { note: '' })).status, 422);
+  assert.equal((await request(`/admin/payments/${requestId}/reject`, 'admin', 'POST', { note: 'Reference not visible in account' })).status, 204);
+  const rejected = await (await request(`${path}/payment`, 'buyer')).json();
+  assert.equal(rejected.order.status, 'rejected');
+  assert.equal(rejected.order.reviewNote, 'Reference not visible in account');
+  assert.equal((await request(`${path}/payment`, 'buyer', 'POST', { reference: 'UPI987654321' })).status, 201);
+  assert.equal((await request(`/admin/payments/${requestId}/approve`, 'other', 'POST')).status, 403);
+  assert.equal((await request(`/admin/payments/${requestId}/approve`, 'admin', 'POST')).status, 204);
+  assert.equal((await request(`/admin/payments/${requestId}/approve`, 'admin', 'POST')).status, 204);
   assert.deepEqual((await (await request('/me', 'buyer')).json()).purchases, [id]);
   assert.equal((await request(path, 'buyer')).status, 200);
   assert.equal((await request(testPath, 'other')).status, 403);

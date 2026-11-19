@@ -1,5 +1,5 @@
 import {api} from './services.js';
-import {bindForm, button, el, entries, field, heading, idPart, loadInto, panel, say, status, textValue} from './ui.js';
+import {bindForm, button, el, entries, field, heading, idPart, loadInto, panel, run, say, status, textValue} from './ui.js';
 
 const pdfAccept = '.pdf,application/pdf';
 
@@ -19,9 +19,11 @@ function questionData(source) {
 }
 
 export function showAdmin(main, ctx) {
-  main.append(...heading('Admin workspace', 'Create courses, publish practice material, and read support requests.'));
+  main.append(...heading('Admin workspace', 'Approve course payments, publish learning material, and support students from your phone.'));
   const get = path => api(path, {ctx, auth: true});
   const post = (path, body) => api(path, {ctx, auth: true, method: 'POST', ...body});
+  const payments = el('div');
+  const paymentRefresh = button('Refresh requests', 'secondary');
   const content = el('div');
   const inbox = el('div');
   const courseSelects = [];
@@ -43,6 +45,40 @@ export function showAdmin(main, ctx) {
     courseList = await api('/courses', {ctx});
     setCourses(courseList);
   };
+  const loadPayments = () => loadInto(payments, ctx, async () => {
+    const requests = await get('/admin/payments');
+    payments.replaceChildren(...(requests.length ? requests.map(request => {
+      const approve = button('Approve and unlock');
+      const reject = button('Reject', 'danger secondary');
+      const rejection = el('textarea', {rows: '2', maxlength: '500', placeholder: 'Reason for rejection'});
+      const feedback = status();
+      approve.disabled = request.status !== 'pending';
+      reject.disabled = request.status !== 'pending';
+      approve.addEventListener('click', () => run(approve, feedback, async () => {
+        await post(`/admin/payments/${idPart(request.id)}/approve`, {json: {}});
+        say(feedback, `${request.course} is now unlocked for ${request.name}.`);
+        setTimeout(loadPayments, 500);
+      }, 'Approving…'));
+      reject.addEventListener('click', () => run(reject, feedback, async () => {
+        if (!rejection.value.trim()) throw new Error('Enter a rejection reason.');
+        await post(`/admin/payments/${idPart(request.id)}/reject`, {json: {note: rejection.value.trim()}});
+        say(feedback, 'Request rejected. The student can resubmit payment proof.');
+        setTimeout(loadPayments, 500);
+      }, 'Rejecting…'));
+      return el('article', {class: 'payment-request'},
+        el('div', {class: 'payment-request-head'}, el('div', {}, el('strong', {}, request.name),
+          el('p', {class: 'muted'}, request.phone)), el('span', {class: `request-state ${request.status}`}, request.status)),
+        el('h3', {}, request.course), el('p', {class: 'price'}, new Intl.NumberFormat('en-IN',
+          {style: 'currency', currency: 'INR'}).format(request.amount / 100)),
+        el('dl', {class: 'payment-summary'}, el('dt', {}, 'UPI reference'), el('dd', {}, request.reference),
+          el('dt', {}, 'Submitted'), el('dd', {}, request.submittedAt ? new Date(request.submittedAt).toLocaleString('en-IN') : 'Unavailable')),
+        request.note ? el('p', {class: 'muted'}, request.note) : null,
+        request.reviewNote ? el('p', {class: 'rejection'}, request.reviewNote) : null,
+        request.status === 'pending' ? field('Rejection reason (only if needed)', rejection) : null,
+        el('div', {class: 'actions'}, approve, reject), feedback);
+    }) : [el('p', {class: 'empty'}, 'No payment requests yet.')]));
+  });
+  paymentRefresh.addEventListener('click', loadPayments);
 
   const title = el('input', {required: '', maxlength: '120'});
   const description = el('textarea', {rows: '3', required: '', maxlength: '2000'});
@@ -72,7 +108,11 @@ export function showAdmin(main, ctx) {
     await refresh();
     content.replaceChildren();
   });
-  main.append(panel('Create a course', createForm), content);
+  main.append(panel('Payment approvals',
+    el('p', {class: 'muted'}, 'Verify each UPI transaction in the receiving account before unlocking a student course.'),
+    paymentRefresh, el('div', {class: 'payment-requests'}, payments)),
+  panel('Create a course', createForm), content);
+  loadPayments();
 
   const example = JSON.stringify([{prompt: 'What is 2 + 2?', options: ['3', '4'], answer: 1}], null, 2);
   const editor = el('textarea', {class: 'json', rows: '12', required: '', spellcheck: 'false', placeholder: example});

@@ -1,5 +1,5 @@
 {
-  "name": "mock-master",
+  "name": "mission-selection",
   "version": "1.0.0",
   "scripts": {
     "test": "node --test",
@@ -13,6 +13,7 @@
     "express": "5.3.0",
     "express-rate-limit": "8.7.5",
     "jose": "6.2.18",
+    "qrcode": "^1.5.4",
     "sax": "1.6.1",
     "sharp": "0.35.5"
   },

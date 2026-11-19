@@ -1,6 +1,4 @@
 const firebaseBase = 'https://www.gstatic.com/firebasejs/11.10.0/';
-const razorpayUrl = 'https://checkout.razorpay.com/v1/checkout.js';
-let checkoutScript;
 
 export async function api(path, {ctx, auth = false, method = 'GET', json, binary, image = false} = {}) {
   const signal = ctx?.signal;
@@ -26,7 +24,7 @@ export async function api(path, {ctx, auth = false, method = 'GET', json, binary
   } catch (error) {
     check();
     if (error.name === 'AbortError') throw error;
-    throw new Error('Could not reach Mock Master. Check your connection and try again.');
+    throw new Error('Could not reach Mission Selection. Check your connection and try again.');
   }
   check();
   if (!response.ok) {
@@ -52,31 +50,4 @@ export async function firebaseAuth() {
     import(`${firebaseBase}firebase-auth.js`)
   ]);
   return {sdk, auth: sdk.getAuth(initializeApp(firebase))};
-}
-
-export function loadCheckout() {
-  if (window.Razorpay) return Promise.resolve(window.Razorpay);
-  if (!checkoutScript) {
-    checkoutScript = new Promise((resolve, reject) => {
-      const script = document.createElement('script');
-      script.src = razorpayUrl;
-      const timer = setTimeout(fail, 15000);
-      function fail() {
-        clearTimeout(timer);
-        script.remove();
-        reject(new Error('Checkout could not load. Check your connection and try again.'));
-      }
-      script.addEventListener('error', fail, {once: true});
-      script.addEventListener('load', () => {
-        clearTimeout(timer);
-        if (typeof window.Razorpay === 'function') resolve(window.Razorpay);
-        else fail();
-      }, {once: true});
-      document.head.append(script);
-    }).catch(error => {
-      checkoutScript = null;
-      throw error;
-    });
-  }
-  return checkoutScript;
 }

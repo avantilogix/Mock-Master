@@ -3,14 +3,16 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { rateLimit } from 'express-rate-limit';
+import QRCode from 'qrcode';
 import { fail, importQuestions, mobile, pageCount, renderPage, validateQuestions } from './documents.js';
+import { paymentReference, upiDetails, upiPaymentUri } from './manual-payments.js';
 
 function text(value, label, max) {
   if (typeof value !== 'string' || !value.trim() || value.length > max) fail(422, `${label} is required (maximum ${max} characters).`);
   return value.trim();
 }
 
-export function createApp({ db, verifyToken, payments, firebase = {}, adminUids = [], trustLocalProxy = false }) {
+export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, adminUids = [], trustLocalProxy = false }) {
   const app = express();
   if (trustLocalProxy) app.set('trust proxy', 'loopback');
   app.disable('x-powered-by');
@@ -39,7 +41,6 @@ export function createApp({ db, verifyToken, payments, firebase = {}, adminUids 
   const all = (sql, ...args) => db.prepare(sql).all(...args);
   const run = (sql, ...args) => db.prepare(sql).run(...args);
   const admins = new Set(adminUids);
-  const pending = new Map();
   let documentJobs = 0;
   async function processDocument(operation) {
     if (documentJobs >= 4) fail(503, 'Document processing is busy. Please retry.');
@@ -77,26 +78,16 @@ export function createApp({ db, verifyToken, payments, firebase = {}, adminUids 
   function requirePurchase(req, id, allowAdmin = true) {
     if (!(allowAdmin && req.user.admin) && !owns(req.user.uid, id)) fail(403, 'Purchase this course to unlock it.');
   }
-  function activate(payment, expected) {
-    if (!payment || !expected || payment.orderId !== expected.id || payment.amount !== expected.amount ||
-        payment.currency !== 'INR' || (expected.payment && expected.payment !== payment.id) ||
-        one('SELECT id FROM orders WHERE payment=? AND id!=?', payment.id, expected.id)) return false;
-    run('UPDATE orders SET payment=? WHERE id=?', payment.id, expected.id);
-    return true;
-  }
-
-  api.post('/payments/webhook', express.raw({ type: 'application/json', limit: '256kb', inflate: false }), (req, res) => {
-    const payment = payments.webhookPayment(req.body, req.get('X-Razorpay-Signature'));
-    if (payment) {
-      const order = one('SELECT * FROM orders WHERE id=?', payment.orderId);
-      if (!order) fail(503, 'Order is not available yet.');
-      if (!activate(payment, order)) fail(409, 'Payment does not match the order.');
-    }
-    res.sendStatus(204);
-  });
   api.use(express.json({ limit: '1mb', inflate: false }));
-  api.get('/config', (_req, res) => res.json({ firebase }));
+  const paymentDetails = upiDetails(manualPayment);
+  api.get('/config', (_req, res) => res.json({ firebase, payment: paymentDetails }));
   api.get('/courses', (_req, res) => res.json(all('SELECT * FROM courses ORDER BY rowid DESC')));
+  api.get('/courses/:id/payment-qr', async (req, res) => {
+    const row = course(req.params.id);
+    const uri = upiPaymentUri(paymentDetails, row.price, `Mission Selection ${row.title}`);
+    if (!uri) fail(503, 'UPI payment details are not configured.');
+    res.type('svg').send(await QRCode.toString(uri, { type: 'svg', margin: 1, errorCorrectionLevel: 'M' }));
+  });
   api.get('/courses/:id/reviews', (req, res) => {
     course(req.params.id);
     res.json(all(`SELECT COALESCE(NULLIF(s.name, ''), 'Student') AS name, r.rating, r.text
@@ -142,37 +133,37 @@ export function createApp({ db, verifyToken, payments, firebase = {}, adminUids 
     run('INSERT INTO tickets (uid, text) VALUES (?, ?)', req.user.uid, text(req.body?.text, 'Support request', 2000));
     res.sendStatus(204);
   });
-  api.post('/courses/:id/order', paymentLimit, async (req, res) => {
+  api.get('/courses/:id/payment', (req, res) => {
+    const { id, price } = course(req.params.id);
+    const order = one(`SELECT id, amount, payment_status AS status, transaction_ref AS reference,
+      payment_note AS note, review_note AS reviewNote, submitted_at AS submittedAt FROM orders
+      WHERE uid=? AND course=?`, req.user.uid, id);
+    res.json({ amount: price, payment: { ...paymentDetails, qr: `/api/courses/${id}/payment-qr` }, order });
+  });
+  api.post('/courses/:id/payment', paymentLimit, (req, res) => {
     const { id, price } = course(req.params.id);
     const { uid } = req.user;
     if (owns(uid, id)) fail(409, 'You already own this course.');
-    const existing = one('SELECT id, amount FROM orders WHERE uid=? AND course=?', uid, id);
-    if (existing) {
-      if (!payments.key) fail(503, 'Checkout is not configured.');
-      return res.json({ ...existing, currency: 'INR', key: payments.key });
+    if (!paymentDetails.configured) fail(503, 'UPI payment details are not configured.');
+    const reference = paymentReference(req.body?.reference);
+    if (!reference) fail(422, 'Enter a valid UPI transaction reference (4–80 characters).');
+    if (typeof req.body?.note !== 'undefined' && (typeof req.body.note !== 'string' || req.body.note.length > 500)) {
+      fail(422, 'Payment note must be 500 characters or fewer.');
     }
-    const lock = JSON.stringify([uid, id]);
-    if (!pending.has(lock)) {
-      const work = (async () => {
-        const order = await payments.createOrder({ amount: price, receipt: randomUUID() });
-        run('INSERT INTO orders (id, uid, course, amount) VALUES (?, ?, ?, ?)', order.id, uid, id, price);
-        return order;
-      })().finally(() => pending.delete(lock));
-      pending.set(lock, work);
+    const note = (req.body?.note || '').trim();
+    const submittedAt = new Date().toISOString();
+    const existing = one('SELECT id, payment_status FROM orders WHERE uid=? AND course=?', uid, id);
+    if (existing?.payment_status === 'pending') {
+      return res.status(409).json({ error: 'A payment request is already waiting for admin review.' });
     }
-    res.status(201).json(await pending.get(lock));
-  });
-  api.post('/courses/:id/verify', paymentLimit, async (req, res) => {
-    const { id } = course(req.params.id);
-    const body = req.body ?? {};
-    const order = one('SELECT * FROM orders WHERE uid=? AND course=?', req.user.uid, id);
-    if (!order || order.id !== body.razorpay_order_id || !payments.verifyCheckout(body)) fail(400, 'Invalid payment confirmation.');
-    if (order.payment === body.razorpay_payment_id) return res.sendStatus(204);
-    const payment = await payments.capturedPayment(body.razorpay_payment_id);
-    if (!payment) fail(409, 'Payment is not captured yet. Refresh your purchases shortly.');
-    if (payment.id !== body.razorpay_payment_id ||
-        !activate(payment, one('SELECT * FROM orders WHERE id=?', order.id))) fail(409, 'Payment does not match the order.');
-    res.sendStatus(204);
+    const orderId = existing?.id || randomUUID();
+    run(`INSERT INTO orders (id, uid, course, amount, payment_status, transaction_ref, payment_note, submitted_at)
+      VALUES (?, ?, ?, ?, 'pending', ?, ?, ?)
+      ON CONFLICT (uid, course) DO UPDATE SET amount=excluded.amount, payment_status='pending',
+        transaction_ref=excluded.transaction_ref, payment_note=excluded.payment_note, submitted_at=excluded.submitted_at,
+        review_note='', reviewed_at='', reviewed_by=''`,
+    orderId, uid, id, price, reference, note, submittedAt);
+    res.status(201).json({ id: orderId, amount: price, status: 'pending', reference, submittedAt });
   });
 
   function test(id) {
@@ -232,6 +223,33 @@ export function createApp({ db, verifyToken, payments, firebase = {}, adminUids 
     const pages = await processDocument(() => pageCount(req.body));
     run('INSERT INTO books VALUES (?, ?, ?, ?, ?)', id, courseId, title, pages, req.body);
     res.status(201).json({ id, pages });
+  });
+  api.get('/admin/payments', (req, res) => {
+    res.json(all(`SELECT o.id, o.amount, o.transaction_ref AS reference, o.payment_note AS note,
+      o.payment_status AS status, o.submitted_at AS submittedAt, o.review_note AS reviewNote,
+      COALESCE(NULLIF(s.name, ''), 'Student') AS name, s.phone, c.title AS course
+      FROM orders o JOIN students s ON s.uid=o.uid JOIN courses c ON c.id=o.course
+      ORDER BY CASE WHEN o.payment_status='pending' THEN 0 ELSE 1 END, o.submitted_at DESC LIMIT 200`));
+  });
+  api.post('/admin/payments/:id/approve', (req, res) => {
+    const order = one('SELECT id, payment_status FROM orders WHERE id=?', req.params.id);
+    if (!order) fail(404, 'Payment request not found.');
+    if (order.payment_status === 'approved') return res.sendStatus(204);
+    if (order.payment_status !== 'pending') fail(409, 'Only pending requests can be approved.');
+    const reviewedAt = new Date().toISOString();
+    run(`UPDATE orders SET payment=?, payment_status='approved', reviewed_at=?, reviewed_by=?, review_note=''
+      WHERE id=? AND payment_status='pending'`, `manual:${order.id}`, reviewedAt, req.user.uid, order.id);
+    res.sendStatus(204);
+  });
+  api.post('/admin/payments/:id/reject', (req, res) => {
+    const order = one('SELECT id, payment_status FROM orders WHERE id=?', req.params.id);
+    if (!order) fail(404, 'Payment request not found.');
+    if (order.payment_status !== 'pending') fail(409, 'Only pending requests can be rejected.');
+    const reviewNote = typeof req.body?.note === 'string' ? req.body.note.trim() : '';
+    if (!reviewNote || reviewNote.length > 500) fail(422, 'Enter a rejection reason (maximum 500 characters).');
+    run(`UPDATE orders SET payment_status='rejected', reviewed_at=?, reviewed_by=?, review_note=?
+      WHERE id=? AND payment_status='pending'`, new Date().toISOString(), req.user.uid, reviewNote, order.id);
+    res.sendStatus(204);
   });
   api.get('/admin/support', (_req, res) => res.json(all(`SELECT s.phone, t.text FROM tickets t
     JOIN students s USING (uid) ORDER BY t.id DESC LIMIT 100`)));

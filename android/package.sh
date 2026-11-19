@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-# 1. Deploy Mock Master at the root of your canonical HTTPS origin. Serve
+# 1. Deploy Mission Selection at the root of your canonical HTTPS origin. Serve
 #    public/manifest.webmanifest and public/icons/ at /manifest.webmanifest
 #    and /icons/. Link it in <head>:
 #    <link rel="manifest" href="/manifest.webmanifest">
@@ -13,7 +13,7 @@ set -eu
 # 2. Install Bubblewrap with `npm install --global @bubblewrap/cli@1.27.0`
 #    (use a supported Node.js LTS, without sudo). Run the init command below
 #    using your actual origin. Accept Bubblewrap's JDK/Android SDK setup as
-#    needed. In the prompts keep Mock Master for both names, / as the start
+#    needed. In the prompts keep Mission Selection for both names, / as the start
 #    URL, standalone display, default orientation and #172554 for both colors.
 #    Confirm the normal and maskable icons and choose a unique, permanent
 #    Android package ID under a namespace you control. Keep the upload

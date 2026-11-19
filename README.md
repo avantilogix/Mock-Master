@@ -1,6 +1,6 @@
-# Mock Master
+# Mission Selection
 
-Mock Master is a B2C storefront for mock tests and e-books. The responsive web app also runs on Android as an installed web app. One Node.js service serves both the UI and API; SQLite stores accounts, orders, and course content on a persistent disk. Firebase Authentication handles Indian mobile OTP, and Razorpay Checkout handles INR payments. Email is not collected, so Mailtrap is not required.
+Mission Selection is a B2C preparation app for mock tests and e-books. The responsive web app also runs on Android as an installed web app. One Node.js service serves both the UI and API; SQLite stores accounts, payment requests, and course content on a persistent disk. Firebase Authentication handles Indian mobile OTP. Students pay through UPI, submit a transaction reference, and an administrator approves the request before access is unlocked. Email is not collected, so Mailtrap is not required.
 
 ## Run locally
 
@@ -12,7 +12,7 @@ cp .env.example .env
 npm start
 ```
 
-Open `http://127.0.0.1:3000`. Browsing works without provider credentials; login and checkout require the configuration below. `npm test` runs the Node integration tests; document tests skip when their OS tools are unavailable.
+Open `http://127.0.0.1:3000`. Browsing works without provider credentials; login and payment submission require the configuration below. `npm test` runs the Node integration tests; document tests skip when their OS tools are unavailable.
 
 ### Firebase phone sign-in
 
@@ -20,11 +20,11 @@ Open `http://127.0.0.1:3000`. Browsing works without provider credentials; login
 2. Set `FIREBASE_PROJECT_ID`, `FIREBASE_API_KEY`, and `FIREBASE_AUTH_DOMAIN` from the web app configuration. These are client configuration values; do not use a service account key.
 3. Sign in with each authorized admin's verified Indian mobile number. Copy the user's Firebase **UID** into the comma-separated `ADMIN_UIDS` list and restart. Administrators can publish courses, tests, and books and view support messages. Do not assign admin access by entering a phone number into `ADMIN_UIDS`.
 
-### Razorpay
+### UPI payments and admin approval
 
-Set `RAZORPAY_KEY_ID` and `RAZORPAY_KEY_SECRET` with test credentials first. Enable automatic capture and configure the `payment.captured` event at `https://YOUR_HOST/api/payments/webhook`; set `RAZORPAY_WEBHOOK_SECRET` to the webhook secret (distinct from the API secret). Use a test checkout and verify that the course unlocks after capture. The server sets the price from the catalog and matches payment currency, amount, and order before granting access. The browser callback and webhook can arrive in either order. If capture is delayed, students can return to the dashboard and refresh purchases.
+Set `UPI_ID` and `UPI_PAYEE_NAME` to the receiving UPI account. The server creates the amount-specific QR locally; no payment page or third-party QR service is used. Students see the configured UPI details, pay in their own UPI application, and submit its transaction reference. Administrators use the same mobile sign-in, enter their Firebase UID in `ADMIN_UIDS`, and see the **Payment approvals** section.
 
-Refunds, chargebacks, and entitlement revocation are not automated. Do not enable live sales until an operator process or integration for these cases is in place.
+An admin must independently verify the amount, reference, and receiving account before approving. Approval alone unlocks the purchased course. Rejected requests include a reason and can be corrected and resubmitted by the student. Refunds, chargebacks, and entitlement revocation still require an operator process; do not enable live sales without one.
 
 ### Publish courses and import tests
 
@@ -52,4 +52,4 @@ Run one service instance behind an HTTPS reverse proxy on a host with a persiste
 
 - **Android browser:** Open the deployed HTTPS origin in Chrome and use **Install app** or **Add to Home screen**. The app requires connectivity for sign-in, purchases, and course content.
 - **Android APK/AAB:** `android/package.sh` documents how to generate a Trusted Web Activity with Bubblewrap from the deployed web manifest, build it, and verify association using `android/assetlinks.example.json`. Copy the configured file to `public/.well-known/assetlinks.json` and restart the service. A signed Android package requires your origin, package ID, and signing key.
-- **Google Play:** Razorpay is configured for direct web checkout. Before distributing an APK/AAB through Google Play, review the applicable digital-goods billing policy; this project does **not** implement Play Billing or an enrolled alternative-billing flow.
+- **Google Play:** This version uses UPI payment requests outside an integrated gateway. Before distributing an APK/AAB through Google Play, review the applicable digital-goods billing policy; this project does **not** implement Play Billing or an enrolled alternative-billing flow.
