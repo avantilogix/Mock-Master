@@ -45,7 +45,7 @@ export function bindForm(form, submit, feedback, action, busy = 'Working…') {
 export async function run(control, feedback, action, busy = 'Working…') {
   if (control.disabled) return;
   control.disabled = true;
-  say(feedback, busy);
+  if (busy) say(feedback, busy);
   try {
     await action();
   } catch (error) {

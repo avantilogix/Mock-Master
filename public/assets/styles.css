@@ -152,6 +152,8 @@ fieldset { margin: 0; min-width: 0; border-radius: .7rem; }
 .material-link { display: flex; align-items: center; gap: .65rem; font-weight: 750; }
 .material-link::before { content: ""; width: .65rem; height: .65rem; border-radius: 50%; background: var(--sun); box-shadow: 0 0 0 4px #fff5dc; }
 .profile-summary { display: grid; grid-template-columns: auto 1fr; gap: 1rem; align-items: center; }
+.account-id { margin: .2rem 0 0; color: var(--muted); font-size: .78rem; }
+.account-id code { display: inline-block; max-width: 100%; color: var(--accent-dark); overflow-wrap: anywhere; }
 .avatar { display: grid; place-items: center; width: 4rem; height: 4rem; border-radius: 1.3rem; background: var(--navy); color: white; font-size: 1.5rem; font-weight: 850; }
 .profile-purchase { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .75rem; }
 .profile-purchase div { border-radius: .9rem; background: var(--accent-soft); padding: .85rem; }
@@ -170,6 +172,10 @@ fieldset { margin: 0; min-width: 0; border-radius: .7rem; }
 .auth-card-title h2, .auth-card-title p { margin: 0; }
 .auth-icon { display: grid; place-items: center; flex: none; width: 3.2rem; height: 3.2rem; border-radius: 1rem; color: var(--navy); background: var(--sun); font-weight: 900; letter-spacing: -.06em; }
 .auth-card input { font-size: 1.05rem; min-height: 3.2rem; }
+.phone-control { display: flex; align-items: stretch; overflow: hidden; min-height: 3.2rem; border: 1px solid #9cafaa; border-radius: .7rem; background: white; }
+.phone-control:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.country-prefix { display: grid; place-items: center; flex: none; padding-inline: .9rem; color: var(--ink); background: #edf1fa; border-right: 1px solid var(--line); font-weight: 800; }
+.phone-control input { min-width: 0; border: 0; border-radius: 0; box-shadow: none !important; }
 .auth-card button[type="submit"] { width: 100%; min-height: 3.1rem; margin-top: .25rem; }
 .auth-card .status { min-height: 1.55rem; }
 .manual-payment { display: grid; gap: 1.25rem; }

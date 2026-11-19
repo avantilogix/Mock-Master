@@ -97,7 +97,7 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
   api.get('/me', (req, res) => {
     const { uid, phone, admin } = req.user;
     const { name } = one('SELECT name FROM students WHERE uid=?', uid);
-    res.json({ name, phone, admin, purchases: all('SELECT course FROM orders WHERE uid=? AND payment IS NOT NULL', uid).map(p => p.course) });
+    res.json({ uid, name, phone, admin, purchases: all('SELECT course FROM orders WHERE uid=? AND payment IS NOT NULL', uid).map(p => p.course) });
   });
   api.put('/me', (req, res) => {
     run('UPDATE students SET name=? WHERE uid=?', text(req.body?.name, 'Name', 100), req.user.uid);

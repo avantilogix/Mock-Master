@@ -8,11 +8,20 @@ function authError(error) {
     'auth/session-expired': 'That code expired. Use “Change number or resend” to request a new one.',
     'auth/too-many-requests': 'Too many attempts. Wait a while before trying again.',
     'auth/quota-exceeded': 'SMS verification is temporarily unavailable. Try again later.',
+    'auth/operation-not-allowed': 'Phone verification is not available right now. Please contact support.',
     'auth/network-request-failed': 'Check your connection and try again.',
-    'auth/captcha-check-failed': 'The reCAPTCHA check failed. Please try again.',
-    'auth/unauthorized-domain': 'Phone sign-in is not enabled for this site.'
+    'auth/captcha-check-failed': 'We could not securely verify this request. Please try again.',
+    'auth/unauthorized-domain': 'This domain is not authorized in Firebase. Add it under Authentication → Settings → Authorized domains.',
+    'auth/invalid-app-credential': 'We could not securely verify this app. Please contact support.',
+    'auth/app-not-authorized': 'Phone sign-in is unavailable for this app. Please contact support.',
+    'auth/billing-not-enabled': 'Firebase SMS delivery requires a billing-enabled project. Upgrade to the Blaze plan and retry.',
+    'auth/missing-client-identifier': 'Phone verification could not identify this browser. Reload the page and retry.'
   };
-  return new Error(messages[error.code] || 'Phone verification could not finish. Please try again.');
+  const raw = String(error.message || '').toLowerCase();
+  const detail = /region|country|unsupported sms/i.test(raw)
+    ? 'SMS delivery to this mobile number is not available right now. Please contact support.'
+    : messages[error.code] || 'We could not send your code. Please try again or contact support.';
+  return new Error(`${detail}${error.code && !messages[error.code] ? ` (${error.code})` : ''}`);
 }
 
 export function showSignIn(main, ctx, firebase, startAuth, initState) {
@@ -41,7 +50,12 @@ export function showSignIn(main, ctx, firebase, startAuth, initState) {
     return;
   }
   const {sdk, auth} = firebase;
-  const phone = el('input', {type: 'tel', autocomplete: 'tel', inputmode: 'tel', required: '', placeholder: '+91 98765 43210'});
+  const phone = el('input', {type: 'tel', autocomplete: 'tel-national', inputmode: 'numeric', required: '',
+    maxlength: '11', placeholder: '98765 43210'});
+  phone.addEventListener('input', () => {
+    const digits = phone.value.replace(/\D/g, '').slice(0, 10);
+    phone.value = digits.length > 5 ? `${digits.slice(0, 5)} ${digits.slice(5)}` : digits;
+  });
   const captcha = el('div', {id: 'captcha'});
   let verifier;
   const clearVerifier = () => {
@@ -54,17 +68,18 @@ export function showSignIn(main, ctx, firebase, startAuth, initState) {
   function showPhone(focus = false) {
     const feedback = status();
     const submit = button('Send code', null, 'submit');
-    const form = el('form', {}, field('Mobile number', phone, 'Include the +91 country code for your Indian mobile number. Standard SMS rates may apply.'),
+    const phoneControl = el('div', {class: 'phone-control'},
+      el('span', {class: 'country-prefix', 'aria-hidden': 'true'}, '+91'), phone);
+    const form = el('form', {}, field('Mobile number', phoneControl, 'Enter your 10-digit Indian mobile number. Standard SMS rates may apply.'),
       captcha, submit, feedback);
     section.replaceChildren(form);
     if (focus) phone.focus();
     bindForm(form, submit, feedback, async () => {
-      const number = textValue(phone, 'Mobile number').replace(/[\s()-]/g, '');
-      if (!/^\+91[6-9]\d{9}$/.test(number)) {
-        throw new Error('Enter +91 followed by a 10-digit Indian mobile number starting with 6, 7, 8, or 9.');
-      }
+      const localNumber = phone.value.replace(/\D/g, '');
+      if (!/^[6-9]\d{9}$/.test(localNumber)) throw new Error('Enter a 10-digit Indian mobile number starting with 6, 7, 8, or 9.');
+      const number = `+91${localNumber}`;
       try {
-        verifier ||= new sdk.RecaptchaVerifier(auth, captcha, {size: 'normal'});
+        verifier ||= new sdk.RecaptchaVerifier(auth, captcha, {size: 'invisible'});
         const confirmation = await sdk.signInWithPhoneNumber(auth, number, verifier);
         if (ctx.current()) {
           clearVerifier();
@@ -74,7 +89,7 @@ export function showSignIn(main, ctx, firebase, startAuth, initState) {
         clearVerifier();
         throw authError(error);
       }
-    }, 'Sending code… Complete the reCAPTCHA if prompted.');
+    }, '');
   }
 
   function showCode(number, confirmation) {

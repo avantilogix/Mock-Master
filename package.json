@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "scripts": {
     "test": "node --test",
+    "seed": "node --env-file-if-exists=.env server/seed.js",
     "start": "node --env-file-if-exists=.env server/index.js"
   },
   "type": "module",

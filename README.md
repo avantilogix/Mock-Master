@@ -14,11 +14,22 @@ npm start
 
 Open `http://127.0.0.1:3000`. Browsing works without provider credentials; login and payment submission require the configuration below. `npm test` runs the Node integration tests; document tests skip when their OS tools are unavailable.
 
+Run `npm run seed` to add or refresh three sample preparation missions, each with a practice test and protected starter e-book. The seed is idempotent and does not create users, purchases, fake reviews, or admin permissions.
+
 ### Firebase phone sign-in
 
 1. Register a Web App in a Firebase project and enable **Phone** in Authentication. Configure the SMS region policy for India and add the actual web hostname to Firebase's authorized domains. Use a configured development HTTPS hostname and Firebase's fictional phone numbers to test without sending SMS.
 2. Set `FIREBASE_PROJECT_ID`, `FIREBASE_API_KEY`, and `FIREBASE_AUTH_DOMAIN` from the web app configuration. These are client configuration values; do not use a service account key.
 3. Sign in with each authorized admin's verified Indian mobile number. Copy the user's Firebase **UID** into the comma-separated `ADMIN_UIDS` list and restart. Administrators can publish courses, tests, and books and view support messages. Do not assign admin access by entering a phone number into `ADMIN_UIDS`.
+
+If the browser reports `accounts:sendVerificationCode` with HTTP 400, inspect the JSON response in DevTools and the visible Mission Selection error:
+
+- Enable **Authentication → Sign-in method → Phone**.
+- Add `127.0.0.1`, `localhost`, and every deployed hostname under **Authentication → Settings → Authorized domains**.
+- Under **Authentication → Settings → SMS region policy**, allow India for the target environment.
+- Keep the Firebase web API key unrestricted by Google Cloud referrer rules, or explicitly allow the deployed HTTPS origin and localhost addresses.
+- Real-number SMS requires the applicable Firebase Phone Auth quota/billing. Test with a configured fictional number during development.
+- A console warning about falling back from reCAPTCHA Enterprise to reCAPTCHA v2 is not itself the failure.
 
 ### UPI payments and admin approval
 
