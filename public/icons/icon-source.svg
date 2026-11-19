@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <!-- For maskable export, remove rx from the background rect to fill the corners. -->
+  <rect width="512" height="512" rx="96" fill="#172554"/>
+  <rect x="142" y="156" width="228" height="200" rx="40" fill="#dbeafe"/>
+  <path d="M182 312v-92l36 44 38-44v92" fill="none" stroke="#172554" stroke-width="16" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="m285 276 17 17 30-33" fill="none" stroke="#1d4ed8" stroke-width="16" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

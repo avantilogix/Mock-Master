@@ -1,0 +1,243 @@
+import {showAdmin} from './admin.js';
+import {showCatalog, showCourse} from './course.js';
+import {api, firebaseAuth} from './services.js';
+import {showSignIn} from './signin.js';
+import {showBook, showTest} from './study.js';
+import {bindForm, button, el, field, heading, link, panel, run, say, status, textValue} from './ui.js';
+
+const main = document.querySelector('#main');
+const nav = document.querySelector('#nav');
+const notice = document.querySelector('#notice');
+const routes = new Map([
+  ['catalog', 0], ['course', 1], ['test', 2], ['book', 2], ['signin', 0],
+  ['profile', 0], ['support', 0], ['admin', 0]
+]);
+let firebase;
+let session;
+let view;
+let authState = 'idle';
+let signingOut = false;
+let activeHash;
+
+function route(hash = location.hash) {
+  const [path, query] = hash.slice(1).split('?', 2);
+  const [page, ...encoded] = (path || 'catalog').split('/');
+  try {
+    const args = encoded.map(decodeURIComponent);
+    if (routes.get(page) === args.length && args.every(value => value && value !== '.' && value !== '..')) {
+      return {page, args, query: new URLSearchParams(query)};
+    }
+  } catch { /* Invalid percent encoding. */ }
+  return {page: 'missing', args: []};
+}
+
+function nextAfterSignIn(parsed) {
+  const next = parsed.query?.get('next');
+  if (!next?.startsWith('#') || ['signin', 'missing'].includes(route(next).page)) return '#catalog';
+  return next;
+}
+
+function signInLink(label = 'Sign in') {
+  const next = location.hash || '#catalog';
+  return link(label, `#signin?${new URLSearchParams({next})}`, 'button');
+}
+
+async function startAuth() {
+  if (authState === 'loading') return;
+  authState = 'loading';
+  if (route().page === 'signin') render();
+  try {
+    firebase = await firebaseAuth();
+    firebase.sdk.onAuthStateChanged(firebase.auth, user => {
+      const first = authState !== 'ready';
+      authState = 'ready';
+      if (signingOut && user) return;
+      if (user !== (session?.user ?? null)) setSession(user);
+      else if (first && route().page === 'signin') render();
+    });
+  } catch {
+    authState = 'error';
+    if (route().page === 'signin') render();
+  }
+}
+
+function setSession(user) {
+  session?.controller.abort();
+  notice.textContent = '';
+  session = null;
+  if (user) {
+    const controller = new AbortController();
+    const current = {
+      user, controller, signal: controller.signal, payments: new Map(), pending: true,
+      current: () => session === current && !controller.signal.aborted && firebase.auth.currentUser === user
+    };
+    session = current;
+    initializeProfile(current);
+  }
+  render(true);
+}
+
+async function refreshProfile(current) {
+  const me = await api('/me', {ctx: current, auth: true});
+  if (current.current()) current.me = me;
+}
+
+async function initializeProfile(current) {
+  try {
+    await refreshProfile(current);
+  } catch (error) {
+    if (current.current()) current.error = error.message;
+  } finally {
+    if (current.current()) {
+      current.pending = false;
+      const parsed = route();
+      if (['admin', 'catalog', 'course', 'profile'].includes(parsed.page)) render(main.contains(document.activeElement));
+      else if (current.me?.admin) nav.append(link('Admin', '#admin'));
+    }
+  }
+}
+
+function renderNav(parsed) {
+  const catalogActive = ['catalog', 'course', 'test', 'book'].includes(parsed.page);
+  const navLink = (label, href, active) => el('a', {href, 'aria-current': active ? 'page' : null}, label);
+  nav.replaceChildren(navLink('Courses', '#catalog', catalogActive), navLink('Support', '#support', parsed.page === 'support'),
+    session ? navLink('Profile', '#profile', parsed.page === 'profile') : navLink('Sign in', '#signin', parsed.page === 'signin'));
+  if (session?.me?.admin) nav.append(navLink('Admin', '#admin', parsed.page === 'admin'));
+}
+
+function profileUnavailable() {
+  const feedback = status();
+  const current = session;
+  if (current?.pending) {
+    say(feedback, 'Loading your account…');
+    return feedback;
+  }
+  say(feedback, current?.error || 'Your account could not load.', true);
+  const retry = button('Retry account lookup', 'secondary');
+  retry.addEventListener('click', () => run(retry, feedback, async () => {
+    await refreshProfile(current);
+    if (current.current()) render(true);
+  }, 'Loading your account…'));
+  return el('div', {}, feedback, retry);
+}
+
+function showProfile(ctx) {
+  const phone = ctx.user.phoneNumber || session.me?.phone;
+  const feedback = status();
+  const signOut = button('Sign out', 'secondary');
+  signOut.addEventListener('click', async () => {
+    if (signingOut) return;
+    signingOut = true;
+    setSession(null);
+    try {
+      await firebase.sdk.signOut(firebase.auth);
+      notice.textContent = 'Signed out.';
+    } catch {
+      setSession(firebase.auth.currentUser);
+      notice.textContent = 'Could not sign out. Please try again.';
+    } finally {
+      signingOut = false;
+      if (firebase.auth.currentUser !== (session?.user ?? null)) setSession(firebase.auth.currentUser);
+    }
+  });
+  main.append(...heading('Your profile', 'Manage the name shown on your reviews and course messages.'),
+    panel('Account', el('p', {}, `Mobile number: ${phone || 'Unavailable'}`), signOut));
+  if (!session.me) {
+    main.append(panel('Display name', profileUnavailable()));
+    return;
+  }
+  const input = el('input', {required: '', autocomplete: 'name', maxlength: '100'});
+  input.value = session.me.name || '';
+  const save = button('Save name', null, 'submit');
+  const form = el('form', {}, field('Display name', input), save, feedback);
+  bindForm(form, save, feedback, async () => {
+    const name = textValue(input, 'Display name');
+    const result = await api('/me', {ctx, auth: true, method: 'PUT', json: {name}});
+    session.me.name = typeof result?.name === 'string' ? result.name : name;
+    say(feedback, 'Display name saved.');
+  }, 'Saving name…');
+  main.append(panel('Display name', el('div', {class: 'narrow'}, form)));
+}
+
+function showSupport(ctx) {
+  main.append(...heading('Support', 'Need help with your account, a course, or a payment? Send us a message.'));
+  if (!ctx.user) {
+    main.append(panel('Contact support', el('p', {}, 'Sign in so the support team can identify your account.'), signInLink()));
+    return;
+  }
+  const text = el('textarea', {rows: '5', required: '', maxlength: '2000'});
+  const send = button('Send message', null, 'submit');
+  const feedback = status();
+  const form = el('form', {class: 'narrow'}, field('How can we help?', text, 'Do not include passwords, SMS codes, or card information.'), send, feedback);
+  bindForm(form, send, feedback, async () => {
+    await api('/support', {ctx, auth: true, method: 'POST', json: {text: textValue(text, 'Message')}});
+    form.reset();
+    say(feedback, 'Your message was sent to support.');
+  }, 'Sending message…');
+  main.append(panel('Contact support', form));
+}
+
+function render(focus = false) {
+  const parsed = route();
+  activeHash = location.hash;
+  view?.abort();
+  view = new AbortController();
+  const current = session;
+  const ctx = {
+    user: current?.user, signal: view.signal,
+    current: () => !ctx.signal.aborted && session === current && (!current || current.current())
+  };
+  main.replaceChildren();
+  renderNav(parsed);
+  const needSignIn = () => main.append(...heading('Sign in to continue', 'This area is available after you sign in with your mobile number.'), signInLink());
+  const [courseId, itemId] = parsed.args;
+
+  switch (parsed.page) {
+    case 'catalog': showCatalog(main, ctx, current?.me); break;
+    case 'course':
+      showCourse(main, ctx, current, {
+        id: courseId, signInLink, profileUnavailable, refreshProfile,
+        purchased: title => {
+          if (!current.current()) return;
+          notice.textContent = `Payment verified. You now have access to ${title}.`;
+          const visible = route();
+          if ((visible.page === 'course' && visible.args[0] === courseId) || visible.page === 'catalog') render(true);
+        }
+      });
+      break;
+    case 'signin':
+      if (current) {
+        const next = nextAfterSignIn(parsed);
+        main.append(...heading('You’re signed in'), link('Continue', next, 'button'));
+        location.replace(next);
+      } else {
+        showSignIn(main, ctx, firebase, startAuth, authState);
+      }
+      break;
+    case 'support': showSupport(ctx); break;
+    case 'profile': if (current) showProfile(ctx); else needSignIn(); break;
+    case 'test': if (current) showTest(main, ctx, courseId, itemId, current.user.phoneNumber); else needSignIn(); break;
+    case 'book': if (current) showBook(main, ctx, courseId, itemId); else needSignIn(); break;
+    case 'admin':
+      if (!current) needSignIn();
+      else if (!current.me) main.append(...heading('Admin workspace'), profileUnavailable());
+      else if (!current.me.admin) main.append(...heading('Admin access required'), link('Back to courses', '#catalog', 'button'));
+      else showAdmin(main, ctx);
+      break;
+    default: main.append(...heading('Page not found'), link('Back to courses', '#catalog', 'button'));
+  }
+  if (focus) main.focus();
+}
+
+window.addEventListener('hashchange', () => {
+  if (location.hash !== activeHash) {
+    notice.textContent = '';
+    render(true);
+  }
+});
+document.querySelector('.skip').addEventListener('click', event => {
+  event.preventDefault();
+  main.focus();
+});
+render();
+startAuth();
