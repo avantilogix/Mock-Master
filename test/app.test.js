@@ -1,0 +1,169 @@
+import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { createHmac } from 'node:crypto';
+import { once } from 'node:events';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import test from 'node:test';
+import { createApp } from '../server/app.js';
+import { openDatabase } from '../server/database.js';
+import { importQuestions, renderPage } from '../server/documents.js';
+import { razorpay } from '../server/payments.js';
+
+const source = '1. What is 2 + 2?\nA. 3\nB. 4\nAnswer: B';
+const questions = [{ prompt: 'What is 2 + 2?', options: ['3', '4'], answer: 1 }];
+const has = command => {
+  try { execFileSync('which', [command]); return true; } catch { return false; }
+};
+
+function fixturePdf() {
+  const contents = `BT /F1 14 Tf 40 700 Td 20 TL ${source.split('\n').map(line => `(${line}) Tj T*`).join('\n')} ET\n`;
+  const objects = [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>',
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+    `<< /Length ${contents.length} >>\nstream\n${contents}endstream`,
+  ];
+  let pdf = '%PDF-1.4\n';
+  const offsets = objects.map((value, i) => {
+    const offset = pdf.length;
+    pdf += `${i + 1} 0 obj\n${value}\nendobj\n`;
+    return `${String(offset).padStart(10, '0')} 00000 n \n`;
+  });
+  return Buffer.from(`${pdf}xref\n0 6\n0000000000 65535 f \n${offsets.join('')}trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${pdf.length}\n%%EOF\n`);
+}
+
+test('imports formatted text and rejects questions without a valid answer', async () => {
+  assert.deepEqual(await importQuestions(Buffer.from(source), 'txt'), questions);
+  await assert.rejects(importQuestions(Buffer.from(source.replace('Answer: B', 'Answer: F')), 'txt'), { status: 422 });
+  await assert.rejects(importQuestions(Buffer.from('not a test'), 'txt'), { status: 422 });
+});
+
+test('extracts Word paragraphs from a DOCX', { skip: !has('zip') || !has('unzip') }, async t => {
+  const path = mkdtempSync(join(tmpdir(), 'mock-master-test-'));
+  t.after(() => rmSync(path, { recursive: true, force: true }));
+  mkdirSync(join(path, 'word'));
+  const lines = source.split('\n').map(line => `<w:p><w:r><w:t>${line}</w:t></w:r></w:p>`);
+  writeFileSync(join(path, 'word/document.xml'), `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${lines.join('')}</w:body></w:document>`);
+  execFileSync('zip', ['-q', 'test.docx', 'word/document.xml'], { cwd: path });
+  assert.deepEqual(await importQuestions(readFileSync(join(path, 'test.docx')), 'docx'), questions);
+});
+
+test('extracts PDF questions and bakes a viewer-specific watermark into pages', {
+  skip: !has('pdftotext') || !has('pdftoppm'),
+}, async () => {
+  const pdf = fixturePdf();
+  assert.deepEqual(await importQuestions(pdf, 'pdf'), questions);
+  const [first, second] = await Promise.all([renderPage(pdf, 1, '+919000000001'), renderPage(pdf, 1, '+919000000002')]);
+  assert.equal(first.subarray(1, 4).toString(), 'PNG');
+  assert.notDeepEqual(first, second);
+});
+
+test('checkout grants only the paying student access to their course, test and discussion', async t => {
+  const db = openDatabase(':memory:');
+  const users = new Map([
+    ['buyer', { uid: 'buyer', phone: '+919000000001' }],
+    ['other', { uid: 'other', phone: '+919000000002' }],
+    ['admin', { uid: 'admin', phone: '+919000000003' }],
+  ]);
+  let providerOrders = 0;
+  const payments = razorpay({
+    key: 'test-key', secret: 'mock-checkout-secret', webhookSecret: 'mock-webhook-secret',
+    fetchImpl: async (url, options) => {
+      if (url === 'https://api.razorpay.com/v1/payments/pay_test') {
+        assert.equal(options.method, 'GET');
+        return Response.json({ id: 'pay_test', order_id: 'order_test', amount: 14900, currency: 'INR', status: 'authorized' });
+      }
+      assert.equal(url, 'https://api.razorpay.com/v1/orders');
+      assert.equal(options.method, 'POST');
+      const { amount, currency } = JSON.parse(options.body);
+      providerOrders++;
+      return Response.json({ id: 'order_test', amount, currency });
+    },
+  });
+  const server = createApp({ db, verifyToken: async token => users.get(token), adminUids: ['admin'], payments })
+    .listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  t.after(() => new Promise(resolve => server.close(() => { db.close(); resolve(); })));
+  const base = `http://127.0.0.1:${server.address().port}/api`;
+  const request = (path, user, method = 'GET', body, headers = {}) => fetch(base + path, {
+    method,
+    headers: {
+      ...(user ? { Authorization: ['Bearer', user].join(' ') } : {}),
+      ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+      ...headers,
+    },
+    body: Buffer.isBuffer(body) ? body : body === undefined ? undefined : JSON.stringify(body),
+  });
+  const course = { title: 'Maths', description: 'Practice', price: 14900 };
+  assert.equal((await request('/admin/courses', 'buyer', 'POST', course)).status, 403);
+  const created = await request('/admin/courses', 'admin', 'POST', course);
+  assert.equal(created.status, 201);
+  const { id } = await created.json();
+  const path = `/courses/${id}`;
+  assert.deepEqual(await (await request('/courses')).json(), [{ id, ...course }]);
+  const createdTest = await request(`/admin${path}/tests`, 'admin', 'POST', { title: 'Practice test', questions });
+  assert.equal(createdTest.status, 201);
+  const testPath = `/tests/${(await createdTest.json()).id}`;
+  const withPdf = has('pdfinfo') && has('pdftoppm');
+  let pagePath;
+  if (withPdf) {
+    const upload = await request(`/admin${path}/books?title=Guide`, 'admin', 'POST', fixturePdf(),
+      { 'Content-Type': 'application/octet-stream' });
+    assert.equal(upload.status, 201);
+    pagePath = `/books/${(await upload.json()).id}/pages/1`;
+    assert.equal((await request(pagePath, 'buyer')).status, 403);
+  }
+  assert.equal((await request(path)).status, 401);
+  assert.equal((await request(path, 'buyer')).status, 403);
+  assert.equal((await request(testPath, 'buyer')).status, 403);
+  assert.equal((await request(`${path}/messages`, 'buyer', 'POST', { text: 'Hello' })).status, 403);
+
+  const [a, b] = await Promise.all(Array.from({ length: 2 }, () => request(`${path}/order`, 'buyer', 'POST', { amount: 1 })));
+  for (const response of [a, b]) assert.deepEqual(await response.json(), { id: 'order_test', amount: 14900, currency: 'INR', key: 'test-key' });
+  assert.equal(providerOrders, 1);
+  const confirmation = {
+    razorpay_order_id: 'order_test',
+    razorpay_payment_id: 'pay_test',
+    razorpay_signature: createHmac('sha256', 'mock-checkout-secret').update('order_test|pay_test').digest('hex'),
+  };
+  assert.equal((await request(`${path}/verify`, 'other', 'POST', confirmation)).status, 400);
+  assert.equal((await request(`${path}/verify`, 'buyer', 'POST', confirmation)).status, 409);
+  const webhook = amount => ({
+    event: 'payment.captured',
+    payload: { payment: { entity: { id: 'pay_test', order_id: 'order_test', amount, currency: 'INR', status: 'captured' } } },
+  });
+  const signature = body => createHmac('sha256', 'mock-webhook-secret').update(JSON.stringify(body)).digest('hex');
+  assert.equal((await request('/payments/webhook', null, 'POST', webhook(14900))).status, 400);
+  assert.equal((await request('/payments/webhook', null, 'POST', webhook(1), { 'X-Razorpay-Signature': signature(webhook(1)) })).status, 409);
+  assert.equal((await request(path, 'buyer')).status, 403);
+  for (let i = 0; i < 2; i++) {
+    assert.equal((await request('/payments/webhook', null, 'POST', webhook(14900),
+      { 'X-Razorpay-Signature': signature(webhook(14900)) })).status, 204);
+  }
+  assert.equal((await request(`${path}/verify`, 'buyer', 'POST', confirmation)).status, 204);
+  assert.deepEqual((await (await request('/me', 'buyer')).json()).purchases, [id]);
+  assert.equal((await request(path, 'buyer')).status, 200);
+  assert.equal((await request(testPath, 'other')).status, 403);
+  assert.deepEqual((await (await request(testPath, 'buyer')).json()).questions,
+    [{ prompt: questions[0].prompt, options: questions[0].options }]);
+  assert.deepEqual(await (await request(`${testPath}/submit`, 'buyer', 'POST', { answers: [1] })).json(), { score: 1, total: 1 });
+  assert.equal((await request(`${path}/messages`, 'buyer', 'POST', { text: 'Hello' })).status, 204);
+  assert.equal((await request(`${path}/reviews`, 'buyer', 'PUT', { rating: 5, text: 'Helpful' })).status, 204);
+  assert.deepEqual(await (await request(`${path}/reviews`)).json(), [{ name: 'Student', rating: 5, text: 'Helpful' }]);
+  assert.equal((await request('/me', 'buyer', 'PUT', { name: 'A Student' })).status, 204);
+  assert.deepEqual(await (await request(`${path}/reviews`)).json(), [{ name: 'A Student', rating: 5, text: 'Helpful' }]);
+  assert.equal((await request('/support', 'buyer', 'POST', { text: 'Question about my course' })).status, 204);
+  assert.equal((await request('/admin/support', 'other')).status, 403);
+  assert.deepEqual(await (await request('/admin/support', 'admin')).json(),
+    [{ phone: users.get('buyer').phone, text: 'Question about my course' }]);
+  if (withPdf) {
+    assert.equal((await request(pagePath, 'other')).status, 403);
+    const page = await request(pagePath, 'buyer');
+    assert.equal(page.headers.get('cache-control'), 'no-store');
+    assert.equal(page.headers.get('content-type'), 'image/png');
+    assert.equal(Buffer.from(await page.arrayBuffer()).subarray(1, 4).toString(), 'PNG');
+  }
+});
