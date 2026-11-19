@@ -4,7 +4,7 @@ Mission Selection is a B2C preparation app for mock tests and e-books. The respo
 
 ## Run locally
 
-Install Node.js 22 (22.13 or newer), Poppler (`poppler-utils` on Debian/Ubuntu), `unzip`, and a sans-serif font such as DejaVu Sans. Install `zip` to run the DOCX fixture test.
+Install Node.js 22 (22.13 or newer), `unzip`, and a sans-serif font such as DejaVu Sans. Install `zip` to run the DOCX fixture test. PDF page counting and secure page rendering use bundled Node libraries and do not require Poppler. The optional Poppler `pdftotext` command is still used for importing questions from PDFs.
 
 ```sh
 npm ci

@@ -3,6 +3,9 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
+import { createCanvas } from '@napi-rs/canvas';
+import { PDFDocument } from 'pdf-lib';
+import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs';
 import sax from 'sax';
 import sharp from 'sharp';
 
@@ -63,18 +66,38 @@ async function docxText(file) {
 }
 
 export async function pageCount(pdf) {
-  const info = await pdfCommand(pdf, 'pdfinfo', path => [path]);
-  const pages = Number(info.match(/^Pages:\s+([0-9]+)$/m)?.[1]);
-  if (!(pages >= 1 && pages <= 500)) fail(422, 'Expected an unencrypted PDF with 1–500 pages.');
-  if (!/^Encrypted:\s+no\s*$/m.test(info)) fail(422, 'Encrypted PDFs are not supported.');
-  return pages;
+  if (!Buffer.isBuffer(pdf) || !pdf.subarray(0, 5).equals(Buffer.from('%PDF-'))) fail(422, 'Expected a PDF.');
+  try {
+    const document = await PDFDocument.load(pdf, { ignoreEncryption: false, updateMetadata: false });
+    const pages = document.getPageCount();
+    if (!(pages >= 1 && pages <= 500)) fail(422, 'Expected an unencrypted PDF with 1–500 pages.');
+    return pages;
+  } catch (error) {
+    if (error.status) throw error;
+    fail(422, 'Expected a valid, unencrypted PDF with 1–500 pages.');
+  }
 }
 
 export async function renderPage(pdf, page, phone) {
   if (!mobile.test(phone)) fail(403, 'A verified Indian mobile number is required.');
-  const png = await pdfCommand(pdf, 'pdftoppm',
-    path => ['-f', String(page), '-l', String(page), '-scale-to', '1400', '-singlefile', '-png', path],
-    'buffer');
+  let loading;
+  let png;
+  try {
+    loading = getDocument({ data: new Uint8Array(pdf), useSystemFonts: true, isEvalSupported: false });
+    const document = await loading.promise;
+    const pdfPage = await document.getPage(page);
+    const source = pdfPage.getViewport({ scale: 1 });
+    const scale = Math.min(2, 1400 / source.width);
+    const viewport = pdfPage.getViewport({ scale });
+    const canvas = createCanvas(Math.ceil(viewport.width), Math.ceil(viewport.height));
+    await pdfPage.render({ canvas, canvasContext: canvas.getContext('2d'), viewport }).promise;
+    png = canvas.toBuffer('image/png');
+  } catch (error) {
+    if (error.status) throw error;
+    fail(422, 'Could not render this PDF page.');
+  } finally {
+    await loading?.destroy();
+  }
   const image = sharp(png, { limitInputPixels: 2_000_000 });
   const { width, height } = await image.metadata();
   const labels = [];

@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { createApp } from '../server/app.js';
 import { openDatabase } from '../server/database.js';
-import { importQuestions, renderPage } from '../server/documents.js';
+import { importQuestions, pageCount, renderPage } from '../server/documents.js';
 
 const source = '1. What is 2 + 2?\nA. 3\nB. 4\nAnswer: B';
 const questions = [{ prompt: 'What is 2 + 2?', options: ['3', '4'], answer: 1 }];
@@ -59,6 +59,14 @@ test('extracts PDF questions and bakes a viewer-specific watermark into pages', 
   assert.notDeepEqual(first, second);
 });
 
+test('counts and securely renders PDF books without OS tools', async () => {
+  const pdf = fixturePdf();
+  assert.equal(await pageCount(pdf), 1);
+  const [first, second] = await Promise.all([renderPage(pdf, 1, '+919000000001'), renderPage(pdf, 1, '+919000000002')]);
+  assert.equal(first.subarray(1, 4).toString(), 'PNG');
+  assert.notDeepEqual(first, second);
+});
+
 test('admin approval grants only the confirmed student access to their course, test and discussion', async t => {
   const db = openDatabase(':memory:');
   const users = new Map([
@@ -91,7 +99,7 @@ test('admin approval grants only the confirmed student access to their course, t
   const createdTest = await request(`/admin${path}/tests`, 'admin', 'POST', { title: 'Practice test', questions });
   assert.equal(createdTest.status, 201);
   const testPath = `/tests/${(await createdTest.json()).id}`;
-  const withPdf = has('pdfinfo') && has('pdftoppm');
+  const withPdf = true;
   let pagePath;
   if (withPdf) {
     const upload = await request(`/admin${path}/books?title=Guide`, 'admin', 'POST', fixturePdf(),
