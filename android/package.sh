@@ -14,7 +14,7 @@ set -eu
 #    (use a supported Node.js LTS, without sudo). Run the init command below
 #    using your actual origin. Accept Bubblewrap's JDK/Android SDK setup as
 #    needed. In the prompts keep Mission Selection for both names, / as the start
-#    URL, standalone display, default orientation and #172554 for both colors.
+#    URL, standalone display, default orientation and #24347a / #f5f7ff colors.
 #    Confirm the normal and maskable icons and choose a unique, permanent
 #    Android package ID under a namespace you control. Keep the upload
 #    keystore outside this checkout, back it up and never commit passwords.

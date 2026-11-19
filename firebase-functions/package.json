@@ -1,0 +1,23 @@
+{
+  "name": "mock-master-firebase-functions",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "index.js",
+  "engines": {
+    "node": "22"
+  },
+  "dependencies": {
+    "@napi-rs/canvas": "^0.1.80",
+    "express": "5.3.0",
+    "express-rate-limit": "8.7.5",
+    "firebase-admin": "^13.6.0",
+    "firebase-functions": "^7.0.0",
+    "jszip": "^3.10.1",
+    "pdf-lib": "^1.17.1",
+    "pdfjs-dist": "^5.4.149",
+    "qrcode": "^1.5.4",
+    "sax": "1.6.1",
+    "sharp": "0.35.5"
+  }
+}

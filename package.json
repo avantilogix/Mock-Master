@@ -21,5 +21,8 @@
     "sax": "1.6.1",
     "sharp": "0.35.5"
   },
-  "private": true
+  "private": true,
+  "devDependencies": {
+    "@bubblewrap/cli": "^1.27.0"
+  }
 }

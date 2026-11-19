@@ -8,4 +8,4 @@ data/
 *.apk
 *.aab
 android/.gradle/
-/public/.well-known/assetlinks.json
+.firebase/

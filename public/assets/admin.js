@@ -24,6 +24,8 @@ export function showAdmin(main, ctx) {
   const post = (path, body) => api(path, {ctx, auth: true, method: 'POST', ...body});
   const payments = el('div');
   const paymentRefresh = button('Refresh requests', 'secondary');
+  const samples = button('Load sample missions', 'secondary');
+  const sampleStatus = status();
   const content = el('div');
   const inbox = el('div');
   const courseSelects = [];
@@ -79,6 +81,11 @@ export function showAdmin(main, ctx) {
     }) : [el('p', {class: 'empty'}, 'No payment requests yet.')]));
   });
   paymentRefresh.addEventListener('click', loadPayments);
+  samples.addEventListener('click', () => run(samples, sampleStatus, async () => {
+    const result = await post('/admin/seed-samples', {json: {}});
+    await refresh();
+    say(sampleStatus, `${result.courses} sample missions are available in the catalog.`);
+  }, 'Loading sample missions…'));
 
   const title = el('input', {required: '', maxlength: '120'});
   const description = el('textarea', {rows: '3', required: '', maxlength: '2000'});
@@ -111,6 +118,8 @@ export function showAdmin(main, ctx) {
   main.append(panel('Payment approvals',
     el('p', {class: 'muted'}, 'Verify each UPI transaction in the receiving account before unlocking a student course.'),
     paymentRefresh, el('div', {class: 'payment-requests'}, payments)),
+  panel('Quick start', el('p', {class: 'muted'},
+    'Add or refresh three ready-made missions with mock tests and protected starter books.'), samples, sampleStatus),
   panel('Create a course', createForm), content);
   loadPayments();
 
