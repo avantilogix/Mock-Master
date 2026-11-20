@@ -35,6 +35,12 @@
         ]
       },
       {
+        "source": "/assets/**",
+        "headers": [
+          { "key": "Cache-Control", "value": "no-cache, must-revalidate" }
+        ]
+      },
+      {
         "source": "/api/**",
         "headers": [
           { "key": "Cache-Control", "value": "private, no-store" }

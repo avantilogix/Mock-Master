@@ -92,7 +92,14 @@ try {
   for (const ticket of db.prepare('SELECT * FROM tickets').all()) {
     await writeDocument('tickets', ticket.id, { uid: ticket.uid, text: ticket.text, createdAt });
   }
-  console.log(`Migrated ${courses.length} courses, ${tests.length} tests, and ${books.length} protected books.`);
+  const resources = db.prepare('SELECT * FROM resources').all();
+  for (const resource of resources) {
+    await writeDocument('resources', resource.id, {
+      kind: resource.kind, title: resource.title, summary: resource.summary, body: resource.body,
+      createdAt: resource.created_at,
+    });
+  }
+  console.log(`Migrated ${courses.length} courses, ${tests.length} tests, ${books.length} protected books, and ${resources.length} resources.`);
 } finally {
   db.close();
 }

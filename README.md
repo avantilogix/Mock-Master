@@ -16,6 +16,8 @@ Open `http://127.0.0.1:3000`. Browsing works without provider credentials; login
 
 Run `npm run seed` to add or refresh three sample preparation missions, each with a practice test and protected starter e-book. The seed is idempotent and does not create users, purchases, fake reviews, or admin permissions.
 
+The Phase 2 and Phase 3 student experience includes persisted test reports, notifications, current affairs, PYQs, syllabus resources, a student timetable, referral codes, protected page downloads, and physical-book UPI/shipping orders. Admins can publish timetable entries and learning resources, manage physical-book inventory and fulfillment, configure social links, and disable or reactivate student accounts from the Admin workspace. Physical-book stock is reduced only when the admin approves the payment; course access remains separate.
+
 ### Firebase phone sign-in
 
 1. Register a Web App in a Firebase project and enable **Phone** in Authentication. Configure the SMS region policy for India and add the actual web hostname to Firebase's authorized domains. Use a configured development HTTPS hostname and Firebase's fictional phone numbers to test without sending SMS.

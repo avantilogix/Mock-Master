@@ -1,15 +1,20 @@
-import {showAdmin} from './admin.js';
-import {showCatalog, showCourse} from './course.js';
+import {showAdmin} from './admin.js?v=phase2-20261120';
+import {showCatalog, showContentLibrary, showCourse, showDashboard, showMyCourses} from './course.js?v=phase2-20261120';
 import {api, firebaseAuth} from './services.js';
 import {showSignIn} from './signin.js';
 import {showBook, showTest} from './study.js';
+import {showLearningContent, showNotifications, showProgress} from './reports.js?v=phase3-20261120';
+import {showDownloads, showPhysicalStore, showReferrals, showTimetable, socialFooter} from './features.js?v=phase3-20261120';
 import {bindForm, button, el, field, heading, link, panel, run, say, status, textValue} from './ui.js';
 
 const main = document.querySelector('#main');
 const nav = document.querySelector('#nav');
 const notice = document.querySelector('#notice');
 const routes = new Map([
-  ['catalog', 0], ['course', 1], ['test', 2], ['book', 2], ['signin', 0],
+  ['home', 0], ['catalog', 0], ['my-courses', 0], ['test-series', 0], ['book-store', 0], ['materials', 0],
+  ['free-tests', 0], ['current-affairs', 0], ['pyqs', 0], ['syllabus', 0], ['progress', 0], ['notifications', 0],
+  ['timetable', 0], ['referrals', 0], ['physical-books', 0], ['downloads', 0],
+  ['course', 1], ['test', 2], ['book', 2], ['signin', 0],
   ['profile', 0], ['support', 0], ['admin', 0]
 ]);
 let firebase;
@@ -21,7 +26,7 @@ let activeHash;
 
 function route(hash = location.hash) {
   const [path, query] = hash.slice(1).split('?', 2);
-  const [page, ...encoded] = (path || 'catalog').split('/');
+  const [page, ...encoded] = (path || 'home').split('/');
   try {
     const args = encoded.map(decodeURIComponent);
     if (routes.get(page) === args.length && args.every(value => value && value !== '.' && value !== '..')) {
@@ -33,7 +38,7 @@ function route(hash = location.hash) {
 
 function nextAfterSignIn(parsed) {
   const next = parsed.query?.get('next');
-  if (!next?.startsWith('#') || ['signin', 'missing'].includes(route(next).page)) return '#catalog';
+  if (!next?.startsWith('#') || ['signin', 'missing'].includes(route(next).page)) return '#home';
   return next;
 }
 
@@ -98,9 +103,12 @@ async function initializeProfile(current) {
 }
 
 function renderNav(parsed) {
-  const catalogActive = ['catalog', 'course', 'test', 'book'].includes(parsed.page);
+  const catalogActive = ['catalog', 'course', 'test', 'book', 'test-series', 'book-store', 'materials'].includes(parsed.page);
   const navLink = (label, icon, href, active) => el('a', {href, 'data-icon': icon, 'aria-current': active ? 'page' : null}, label);
-  nav.replaceChildren(navLink('Missions', '⌂', '#catalog', catalogActive), navLink('Support', '?', '#support', parsed.page === 'support'),
+  nav.replaceChildren(navLink('Home', '⌂', '#home', parsed.page === 'home'),
+    navLink('Missions', '▦', '#catalog', catalogActive),
+    navLink('My Courses', '✓', '#my-courses', parsed.page === 'my-courses'),
+    navLink('Progress', '↗', '#progress', parsed.page === 'progress'),
     session ? navLink('Profile', '●', '#profile', parsed.page === 'profile') : navLink('Sign in', '●', '#signin', parsed.page === 'signin'));
   if (session?.me?.admin) nav.append(navLink('Admin', '⚙', '#admin', parsed.page === 'admin'));
   nav.style.setProperty('--nav-count', nav.children.length);
@@ -142,6 +150,12 @@ function showProfile(ctx) {
     }
   });
   const name = session.me?.name || 'Student';
+  const disable = button('Disable my account', 'danger secondary');
+  disable.addEventListener('click', () => run(disable, feedback, async () => {
+    if (!window.confirm('Disable your account? You will need support to reactivate it.')) return;
+    await api('/me/disable', {ctx, auth: true, method: 'POST'});
+    await firebase.sdk.signOut(firebase.auth);
+  }, 'Disabling account…'));
   main.append(...heading('Your learning space', 'Manage your profile and keep your preparation moving forward.'),
     panel('Account', el('div', {class: 'profile-summary'},
       el('div', {class: 'avatar', 'aria-hidden': 'true'}, name.slice(0, 1).toUpperCase()),
@@ -150,7 +164,8 @@ function showProfile(ctx) {
       el('div', {class: 'profile-purchase section'},
         el('div', {}, el('strong', {}, String(session.me?.purchases?.length || 0)), el('span', {class: 'muted'}, 'Courses unlocked')),
         el('div', {}, el('strong', {}, 'Secure'), el('span', {class: 'muted'}, 'Protected learning access'))),
-      el('div', {class: 'actions section'}, link('Explore courses', '#catalog', 'button'), signOut)));
+      el('div', {class: 'actions section'}, link('Explore courses', '#catalog', 'button'),
+        link('Referrals', '#referrals', 'button secondary'), socialFooter(ctx), signOut, disable)));
   if (!session.me) {
     main.append(panel('Display name', profileUnavailable()));
     return;
@@ -206,7 +221,22 @@ function render(focus = false) {
   const [courseId, itemId] = parsed.args;
 
   switch (parsed.page) {
+    case 'home': showDashboard(main, ctx, current?.me); break;
     case 'catalog': showCatalog(main, ctx, current?.me); break;
+    case 'my-courses': showMyCourses(main, ctx, current?.me, {signInLink}); break;
+    case 'test-series':
+    case 'book-store':
+    case 'materials': showContentLibrary(main, ctx, current?.me, parsed.page, {signInLink}); break;
+    case 'progress': showProgress(main, ctx, {signInLink}); break;
+    case 'notifications': showNotifications(main, ctx, {signInLink}); break;
+    case 'timetable': showTimetable(main, ctx); break;
+    case 'referrals': showReferrals(main, ctx, {signInLink}); break;
+    case 'physical-books': showPhysicalStore(main, ctx, {signInLink}); break;
+    case 'downloads': showDownloads(main, ctx, {signInLink}); break;
+    case 'free-tests':
+    case 'current-affairs':
+    case 'pyqs':
+    case 'syllabus': showLearningContent(main, ctx, parsed.page, {signInLink}); break;
     case 'course':
       showCourse(main, ctx, current, {
         id: courseId, signInLink, profileUnavailable, refreshProfile,

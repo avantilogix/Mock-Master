@@ -69,6 +69,21 @@ const courses = [
   },
 ];
 
+const resources = [
+  ['current-affairs', 'sample-current-affairs', 'Current Affairs Study Plan: November 2026',
+    'A focused revision structure for national, international, economy, science, and sports updates.',
+    'Revise the last 30 days of updates. Note economic announcements, schemes, science, awards, and sports. Attempt a weekly quiz.'],
+  ['free-tests', 'sample-free-test', 'Free General Aptitude Practice',
+    'A compact practice set to begin your Mission Selection journey.',
+    '1. 25% of 480 = 120.\n2. 2, 6, 12, 20, 30.\n3. Synonym of concise: Brief.\n4. HCF of 18 and 24: 6.'],
+  ['pyqs', 'sample-pyq', 'How to revise previous-year questions',
+    'A repeatable method for turning PYQs into an accurate revision system.',
+    'Group PYQs by topic. Solve without notes, mark confidence, review weak topics, and repeat after 48 hours.'],
+  ['syllabus', 'sample-syllabus', 'SSC and Banking Foundation Syllabus',
+    'Core topics for quantitative aptitude, reasoning, English, and general awareness.',
+    'Quantitative Aptitude; Reasoning; English; General Awareness and current affairs.'],
+];
+
 export function seedCatalog(databasePath) {
   mkdirSync(dirname(databasePath), { recursive: true });
   const db = openDatabase(databasePath);
@@ -95,6 +110,12 @@ export function seedCatalog(databasePath) {
             '',
             'This page is protected with your verified mobile number.',
           ]));
+      }
+      const now = new Date().toISOString();
+      for (const [kind, id, title, summary, body] of resources) {
+        db.prepare(`INSERT INTO resources VALUES (?, ?, ?, ?, ?, ?)
+          ON CONFLICT (id) DO UPDATE SET title=excluded.title, summary=excluded.summary, body=excluded.body`)
+          .run(id, kind, title, summary, body, now);
       }
       db.exec('COMMIT');
     } catch (error) {

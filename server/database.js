@@ -34,8 +34,40 @@ export function openDatabase(path) {
     CREATE TABLE IF NOT EXISTS tickets (
       id INTEGER PRIMARY KEY, uid TEXT NOT NULL REFERENCES students, text TEXT NOT NULL
     ) STRICT;
+    CREATE TABLE IF NOT EXISTS attempts (
+      id TEXT PRIMARY KEY, uid TEXT NOT NULL REFERENCES students, course TEXT NOT NULL REFERENCES courses,
+      test TEXT NOT NULL REFERENCES tests, title TEXT NOT NULL, score INTEGER NOT NULL, total INTEGER NOT NULL,
+      created_at TEXT NOT NULL
+    ) STRICT;
+    CREATE TABLE IF NOT EXISTS resources (
+      id TEXT PRIMARY KEY, kind TEXT NOT NULL, title TEXT NOT NULL, summary TEXT NOT NULL,
+      body TEXT NOT NULL, created_at TEXT NOT NULL
+    ) STRICT;
+    CREATE TABLE IF NOT EXISTS schedules (
+      id TEXT PRIMARY KEY, title TEXT NOT NULL, day TEXT NOT NULL, starts_at TEXT NOT NULL,
+      duration TEXT NOT NULL, description TEXT NOT NULL, created_at TEXT NOT NULL
+    ) STRICT;
+    CREATE TABLE IF NOT EXISTS physical_books (
+      id TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT NOT NULL, price INTEGER NOT NULL,
+      stock INTEGER NOT NULL, active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL
+    ) STRICT;
+    CREATE TABLE IF NOT EXISTS physical_orders (
+      id TEXT PRIMARY KEY, uid TEXT NOT NULL REFERENCES students, book TEXT NOT NULL REFERENCES physical_books,
+      quantity INTEGER NOT NULL, amount INTEGER NOT NULL, transaction_ref TEXT NOT NULL, address TEXT NOT NULL,
+      status TEXT NOT NULL, review_note TEXT NOT NULL DEFAULT '', tracking TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    ) STRICT;
+    CREATE TABLE IF NOT EXISTS referrals (
+      uid TEXT PRIMARY KEY REFERENCES students, code TEXT NOT NULL UNIQUE, referred_by TEXT NOT NULL DEFAULT '',
+      credits INTEGER NOT NULL DEFAULT 0
+    ) STRICT;
+    CREATE TABLE IF NOT EXISTS settings (
+      key TEXT PRIMARY KEY, value TEXT NOT NULL
+    ) STRICT;
   `);
   const orderColumns = new Set(db.prepare('PRAGMA table_info(orders)').all().map(column => column.name));
+  const studentColumns = new Set(db.prepare('PRAGMA table_info(students)').all().map(column => column.name));
+  if (!studentColumns.has('disabled')) db.exec("ALTER TABLE students ADD COLUMN disabled INTEGER NOT NULL DEFAULT 0");
   const additions = [
     ['payment_status', "TEXT NOT NULL DEFAULT 'pending'"],
     ['transaction_ref', 'TEXT NOT NULL DEFAULT \'\''],

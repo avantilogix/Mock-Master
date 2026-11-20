@@ -1,4 +1,5 @@
 import {api} from './services.js';
+import {adminContentForm} from './reports.js';
 import {bindForm, button, el, entries, field, heading, idPart, loadInto, panel, run, say, status, textValue} from './ui.js';
 
 const pdfAccept = '.pdf,application/pdf';
@@ -27,6 +28,30 @@ export function showAdmin(main, ctx) {
   const samples = button('Load sample missions', 'secondary');
   const sampleStatus = status();
   const content = el('div');
+  const timetable = el('div');
+  const physicalBooks = el('div');
+  const physicalOrders = el('div');
+  const students = el('div');
+  const youtube = el('input', {type: 'url', placeholder: 'https://youtube.com/@yourchannel'});
+  const instagram = el('input', {type: 'url', placeholder: 'https://instagram.com/yourpage'});
+  const telegram = el('input', {type: 'url', placeholder: 'https://t.me/yourcommunity'});
+  const socialSave = button('Save social links', null, 'submit');
+  const socialFeedback = status();
+  const socialForm = el('form', {}, field('YouTube URL', youtube), field('Instagram URL', instagram),
+    field('Telegram URL', telegram), socialSave, socialFeedback);
+  bindForm(socialForm, socialSave, socialFeedback, async () => {
+    await api('/admin/social', {ctx, auth: true, method: 'PUT', json: {
+      youtube: youtube.value.trim(), instagram: instagram.value.trim(), telegram: telegram.value.trim(),
+    }});
+    say(socialFeedback, 'Social links saved. Students will see them in Profile.');
+  }, 'Saving links…');
+  api('/social', {ctx}).then(values => {
+    youtube.value = values.youtube || '';
+    instagram.value = values.instagram || '';
+    telegram.value = values.telegram || '';
+  }).catch(error => {
+    if (ctx.current() && error.name !== 'AbortError') say(socialFeedback, error.message, true);
+  });
   const inbox = el('div');
   const courseSelects = [];
   function courseField() {
@@ -87,6 +112,108 @@ export function showAdmin(main, ctx) {
     say(sampleStatus, `${result.courses} sample missions are available in the catalog.`);
   }, 'Loading sample missions…'));
 
+  const day = el('select', {required: ''}, ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+    .map(value => el('option', {value}, value)));
+  const scheduleTitle = el('input', {required: '', maxlength: '120'});
+  const start = el('input', {type: 'time', required: ''});
+  const duration = el('input', {required: '', maxlength: '30', placeholder: '60 minutes'});
+  const scheduleDescription = el('textarea', {rows: '3', required: '', maxlength: '1000'});
+  const scheduleSubmit = button('Publish schedule', null, 'submit');
+  const scheduleFeedback = status();
+  const scheduleForm = el('form', {}, field('Day', day), field('Session title', scheduleTitle),
+    field('Start time', start), field('Duration', duration), field('Description', scheduleDescription),
+    scheduleSubmit, scheduleFeedback);
+  const loadTimetable = () => loadInto(timetable, ctx, async () => {
+    const rows = await get('/admin/timetable');
+    timetable.replaceChildren(entries(rows, 'No timetable sessions published.', item => [
+      el('strong', {}, `${item.day || ''} · ${item.starts_at || item.startsAt}`),
+      el('p', {}, item.title), el('p', {class: 'muted'}, `${item.duration} — ${item.description}`),
+    ]));
+  });
+  bindForm(scheduleForm, scheduleSubmit, scheduleFeedback, async () => {
+    await post('/admin/timetable', {json: {
+      day: day.value, title: textValue(scheduleTitle, 'Session title'), startsAt: start.value,
+      duration: textValue(duration, 'Duration'), description: textValue(scheduleDescription, 'Description'),
+    }});
+    scheduleForm.reset();
+    say(scheduleFeedback, 'Timetable session published.');
+    loadTimetable();
+  }, 'Publishing schedule…');
+
+  const physicalTitle = el('input', {required: '', maxlength: '120'});
+  const physicalDescription = el('textarea', {rows: '3', required: '', maxlength: '2000'});
+  const physicalPrice = el('input', {type: 'number', min: '100', max: '10000000', step: '1', required: ''});
+  const stock = el('input', {type: 'number', min: '0', max: '10000', step: '1', required: ''});
+  const physicalSubmit = button('Publish physical book', null, 'submit');
+  const physicalFeedback = status();
+  const physicalForm = el('form', {}, field('Book title', physicalTitle),
+    field('Description', physicalDescription), field('Price in paise', physicalPrice), field('Stock', stock),
+    physicalSubmit, physicalFeedback);
+  const loadPhysicalBooks = () => loadInto(physicalBooks, ctx, async () => {
+    const rows = await get('/admin/physical-books');
+    physicalBooks.replaceChildren(entries(rows, 'No physical books published.', item => [
+      el('strong', {}, item.title), el('p', {class: 'muted'},
+        `₹${(item.price / 100).toFixed(2)} · ${item.stock} in stock`),
+    ]));
+  });
+  bindForm(physicalForm, physicalSubmit, physicalFeedback, async () => {
+    await post('/admin/physical-books', {json: {
+      title: textValue(physicalTitle, 'Book title'), description: textValue(physicalDescription, 'Description'),
+      price: physicalPrice.valueAsNumber, stock: stock.valueAsNumber,
+    }});
+    physicalForm.reset();
+    say(physicalFeedback, 'Physical book published.');
+    loadPhysicalBooks();
+  }, 'Publishing book…');
+
+  const loadPhysicalOrders = () => loadInto(physicalOrders, ctx, async () => {
+    const orders = await get('/admin/physical-orders');
+    physicalOrders.replaceChildren(...(orders.length ? orders.map(order => {
+      const tracking = el('input', {maxlength: '100', placeholder: 'Tracking / courier reference'});
+      tracking.value = order.tracking || '';
+      const note = el('input', {maxlength: '500', placeholder: 'Customer note'});
+      note.value = order.review_note || order.reviewNote || '';
+      const feedback = status();
+      const controls = el('div', {class: 'actions'});
+      for (const [nextStatus, label] of [['approved', 'Approve payment'], ['shipped', 'Mark shipped'], ['delivered', 'Delivered'], ['cancelled', 'Cancel']]) {
+        const action = button(label, nextStatus === 'cancelled' ? 'danger secondary' : 'secondary');
+        action.disabled = order.status === nextStatus;
+        action.addEventListener('click', () => run(action, feedback, async () => {
+          await post(`/admin/physical-orders/${idPart(order.id)}/status`, {json: {
+            status: nextStatus, tracking: tracking.value, note: note.value,
+          }});
+          say(feedback, `Order updated to ${nextStatus}.`);
+          setTimeout(loadPhysicalOrders, 350);
+        }, 'Updating order…'));
+        controls.append(action);
+      }
+      return el('article', {class: 'payment-request'},
+        el('div', {class: 'payment-request-head'}, el('div', {}, el('strong', {}, order.name),
+          el('p', {class: 'muted'}, order.phone || order.accountPhone)), el('span', {class: `request-state ${order.status}`}, order.status)),
+        el('h3', {}, order.bookTitle), el('p', {}, `${order.quantity} copies · ₹${(order.amount / 100).toFixed(2)}`),
+        el('p', {class: 'entry-text'}, order.address), el('p', {class: 'muted'}, `UPI reference: ${order.transaction_ref || order.transactionRef}`),
+        field('Tracking', tracking), field('Order note', note), controls, feedback);
+    }) : [el('p', {class: 'empty'}, 'No physical book orders yet.')]));
+  });
+  const loadStudents = () => loadInto(students, ctx, async () => {
+    const rows = await get('/admin/students');
+    students.replaceChildren(...(rows.length ? rows.map(student => {
+      const disabled = Boolean(student.disabled);
+      const action = button(disabled ? 'Reactivate account' : 'Disable account',
+        disabled ? 'secondary' : 'danger secondary');
+      const feedback = status();
+      action.addEventListener('click', () => run(action, feedback, async () => {
+        await post(`/admin/students/${idPart(student.uid)}/status`, {json: {disabled: !disabled}});
+        say(feedback, disabled ? 'Account reactivated.' : 'Account disabled.');
+        setTimeout(loadStudents, 350);
+      }, 'Updating account…'));
+      return el('article', {class: 'student-control'},
+        el('div', {}, el('strong', {}, student.name || 'Student'), el('p', {class: 'muted'}, student.phone),
+          el('code', {class: 'muted'}, student.uid)),
+        action, feedback);
+    }) : [el('p', {class: 'empty'}, 'No signed-in students yet.')]));
+  });
+
   const title = el('input', {required: '', maxlength: '120'});
   const description = el('textarea', {rows: '3', required: '', maxlength: '2000'});
   const price = el('input', {type: 'number', min: '100', max: '10000000', step: '1', required: '', inputmode: 'numeric'});
@@ -122,6 +249,15 @@ export function showAdmin(main, ctx) {
     'Add or refresh three ready-made missions with mock tests and protected starter books.'), samples, sampleStatus),
   panel('Create a course', createForm), content);
   loadPayments();
+  main.append(panel('Student timetable', scheduleForm, timetable),
+    panel('Physical books', physicalForm, physicalBooks),
+    panel('Physical book orders', physicalOrders),
+    panel('Student accounts', students),
+    panel('Social media links', socialForm));
+  loadTimetable();
+  loadPhysicalBooks();
+  loadPhysicalOrders();
+  loadStudents();
 
   const example = JSON.stringify([{prompt: 'What is 2 + 2?', options: ['3', '4'], answer: 1}], null, 2);
   const editor = el('textarea', {class: 'json', rows: '12', required: '', spellcheck: 'false', placeholder: example});
@@ -173,7 +309,9 @@ export function showAdmin(main, ctx) {
     say(bookStatus, 'Book uploaded.');
   }, 'Uploading book…');
   setCourses(courseList);
-  main.append(panel('Upload a study book', bookForm), panel('Support inbox', inbox));
+  main.append(panel('Upload a study book', bookForm),
+    panel('Publish learning resources', adminContentForm(post, () => refresh())),
+    panel('Support inbox', inbox));
   loadInto(inbox, ctx, async () => {
     const messages = await get('/admin/support');
     inbox.replaceChildren(entries(messages, 'No support requests have arrived yet.', item => [

@@ -10,7 +10,7 @@ import { onRequest } from 'firebase-functions/v2/https';
 import QRCode from 'qrcode';
 import { fail, importQuestions, mobile, pageCount, renderPage, validateQuestions } from './documents.js';
 import { paymentReference, upiDetails, upiPaymentUri } from './manual-payments.js';
-import { sampleBookPdf, sampleCourses } from './sample-data.js';
+import { sampleBookPdf, sampleCourses, sampleResources } from './sample-data.js';
 
 initializeApp();
 
@@ -37,6 +37,10 @@ function text(value, label, max) {
 
 function idFor(...parts) {
   return createHash('sha256').update(parts.join('\0')).digest('base64url');
+}
+
+function referralCodeFor(uid) {
+  return `MS${createHash('sha256').update(uid).digest('hex').slice(0, 6).toUpperCase()}`;
 }
 
 function value(snapshot) {
@@ -141,6 +145,10 @@ function createApp() {
       fail(403, 'Use a verified Indian mobile number.');
     }
     await db.collection('students').doc(user.uid).set({ phone: user.phone }, { merge: true });
+    const student = value(await db.collection('students').doc(user.uid).get());
+    if (student?.disabled) {
+      fail(403, 'This account is disabled. Contact support to request reactivation.');
+    }
     const admins = new Set(parameterValue(adminUidsParameter).split(',').map(uid => uid.trim()).filter(Boolean));
     req.user = { uid: user.uid, phone: user.phone, admin: admins.has(user.uid) };
     next();
@@ -154,14 +162,23 @@ function createApp() {
     payeeName: parameterValue(upiPayeeNameParameter),
   });
 
-  api.get('/config', (_req, res) => res.json({
-    firebase: {
-      projectId: parameterValue(firebaseProjectIdParameter),
-      apiKey: parameterValue(firebaseApiKeyParameter),
-      authDomain: parameterValue(firebaseAuthDomainParameter),
-    },
-    payment: paymentDetails(),
-  }));
+  api.get('/config', async (_req, res) => {
+    const social = value(await db.collection('settings').doc('social').get());
+    const { id: _id, ...socialConfig } = social || {};
+    res.json({
+      firebase: {
+        projectId: parameterValue(firebaseProjectIdParameter),
+        apiKey: parameterValue(firebaseApiKeyParameter),
+        authDomain: parameterValue(firebaseAuthDomainParameter),
+      },
+      payment: paymentDetails(),
+      social: socialConfig,
+    });
+  });
+  api.get('/social', async (_req, res) => {
+    const social = value(await db.collection('settings').doc('social').get());
+    res.json(Object.fromEntries(['youtube', 'instagram', 'telegram'].map(key => [key, social?.[key] || ''])));
+  });
   api.get('/courses', async (_req, res) => {
     res.json((await queryCollection('courses')).sort(byNewest).map(publicCourse));
   });
@@ -179,6 +196,16 @@ function createApp() {
       return { name: student?.name || 'Student', rating: review.rating, text: review.text };
     }));
     res.json(output);
+  });
+  api.get('/timetable', async (_req, res) => {
+    const schedules = (await queryCollection('schedules')).sort((a, b) =>
+      String(a.day || '').localeCompare(String(b.day || '')) ||
+      String(a.startsAt || a.starts_at || '').localeCompare(String(b.startsAt || b.starts_at || '')));
+    res.json(schedules);
+  });
+  api.get('/physical-books', async (_req, res) => {
+    const books = (await db.collection('physicalBooks').where('active', '==', true).get()).docs.map(value).sort(byNewest);
+    res.json(books.map(book => ({ id: book.id, title: book.title, description: book.description, price: book.price, stock: book.stock })));
   });
 
   api.use(authLimit, login);
@@ -199,6 +226,123 @@ function createApp() {
       name: text(req.body?.name, 'Name', 100),
     }, { merge: true });
     res.sendStatus(204);
+  });
+  api.post('/me/disable', async (req, res) => {
+    await db.collection('students').doc(req.user.uid).set({ disabled: true }, { merge: true });
+    res.sendStatus(204);
+  });
+  api.get('/referral', async (req, res) => {
+    const referralRef = db.collection('referrals').doc(req.user.uid);
+    const referral = await db.runTransaction(async transaction => {
+      const existing = value(await transaction.get(referralRef));
+      if (existing) return existing;
+      const code = referralCodeFor(req.user.uid);
+      const duplicate = (await transaction.get(
+        db.collection('referrals').where('code', '==', code).limit(1),
+      )).docs.map(value)[0];
+      if (duplicate) fail(409, 'Unable to generate a unique referral code. Contact support.');
+      const created = { uid: req.user.uid, code, referredBy: '', credits: 0 };
+      transaction.create(referralRef, created);
+      return { id: req.user.uid, ...created };
+    });
+    res.json({
+      code: referral.code,
+      referred_by: referral.referredBy || referral.referred_by || '',
+      credits: referral.credits || 0,
+    });
+  });
+  api.post('/referral/apply', async (req, res) => {
+    const referralRef = db.collection('referrals').doc(req.user.uid);
+    const ownCode = referralCodeFor(req.user.uid);
+    await db.runTransaction(async transaction => {
+      const mine = value(await transaction.get(referralRef));
+      if (mine?.referredBy || mine?.referred_by) {
+        fail(409, 'A referral code is already linked to your account.');
+      }
+      const code = text(req.body?.code, 'Referral code', 20).toUpperCase();
+      const matching = (await transaction.get(
+        db.collection('referrals').where('code', '==', code),
+      )).docs.map(value);
+      const referrer = matching.find(item => item.uid !== req.user.uid);
+      if (!referrer) fail(422, 'Enter a valid referral code from another student.');
+      if (!mine) {
+        const duplicateOwnCode = (await transaction.get(
+          db.collection('referrals').where('code', '==', ownCode).limit(1),
+        )).docs.map(value)[0];
+        if (duplicateOwnCode) fail(409, 'Unable to generate a unique referral code. Contact support.');
+      }
+      transaction.set(referralRef, {
+        uid: req.user.uid,
+        code: mine?.code || ownCode,
+        referredBy: referrer.uid,
+        credits: mine?.credits || 0,
+      }, { merge: true });
+      transaction.set(db.collection('referrals').doc(referrer.uid), {
+        credits: (referrer.credits || 0) + 100,
+      }, { merge: true });
+    });
+    res.sendStatus(204);
+  });
+  api.get('/physical-orders', async (req, res) => {
+    const orders = (await db.collection('physicalOrders').where('uid', '==', req.user.uid).get()).docs
+      .map(value).sort(byNewest);
+    res.json(await Promise.all(orders.map(async order => ({
+      id: order.id,
+      title: value(await db.collection('physicalBooks').doc(order.book).get())?.title,
+      quantity: order.quantity,
+      amount: order.amount,
+      status: order.status,
+      reviewNote: order.reviewNote || '',
+      tracking: order.tracking || '',
+      createdAt: order.createdAt,
+    }))));
+  });
+  api.post('/physical-orders', async (req, res) => {
+    const { bookId } = req.body ?? {};
+    const bookRef = typeof bookId === 'string' && bookId
+      ? db.collection('physicalBooks').doc(bookId)
+      : null;
+    const quantity = req.body?.quantity;
+    const id = randomUUID();
+    const orderRef = db.collection('physicalOrders').doc(id);
+    const createdAt = new Date().toISOString();
+    const amount = await db.runTransaction(async transaction => {
+      const book = bookRef ? value(await transaction.get(bookRef)) : null;
+      if (!book || book.active !== true || book.stock < 1) {
+        fail(404, 'This physical book is not available.');
+      }
+      if (!Number.isInteger(quantity) || quantity < 1 || quantity > book.stock || quantity > 5) {
+        fail(422, 'Choose a valid quantity.');
+      }
+      const address = typeof req.body?.address === 'object' && req.body.address !== null ? req.body.address : null;
+      if (!address) fail(422, 'Provide a shipping address.');
+      const fullName = text(address.fullName, 'Full name', 100);
+      const phone = typeof address.phone === 'string' && /^[6-9][0-9]{9}$/.test(address.phone.replace(/\D/g, '')) ?
+        address.phone.replace(/\D/g, '') : null;
+      if (!phone) fail(422, 'Enter a valid 10-digit delivery mobile number.');
+      const completeAddress = [
+        fullName, text(address.line1, 'Address', 300), (address.line2 || '').trim(), text(address.city, 'City', 100),
+        text(address.state, 'State', 100), text(address.pin, 'PIN code', 6), phone,
+      ].filter(Boolean).join('\n');
+      const reference = paymentReference(req.body?.reference);
+      if (!reference) fail(422, 'Enter a valid UPI transaction reference.');
+      const total = quantity * book.price;
+      transaction.create(orderRef, {
+        uid: req.user.uid,
+        book: book.id,
+        quantity,
+        amount: total,
+        transactionRef: reference,
+        address: completeAddress,
+        status: 'pending',
+        reviewNote: '',
+        tracking: '',
+        createdAt,
+        updatedAt: createdAt,
+      });
+      return total;
+    });
+    res.status(201).json({ id, amount, status: 'pending' });
   });
   api.get('/courses/:id', async (req, res) => {
     const { id } = await course(req.params.id);
@@ -333,7 +477,48 @@ function createApp() {
           (!Number.isInteger(answer) || answer < 0 || answer >= questions[index].options.length))) {
       fail(422, 'Provide one valid answer or null per question.');
     }
-    res.json({ score: questions.filter((question, index) => answers[index] === question.answer).length, total: questions.length });
+    const score = questions.filter((question, index) => answers[index] === question.answer).length;
+    const total = questions.length;
+    await createWithId('attempts', {
+      uid: req.user.uid, course: item.course, test: item.id, title: item.title, score, total,
+    });
+    res.json({ score, total });
+  });
+  api.get('/progress', async (req, res) => {
+    const attempts = (await db.collection('attempts').where('uid', '==', req.user.uid).get()).docs
+      .map(value).sort(byNewest).slice(0, 100);
+    const total = attempts.reduce((sum, item) => sum + item.total, 0);
+    const correct = attempts.reduce((sum, item) => sum + item.score, 0);
+    const output = await Promise.all(attempts.map(async attempt => ({
+      ...attempt,
+      courseTitle: value(await db.collection('courses').doc(attempt.course).get())?.title || 'Mission',
+    })));
+    res.json({ attempts: output, summary: {
+      attempts: attempts.length, questions: total, correct, accuracy: total ? Math.round(correct / total * 100) : 0,
+    } });
+  });
+  api.get('/notifications', async (req, res) => {
+    const orders = (await db.collection('orders').where('uid', '==', req.user.uid).get()).docs.map(value)
+      .sort(byNewest).slice(0, 50);
+    res.json(await Promise.all(orders.map(async order => {
+      const selected = value(await db.collection('courses').doc(order.course).get());
+      return {
+        id: `payment-${order.id}`,
+        title: order.paymentStatus === 'approved' ? `${selected?.title || 'Mission'} is unlocked` :
+          order.paymentStatus === 'rejected' ? `${selected?.title || 'Mission'} payment needs attention` :
+          `${selected?.title || 'Mission'} payment is under review`,
+        body: order.paymentStatus === 'rejected' ? order.reviewNote : order.paymentStatus === 'approved' ?
+          'Your mission, tests and books are ready.' : 'The admin is verifying your UPI transaction.',
+        href: `#course/${order.course}`,
+        date: order.submittedAt,
+        unread: order.paymentStatus === 'pending',
+      };
+    })));
+  });
+  api.get('/content/:kind', async (req, res) => {
+    if (!['current-affairs', 'pyqs', 'syllabus', 'free-tests'].includes(req.params.kind)) fail(404, 'Content not found.');
+    res.json((await db.collection('resources').where('kind', '==', req.params.kind).get()).docs
+      .map(value).sort(byNewest));
   });
   api.get('/books/:id/pages/:page', async (req, res) => {
     const book = value(await db.collection('books').doc(req.params.id).get());
@@ -345,8 +530,167 @@ function createApp() {
     const png = await processDocument(() => renderPage(pdf, page, req.user.phone));
     res.type('png').send(png);
   });
+  api.get('/books/:id/pages/:page/download', async (req, res) => {
+    const book = value(await db.collection('books').doc(req.params.id).get());
+    if (!book) fail(404, 'Book not found.');
+    await requirePurchase(req.user, book.course);
+    const page = Number(req.params.page);
+    if (!Number.isSafeInteger(page) || page < 1 || page > book.pages) fail(404, 'Page not found.');
+    const [pdf] = await bucket.file(`books/${book.id}.pdf`).download();
+    const png = await processDocument(() => renderPage(pdf, page, req.user.phone));
+    res.attachment(`${book.title}-page-${page}.png`).type('png').send(png);
+  });
 
   api.use('/admin', admin);
+  api.get('/admin/students', async (_req, res) => {
+    res.json((await queryCollection('students')).sort((a, b) =>
+      String(a.name || a.phone).localeCompare(String(b.name || b.phone))).slice(0, 500)
+      .map(student => ({ uid: student.id, phone: student.phone, name: student.name || '', disabled: Boolean(student.disabled) })));
+  });
+  api.post('/admin/students/:uid/status', async (req, res) => {
+    const disabled = req.body?.disabled;
+    if (typeof disabled !== 'boolean') fail(422, 'Choose a valid account status.');
+    const student = db.collection('students').doc(req.params.uid);
+    if (!(await student.get()).exists) fail(404, 'Student not found.');
+    await student.set({ disabled }, { merge: true });
+    res.sendStatus(204);
+  });
+  api.put('/admin/social', async (req, res) => {
+    const values = req.body ?? {};
+    const social = {};
+    for (const key of ['youtube', 'instagram', 'telegram']) {
+      const target = typeof values[key] === 'string' ? values[key].trim() : '';
+      if (target && !/^https:\/\/[^/\s]+/i.test(target)) fail(422, `Enter a valid HTTPS ${key} URL.`);
+      social[key] = target;
+    }
+    await db.collection('settings').doc('social').set(social);
+    res.sendStatus(204);
+  });
+  api.get('/admin/timetable', async (_req, res) => {
+    const schedules = (await queryCollection('schedules')).sort((a, b) =>
+      String(a.day || '').localeCompare(String(b.day || '')) ||
+      String(a.startsAt || a.starts_at || '').localeCompare(String(b.startsAt || b.starts_at || '')));
+    res.json(schedules.map(item => ({
+      id: item.id,
+      title: item.title,
+      day: item.day,
+      starts_at: item.startsAt || item.starts_at,
+      duration: item.duration,
+      description: item.description,
+      created_at: item.createdAt || item.created_at,
+    })));
+  });
+  api.post('/admin/timetable', async (req, res) => {
+    const id = randomUUID();
+    await db.collection('schedules').doc(id).create({
+      title: text(req.body?.title, 'Title', 120),
+      day: text(req.body?.day, 'Day', 20),
+      startsAt: text(req.body?.startsAt, 'Start time', 20),
+      duration: text(req.body?.duration, 'Duration', 30),
+      description: text(req.body?.description, 'Description', 1000),
+      createdAt: new Date().toISOString(),
+    });
+    res.status(201).json({ id });
+  });
+  api.get('/admin/physical-books', async (_req, res) => {
+    res.json((await queryCollection('physicalBooks')).sort(byNewest).map(book => ({
+      id: book.id,
+      title: book.title,
+      description: book.description,
+      price: book.price,
+      stock: book.stock,
+      active: book.active === true ? 1 : 0,
+      created_at: book.createdAt,
+    })));
+  });
+  api.post('/admin/physical-books', async (req, res) => {
+    const { price, stock } = req.body ?? {};
+    if (!Number.isInteger(price) || price < 100 || price > 10_000_000 ||
+        !Number.isInteger(stock) || stock < 0 || stock > 10000) {
+      fail(422, 'Enter valid stock and a price from ₹1 to ₹100,000, in paise.');
+    }
+    const id = randomUUID();
+    await db.collection('physicalBooks').doc(id).create({
+      title: text(req.body?.title, 'Title', 120),
+      description: text(req.body?.description, 'Description', 2000),
+      price,
+      stock,
+      active: true,
+      createdAt: new Date().toISOString(),
+    });
+    res.status(201).json({ id });
+  });
+  api.get('/admin/physical-orders', async (_req, res) => {
+    const orders = (await queryCollection('physicalOrders')).sort((a, b) => {
+      const pending = Number(a.status !== 'pending') - Number(b.status !== 'pending');
+      return pending || String(b.createdAt || '').localeCompare(String(a.createdAt || ''));
+    }).slice(0, 200);
+    res.json(await Promise.all(orders.map(async order => {
+      const [student, book] = await Promise.all([
+        db.collection('students').doc(order.uid).get(),
+        db.collection('physicalBooks').doc(order.book).get(),
+      ]);
+      return {
+        id: order.id,
+        uid: order.uid,
+        book: order.book,
+        quantity: order.quantity,
+        amount: order.amount,
+        transaction_ref: order.transactionRef,
+        address: order.address,
+        status: order.status,
+        review_note: order.reviewNote || '',
+        tracking: order.tracking || '',
+        created_at: order.createdAt,
+        updated_at: order.updatedAt,
+        name: value(student)?.name || 'Student',
+        accountPhone: value(student)?.phone,
+        bookTitle: value(book)?.title,
+      };
+    })));
+  });
+  api.post('/admin/physical-orders/:id/status', async (req, res) => {
+    const orderRef = db.collection('physicalOrders').doc(req.params.id);
+    await db.runTransaction(async transaction => {
+      const order = value(await transaction.get(orderRef));
+      if (!order) fail(404, 'Order not found.');
+      const status = req.body?.status;
+      if (!['approved', 'shipped', 'delivered', 'cancelled'].includes(status)) {
+        fail(422, 'Choose a valid order status.');
+      }
+      const tracking = typeof req.body?.tracking === 'string' ?
+        req.body.tracking.trim().slice(0, 100) : order.tracking || '';
+      const reviewNote = typeof req.body?.note === 'string' ?
+        req.body.note.trim().slice(0, 500) : order.reviewNote || '';
+      let bookRef;
+      let book;
+      if (status === 'approved' && order.status === 'pending') {
+        bookRef = db.collection('physicalBooks').doc(order.book);
+        book = value(await transaction.get(bookRef));
+        if (!book) fail(404, 'Physical book not found.');
+        if (book.stock < order.quantity) fail(409, 'This physical book no longer has enough stock.');
+      }
+      transaction.update(orderRef, {
+        status,
+        reviewNote,
+        tracking,
+        updatedAt: new Date().toISOString(),
+      });
+      if (bookRef) transaction.update(bookRef, { stock: book.stock - order.quantity });
+    });
+    res.sendStatus(204);
+  });
+  api.post('/admin/content/:kind', async (req, res) => {
+    const kind = req.params.kind;
+    if (!['current-affairs', 'pyqs', 'syllabus', 'free-tests'].includes(kind)) fail(422, 'Choose a valid content section.');
+    const id = await createWithId('resources', {
+      kind,
+      title: text(req.body?.title, 'Title', 120),
+      summary: text(req.body?.summary, 'Summary', 300),
+      body: text(req.body?.body, 'Content', 10_000),
+    });
+    res.status(201).json({ id });
+  });
   api.post('/admin/seed-samples', async (_req, res) => {
     await Promise.all(sampleCourses.map(async sample => {
       const createdAt = new Date().toISOString();
@@ -367,7 +711,11 @@ function createApp() {
         }),
       ]);
     }));
-    res.json({ courses: sampleCourses.length });
+    await Promise.all(sampleResources.map(resource => db.collection('resources').doc(resource.id).set({
+      kind: resource.kind, title: resource.title, summary: resource.summary, body: resource.body,
+      createdAt: new Date().toISOString(),
+    }, { merge: true })));
+    res.json({ courses: sampleCourses.length, resources: sampleResources.length });
   });
   api.post('/admin/courses', async (req, res) => {
     const { title, description, price } = req.body ?? {};

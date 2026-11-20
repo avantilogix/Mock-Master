@@ -48,6 +48,33 @@ export const sampleCourses = [
   },
 ];
 
+export const sampleResources = [
+  {
+    kind: 'current-affairs', id: 'sample-current-affairs',
+    title: 'Current Affairs Study Plan: November 2026',
+    summary: 'A focused revision structure for national, international, economy, science, and sports updates.',
+    body: '1. Revise the last 30 days of national and international updates.\n2. Note major economic announcements and government schemes.\n3. Make one-line facts for science, technology, awards, and sports.\n4. Attempt a weekly current-affairs quiz and review incorrect answers.',
+  },
+  {
+    kind: 'free-tests', id: 'sample-free-test',
+    title: 'Free General Aptitude Practice',
+    summary: 'A compact practice set to begin your Mission Selection journey.',
+    body: '1. What is 25% of 480? Answer: 120.\n2. Find the next number: 2, 6, 12, 20, __. Answer: 30.\n3. Choose the synonym of concise: Brief.\n4. What is the HCF of 18 and 24? Answer: 6.\n5. A train travels 120 km in 2 hours. Its speed is 60 km/h.',
+  },
+  {
+    kind: 'pyqs', id: 'sample-pyq',
+    title: 'How to revise previous-year questions',
+    summary: 'A repeatable method for turning PYQs into an accurate revision system.',
+    body: 'Group PYQs by topic. Solve them without notes. Mark time taken and confidence. Revisit incorrect topics in your study materials, then attempt a second PYQ set after 48 hours.',
+  },
+  {
+    kind: 'syllabus', id: 'sample-syllabus',
+    title: 'SSC and Banking Foundation Syllabus',
+    summary: 'Core topics for quantitative aptitude, reasoning, English, and general awareness.',
+    body: 'Quantitative Aptitude: number system, percentages, ratio, average, time and work, profit and loss, simple interest.\nReasoning: series, coding-decoding, syllogism, blood relations, seating arrangement.\nEnglish: grammar, vocabulary, reading comprehension, error spotting.\nGeneral Awareness: current affairs, Indian polity, history, geography, economy, science.',
+  },
+];
+
 export async function sampleBookPdf(title) {
   const pdf = await PDFDocument.create();
   const page = pdf.addPage([595, 842]);

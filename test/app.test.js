@@ -136,6 +136,32 @@ test('admin approval grants only the confirmed student access to their course, t
   assert.deepEqual((await (await request(testPath, 'buyer')).json()).questions,
     [{ prompt: questions[0].prompt, options: questions[0].options }]);
   assert.deepEqual(await (await request(`${testPath}/submit`, 'buyer', 'POST', { answers: [1] })).json(), { score: 1, total: 1 });
+  const progress = await (await request('/progress', 'buyer')).json();
+  assert.deepEqual(progress.summary, { attempts: 1, questions: 1, correct: 1, accuracy: 100 });
+  assert.equal(progress.attempts[0].course, id);
+  assert.equal((await request('/content/syllabus', 'buyer')).status, 200);
+  assert.equal((await request('/admin/content/syllabus', 'buyer', 'POST', {
+    title: 'Not allowed', summary: 'Denied', body: 'Denied',
+  })).status, 403);
+  const schedule = await request('/admin/timetable', 'admin', 'POST', {
+    title: 'Evening practice', day: 'Monday', startsAt: '19:00', duration: '60 minutes', description: 'Mock review',
+  });
+  assert.equal(schedule.status, 201);
+  assert.equal((await (await request('/timetable', 'buyer')).json()).length, 1);
+  const physicalBook = await request('/admin/physical-books', 'admin', 'POST', {
+    title: 'Printed Guide', description: 'Practice workbook', price: 9900, stock: 10,
+  });
+  assert.equal(physicalBook.status, 201);
+  const physicalBookId = (await physicalBook.json()).id;
+  const physicalOrder = await request('/physical-orders', 'buyer', 'POST', {
+    bookId: physicalBookId, quantity: 1, reference: 'UPI123BOOK',
+    address: { fullName: 'A Student', phone: '9000000001', line1: '1 Main Road', city: 'Mumbai', state: 'Maharashtra', pin: '400001' },
+  });
+  assert.equal(physicalOrder.status, 201);
+  assert.equal((await (await request('/physical-orders', 'buyer')).json()).length, 1);
+  assert.equal((await request(`/admin/physical-orders/${(await physicalOrder.json()).id}/status`, 'admin', 'POST', {
+    status: 'approved', note: 'Payment confirmed',
+  })).status, 204);
   assert.equal((await request(`${path}/messages`, 'buyer', 'POST', { text: 'Hello' })).status, 204);
   assert.equal((await request(`${path}/reviews`, 'buyer', 'PUT', { rating: 5, text: 'Helpful' })).status, 204);
   assert.deepEqual(await (await request(`${path}/reviews`)).json(), [{ name: 'Student', rating: 5, text: 'Helpful' }]);

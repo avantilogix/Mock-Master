@@ -5,6 +5,127 @@ const inr = new Intl.NumberFormat('en-IN', {style: 'currency', currency: 'INR'})
 export const priceText = paise => inr.format(paise / 100);
 export const owns = (me, id) => me?.purchases?.some(purchase => String(purchase) === String(id));
 
+const shortcut = (icon, title, description, href, tone = '') => el('a',
+  {class: `shortcut ${tone}`, href},
+  el('span', {class: 'shortcut-icon', 'aria-hidden': 'true'}, icon),
+  el('strong', {}, title), el('small', {}, description));
+
+function courseCard(course, index, me) {
+  const owned = owns(me, course.id);
+  const cover = el('div', {class: `card-cover alt-${index % 3}`},
+    el('span', {}, owned ? 'Your learning space' : 'Mock tests + e-books'));
+  const body = el('div', {class: 'card-body'}, owned ? el('span', {class: 'badge'}, 'Purchased') : null,
+    el('h3', {}, course.title), el('p', {class: 'description'}, course.description), el('div', {class: 'spacer'}),
+    el('div', {class: 'card-footer'}, owned ? el('span', {class: 'muted'}, 'Continue learning') : el('p', {class: 'price'}, priceText(course.price)),
+      el('a', {class: 'button', href: `#course/${idPart(course.id)}`,
+        'aria-label': `${owned ? 'Open' : 'View'} course: ${course.title}`}, owned ? 'Open course' : 'View')));
+  return el('article', {class: 'panel card'}, cover, body);
+}
+
+export function showDashboard(main, ctx, me) {
+  const name = me?.name?.trim() || 'Learner';
+  const courses = el('div', {class: 'grid'});
+  const missionCount = el('strong', {}, String(me?.purchases?.length || 0));
+  main.append(
+    el('section', {class: 'dashboard-welcome'},
+      el('div', {}, el('p', {class: 'eyebrow'}, 'Mission Selection'), el('h1', {}, `Hello, ${name}`),
+        el('p', {class: 'lead'}, 'Your next selection starts with today’s practice. Pick up where you left off.')),
+      el('div', {class: 'dashboard-score'}, el('span', {}, me ? 'Your missions' : 'Available missions'), missionCount,
+        link(me ? 'Open my courses' : 'Sign in to begin', me ? '#my-courses' : '#signin', 'button'))),
+    el('section', {class: 'section'},
+      el('div', {class: 'section-heading'}, el('h2', {}, 'Start learning'), link('View all missions', '#catalog')),
+      el('div', {class: 'shortcut-grid'},
+        shortcut('▦', 'My Courses', 'Continue purchased learning', '#my-courses', 'mint'),
+        shortcut('✓', 'Test Series', 'Practice exam questions', '#test-series', 'blue'),
+        shortcut('✦', 'Free Tests', 'Try open practice content', '#free-tests', 'mint'),
+        shortcut('▤', 'Book Store', 'Find secure study books', '#book-store', 'orange'),
+        shortcut('⌑', 'Study Materials', 'Open your saved PDFs', '#materials', 'purple'),
+        shortcut('◫', 'Current Affairs', 'Daily exam updates', '#current-affairs', 'rose'),
+        shortcut('↗', 'Progress', 'Accuracy and attempts', '#progress', 'yellow'),
+        shortcut('●', 'Notifications', 'Course and payment updates', '#notifications', 'blue'),
+        shortcut('?', 'PYQs & Syllabus', 'Plan focused revision', '#pyqs', 'mint'),
+        shortcut('▦', 'Timetable', 'Plan your study week', '#timetable', 'blue'),
+        shortcut('↗', 'Refer & Earn', 'Share your personal code', '#referrals', 'yellow'),
+        shortcut('▤', 'Physical Books', 'Order printed study books', '#physical-books', 'orange'),
+        shortcut('↓', 'Downloads', 'Save approved content', '#downloads', 'purple'),
+        shortcut('●', me ? 'Profile' : 'Sign in', me ? 'Manage your account' : 'Use your mobile number', me ? '#profile' : '#signin', 'yellow'))),
+    el('section', {class: 'section'},
+      el('div', {class: 'section-heading'}, el('h2', {}, me?.purchases?.length ? 'Continue learning' : 'Popular missions'),
+        link('Browse catalog', '#catalog')),
+      courses));
+  loadInto(courses, ctx, async () => {
+    const rows = await api('/courses', {ctx});
+    if (!me) missionCount.textContent = String(rows.length);
+    const selected = me?.purchases?.length ? rows.filter(course => owns(me, course.id)) : rows.slice(0, 3);
+    courses.replaceChildren(...(selected.length ? selected.map(courseCardWithProfile(me)) :
+      [el('p', {class: 'empty'}, me ? 'No purchased missions yet. Explore the catalog to begin.' : 'Explore available missions and sign in when you are ready.')]));
+  });
+}
+
+const courseCardWithProfile = me => (course, index) => courseCard(course, index, me);
+
+export function showMyCourses(main, ctx, me, action) {
+  main.append(...heading('My Courses', 'Continue your purchased missions, mock tests, study books, and course discussions.'));
+  if (!ctx.user) {
+    main.append(panel('Your learning library', el('p', {}, 'Sign in to restore courses purchased with your mobile number.'),
+      action.signInLink()));
+    return;
+  }
+  const list = el('div', {class: 'grid'});
+  main.append(list);
+  loadInto(list, ctx, async () => {
+    const rows = await api('/courses', {ctx});
+    const purchased = rows.filter(course => owns(me, course.id));
+    list.replaceChildren(...(purchased.length ? purchased.map(courseCardWithProfile(me)) :
+      [el('div', {class: 'empty-library'}, el('h2', {}, 'Your first mission is waiting'),
+        el('p', {class: 'muted'}, 'Purchase a course and it will appear here automatically.'),
+        link('Explore missions', '#catalog', 'button'))]));
+  });
+}
+
+export function showContentLibrary(main, ctx, me, kind, action) {
+  const config = {
+    'test-series': { title: 'Test Series', icon: '✓', description: 'Choose a purchased mission and start a published mock test.', empty: 'Tests become available after you purchase a mission.', item: 'tests' },
+    'book-store': { title: 'Book Store', icon: '▤', description: 'Browse missions that include protected digital study books.', empty: 'No digital books are currently listed.', item: 'books' },
+    'materials': { title: 'Study Materials', icon: '⌑', description: 'Open secure PDF books from your purchased missions.', empty: 'No purchased study materials yet.', item: 'books' },
+  }[kind];
+  main.append(...heading(config.title, config.description));
+  const content = el('div');
+  main.append(el('section', {class: 'library-panel'}, content));
+  if (kind === 'materials' && !ctx.user) {
+    content.replaceChildren(el('div', {class: 'empty-library'}, el('span', {class: 'shortcut-icon'}, config.icon),
+      el('h2', {}, 'Sign in to open your library'), action.signInLink('Sign in')));
+    return;
+  }
+  loadInto(content, ctx, async () => {
+    const rows = await api('/courses', {ctx});
+    const selected = kind === 'materials' ? rows.filter(course => owns(me, course.id)) : rows;
+    if (!selected.length) {
+      content.replaceChildren(el('div', {class: 'empty-library'}, el('h2', {}, config.empty),
+        link('Explore missions', '#catalog', 'button secondary')));
+      return;
+    }
+    const folders = await Promise.all(selected.map(async course => {
+      if (kind === 'book-store' || !owns(me, course.id)) {
+        return el('article', {class: 'library-folder'},
+          el('span', {class: 'folder-icon', 'aria-hidden': 'true'}, config.icon),
+          el('div', {}, el('h2', {}, course.title), el('p', {class: 'muted'}, course.description)),
+          link(owns(me, course.id) ? 'Open mission' : `View at ${priceText(course.price)}`, `#course/${idPart(course.id)}`, 'button secondary'));
+      }
+      const material = await api(`/courses/${idPart(course.id)}`, {ctx, auth: true});
+      return el('article', {class: 'library-folder'},
+        el('span', {class: 'folder-icon', 'aria-hidden': 'true'}, config.icon),
+        el('div', {class: 'library-folder-content'},
+          el('h2', {}, course.title),
+          entries(material[config.item], config.empty, item => el('a',
+            {class: 'material-link', href: config.item === 'tests' ?
+              `#test/${idPart(course.id)}/${idPart(item.id)}` : `#book/${idPart(course.id)}/${idPart(item.id)}`},
+            item.title, config.item === 'books' ? el('span', {class: 'muted'}, `${item.pages} protected pages`) : null))));
+    }));
+    content.replaceChildren(...folders);
+  });
+}
+
 export function showCatalog(main, ctx, me) {
   const list = el('div', {class: 'grid'});
   main.append(el('section', {class: 'hero'},
@@ -28,17 +149,8 @@ export function showCatalog(main, ctx, me) {
       el('article', {class: 'feature'}, el('span', {class: 'feature-icon', 'aria-hidden': 'true'}, '↗'), el('div', {}, el('h3', {}, 'Simple UPI payment'), el('p', {}, 'Pay with any UPI app, submit the reference, and unlock after admin approval.'))))));
   loadInto(list, ctx, async () => {
     const courses = await api('/courses', {ctx});
-    list.replaceChildren(...(courses.length ? courses.map((course, index) => {
-      const owned = owns(me, course.id);
-      const cover = el('div', {class: `card-cover alt-${index % 3}`},
-        el('span', {}, owned ? 'Your learning space' : 'Mock tests + e-books'));
-      const body = el('div', {class: 'card-body'}, owned ? el('span', {class: 'badge'}, 'Purchased') : null,
-        el('h3', {}, course.title), el('p', {class: 'description'}, course.description), el('div', {class: 'spacer'}),
-        el('div', {class: 'card-footer'}, owned ? el('span', {class: 'muted'}, 'Continue learning') : el('p', {class: 'price'}, priceText(course.price)),
-          el('a', {class: 'button', href: `#course/${idPart(course.id)}`,
-            'aria-label': `${owned ? 'Open' : 'View'} course: ${course.title}`}, owned ? 'Open course' : 'View')));
-      return el('article', {class: 'panel card'}, cover, body);
-    }) : [el('p', {class: 'empty'}, 'No courses are available yet. Check back soon for new study material.')]));
+    list.replaceChildren(...(courses.length ? courses.map(courseCardWithProfile(me)) :
+      [el('p', {class: 'empty'}, 'No courses are available yet. Check back soon for new study material.')]));
   });
 }
 
