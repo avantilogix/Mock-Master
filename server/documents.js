@@ -78,6 +78,8 @@ export async function pageCount(pdf) {
   }
 }
 
+const MAX_PAGE_PIXELS = 3_000_000;
+
 export async function renderPage(pdf, page, phone) {
   if (!mobile.test(phone)) fail(403, 'A verified Indian mobile number is required.');
   let loading;
@@ -87,7 +89,8 @@ export async function renderPage(pdf, page, phone) {
     const document = await loading.promise;
     const pdfPage = await document.getPage(page);
     const source = pdfPage.getViewport({ scale: 1 });
-    const scale = Math.min(2, 1400 / source.width);
+    // Keep the rendered page within the watermark pixel budget (an A4 page at 2x exceeds 2 MP).
+    const scale = Math.min(2, 1400 / source.width, Math.sqrt(MAX_PAGE_PIXELS / (source.width * source.height)));
     const viewport = pdfPage.getViewport({ scale });
     const canvas = createCanvas(Math.ceil(viewport.width), Math.ceil(viewport.height));
     try {
@@ -128,7 +131,7 @@ export async function renderPage(pdf, page, phone) {
   } finally {
     await loading?.destroy();
   }
-  const image = sharp(png, { limitInputPixels: 2_000_000 });
+  const image = sharp(png, { limitInputPixels: MAX_PAGE_PIXELS + 100_000 });
   const { width, height } = await image.metadata();
   const labels = [];
   for (let y = 55; y < height + 140; y += 145) {

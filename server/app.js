@@ -1,5 +1,9 @@
-import { createHash, randomUUID } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { closeSync, createWriteStream, mkdirSync, openSync, readFileSync, readSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { Transform } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { rateLimit } from 'express-rate-limit';
@@ -12,7 +16,20 @@ function text(value, label, max) {
   return value.trim();
 }
 
-export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, adminUids = [], trustLocalProxy = false }) {
+const MAX_VIDEO_BYTES = 300 * 1024 * 1024;
+const VIDEO_LINK_SECONDS = 2 * 60 * 60;
+const videoTypes = { 'video/mp4': 'mp4', 'video/webm': 'webm', 'video/quicktime': 'mov' };
+
+function looksLikeVideo(path, type) {
+  const header = Buffer.alloc(12);
+  const fd = openSync(path, 'r');
+  try { readSync(fd, header, 0, 12, 0); } finally { closeSync(fd); }
+  if (type === 'video/webm') return header.readUInt32BE(0) === 0x1a45dfa3;
+  return ['ftyp', 'moov', 'mdat', 'wide', 'free'].includes(header.toString('latin1', 4, 8));
+}
+
+export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, adminUids = [], trustLocalProxy = false,
+  videoDir = join(tmpdir(), 'mock-master-videos'), dummyLogin = false }) {
   const app = express();
   if (trustLocalProxy) app.set('trust proxy', 'loopback');
   app.disable('x-powered-by');
@@ -40,7 +57,21 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
   const one = (sql, ...args) => db.prepare(sql).get(...args);
   const all = (sql, ...args) => db.prepare(sql).all(...args);
   const run = (sql, ...args) => db.prepare(sql).run(...args);
+  function transaction(work) {
+    db.exec('BEGIN');
+    try {
+      const result = work();
+      db.exec('COMMIT');
+      return result;
+    } catch (error) {
+      db.exec('ROLLBACK');
+      throw error;
+    }
+  }
   const admins = new Set(adminUids);
+  const linkSecret = randomBytes(32);
+  const videoSignature = (id, uid, expires) => createHmac('sha256', linkSecret).update(`${id}|${uid}|${expires}`).digest('base64url');
+  const videoPath = id => resolve(videoDir, id.replace(/[^A-Za-z0-9-]/g, ''));
   let documentJobs = 0;
   async function processDocument(operation) {
     if (documentJobs >= 4) fail(503, 'Document processing is busy. Please retry.');
@@ -95,12 +126,13 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
       configured: (method !== 'qr' && details.configured) || (method !== 'upi' && Boolean(setting?.qr)),
     };
   };
-  api.get('/config', (_req, res) => res.json({ firebase, payment: runtimePayment() }));
+  api.get('/config', (_req, res) => res.json({ firebase, payment: runtimePayment(), personalTimetable: true,
+    ...(dummyLogin ? { dummyLogin: true } : {}) }));
   api.get('/social', (_req, res) => {
     const rows = all('SELECT key, value FROM settings WHERE key IN (?, ?, ?)', 'youtube', 'instagram', 'telegram');
     res.json(Object.fromEntries(rows.map(row => [row.key, row.value])));
   });
-  api.get('/courses', (_req, res) => res.json(all('SELECT * FROM courses ORDER BY rowid DESC')));
+  api.get('/courses', (_req, res) => res.json(all('SELECT id, title, description, price FROM courses ORDER BY rowid DESC')));
   api.get('/courses/:id/payment-qr', async (req, res) => {
     const row = course(req.params.id);
     const payment = runtimePayment();
@@ -134,6 +166,21 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
   api.get('/videos', (_req, res) => res.json(all(`SELECT v.id, v.title, v.description, v.video_id AS videoId,
     v.created_at AS createdAt, c.title AS courseTitle FROM videos v LEFT JOIN courses c ON c.id=v.course
     ORDER BY v.created_at DESC`)));
+  // <video> and download links cannot send an Authorization header, so they use a short-lived signed link.
+  api.get('/videos/:id/file', (req, res) => {
+    const { uid, expires, signature } = req.query;
+    if (![uid, expires, signature].every(value => typeof value === 'string' && value)) fail(403, 'This video link is invalid.');
+    const expected = Buffer.from(videoSignature(req.params.id, uid, expires));
+    const given = Buffer.from(signature);
+    if (given.length !== expected.length || !timingSafeEqual(given, expected)) fail(403, 'This video link is invalid.');
+    if (!(Number(expires) > Date.now() / 1000)) fail(403, 'This video link has expired. Open the video again.');
+    const video = one('SELECT * FROM chapter_videos WHERE id=?', req.params.id);
+    if (!video) fail(404, 'Video not found.');
+    if (one('SELECT 1 FROM students WHERE uid=? AND disabled', uid)) fail(403, 'This account is disabled. Contact support to request reactivation.');
+    if (!admins.has(uid) && !owns(uid, video.course)) fail(403, 'Purchase this course to unlock it.');
+    if (req.query.download === '1') res.attachment(`${video.title.replace(/[^\w .-]+/g, '_')}.${videoTypes[video.type] || 'mp4'}`);
+    res.sendFile(videoPath(video.id), { headers: { 'Content-Type': video.type } });
+  });
   api.use(authLimit, login);
   api.get('/me', (req, res) => {
     const { uid, phone, admin } = req.user;
@@ -201,6 +248,7 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     res.json({
       tests: all('SELECT id, title FROM tests WHERE course=? ORDER BY rowid', id),
       books: all('SELECT id, title, pages, subject, chapter FROM books WHERE course=? ORDER BY subject, chapter, rowid', id),
+      videos: all('SELECT id, title, subject, chapter, type, size FROM chapter_videos WHERE course=? ORDER BY subject, chapter, rowid', id),
       messages: all(`SELECT COALESCE(NULLIF(s.name, ''), 'Student') AS name, m.text
         FROM messages m JOIN students s USING (uid) WHERE m.course=? ORDER BY m.id DESC LIMIT 100`, id).reverse(),
     });
@@ -362,6 +410,62 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     const png = await processDocument(() => renderPage(Buffer.from(book.pdf), page, req.user.phone));
     res.attachment(`${book.title}-page-${page}.png`).type('png').send(png);
   });
+  api.get('/videos/:id/link', (req, res) => {
+    const video = one('SELECT id, course, title, type FROM chapter_videos WHERE id=?', req.params.id);
+    if (!video) fail(404, 'Video not found.');
+    requirePurchase(req, video.course);
+    const expires = String(Math.floor(Date.now() / 1000) + VIDEO_LINK_SECONDS);
+    const query = new URLSearchParams({ uid: req.user.uid, expires, signature: videoSignature(video.id, req.user.uid, expires) });
+    res.json({ url: `/api/videos/${encodeURIComponent(video.id)}/file?${query}`, title: video.title, type: video.type });
+  });
+
+  const weekDays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+  function scheduleInput(body) {
+    const day = body?.day;
+    if (!weekDays.includes(day)) fail(422, 'Choose a day of the week.');
+    const startsAt = body?.startsAt;
+    if (typeof startsAt !== 'string' || !/^([01]\d|2[0-3]):[0-5]\d$/.test(startsAt)) fail(422, 'Enter a valid start time.');
+    const duration = body?.duration;
+    if (!Number.isInteger(duration) || duration < 5 || duration > 720) fail(422, 'Duration must be 5 to 720 minutes.');
+    const description = body?.description ?? '';
+    if (typeof description !== 'string' || description.length > 1000) fail(422, 'Notes can be at most 1000 characters.');
+    return { title: text(body?.title, 'Session title', 120), day, startsAt, duration, description: description.trim() };
+  }
+  const mySchedule = (req, id) => {
+    const row = one('SELECT id FROM student_schedules WHERE id=? AND uid=?', id, req.user.uid);
+    if (!row) fail(404, 'Timetable session not found.');
+    return row;
+  };
+  api.get('/timetable/mine', (req, res) => {
+    const rows = all(`SELECT id, title, day, starts_at AS startsAt, duration, description, created_at AS createdAt,
+      updated_at AS updatedAt FROM student_schedules WHERE uid=?`, req.user.uid);
+    rows.sort((a, b) => weekDays.indexOf(a.day) - weekDays.indexOf(b.day) || a.startsAt.localeCompare(b.startsAt));
+    res.json(rows);
+  });
+  api.post('/timetable/mine', (req, res) => {
+    const entry = scheduleInput(req.body);
+    if (one('SELECT COUNT(*) AS total FROM student_schedules WHERE uid=?', req.user.uid).total >= 100) {
+      fail(422, 'Your timetable can hold at most 100 sessions. Delete an old session first.');
+    }
+    const id = randomUUID();
+    const now = new Date().toISOString();
+    run('INSERT INTO student_schedules VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', id, req.user.uid, entry.title, entry.day,
+      entry.startsAt, entry.duration, entry.description, now, now);
+    res.status(201).json({ id });
+  });
+  api.put('/timetable/mine/:id', (req, res) => {
+    const { id } = mySchedule(req, req.params.id);
+    const entry = scheduleInput(req.body);
+    run(`UPDATE student_schedules SET title=?, day=?, starts_at=?, duration=?, description=?, updated_at=?
+      WHERE id=? AND uid=?`, entry.title, entry.day, entry.startsAt, entry.duration, entry.description,
+    new Date().toISOString(), id, req.user.uid);
+    res.sendStatus(204);
+  });
+  api.delete('/timetable/mine/:id', (req, res) => {
+    const { id } = mySchedule(req, req.params.id);
+    run('DELETE FROM student_schedules WHERE id=? AND uid=?', id, req.user.uid);
+    res.sendStatus(204);
+  });
 
   api.use('/admin', admin);
   api.post('/admin/videos', (req, res) => {
@@ -469,14 +573,16 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     const { title, description, price } = req.body ?? {};
     if (!Number.isInteger(price) || price < 100 || price > 10_000_000) fail(422, 'Price must be ₹1–₹100,000, in whole paise.');
     const id = randomUUID();
-    run('INSERT INTO courses VALUES (?, ?, ?, ?)', id, text(title, 'Title', 120), text(description, 'Description', 2000), price);
+    run('INSERT INTO courses (id, title, description, price, created_at) VALUES (?, ?, ?, ?, ?)', id, text(title, 'Title', 120),
+      text(description, 'Description', 2000), price, new Date().toISOString());
     res.status(201).json({ id });
   });
   api.post('/admin/courses/:id/tests', (req, res) => {
     const { id: courseId } = course(req.params.id);
     const id = randomUUID();
     const { title, questions } = req.body ?? {};
-    run('INSERT INTO tests VALUES (?, ?, ?, ?)', id, courseId, text(title, 'Title', 120), JSON.stringify(validateQuestions(questions)));
+    run('INSERT INTO tests (id, course, title, questions, created_at) VALUES (?, ?, ?, ?, ?)', id, courseId,
+      text(title, 'Title', 120), JSON.stringify(validateQuestions(questions)), new Date().toISOString());
     res.status(201).json({ id });
   });
   api.post('/admin/import', raw, async (req, res) => {
@@ -490,9 +596,41 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     const pages = await processDocument(() => pageCount(req.body));
     const subject = text(req.query.subject || 'General', 'Subject', 100);
     const chapter = text(req.query.chapter || 'Chapter 1', 'Chapter', 120);
-    run('INSERT INTO books (id, course, title, pages, pdf, subject, chapter) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      id, courseId, title, pages, req.body, subject, chapter);
+    run('INSERT INTO books (id, course, title, pages, pdf, subject, chapter, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      id, courseId, title, pages, req.body, subject, chapter, new Date().toISOString());
     res.status(201).json({ id, pages });
+  });
+  api.post('/admin/courses/:id/videos/upload', (req, res) => {
+    course(req.params.id);
+    res.json({ direct: true });
+  });
+  api.post('/admin/courses/:id/videos', async (req, res) => {
+    const { id: courseId } = course(req.params.id);
+    const title = text(req.query.title, 'Title', 120);
+    const subject = text(req.query.subject || 'General', 'Subject', 100);
+    const chapter = text(req.query.chapter || 'Chapter 1', 'Chapter', 120);
+    const type = (req.get('Content-Type') || '').split(';')[0].trim().toLowerCase();
+    if (!videoTypes[type]) fail(415, 'Upload an MP4, WebM, or MOV video.');
+    if (Number(req.get('Content-Length')) > MAX_VIDEO_BYTES) fail(413, 'Videos can be at most 300 MB.');
+    const id = randomUUID();
+    const path = videoPath(id);
+    mkdirSync(videoDir, { recursive: true, mode: 0o700 });
+    let size = 0;
+    try {
+      await pipeline(req, new Transform({
+        transform(chunk, _encoding, done) {
+          size += chunk.length;
+          done(size > MAX_VIDEO_BYTES ? Object.assign(new Error('Videos can be at most 300 MB.'), { status: 413 }) : null, chunk);
+        },
+      }), createWriteStream(path, { mode: 0o600 }));
+      if (!size || !looksLikeVideo(path, type)) fail(422, 'The file is not a valid MP4, WebM, or MOV video.');
+      run('INSERT INTO chapter_videos VALUES (?, ?, ?, ?, ?, ?, ?, ?)', id, courseId, title, subject, chapter, type, size,
+        new Date().toISOString());
+    } catch (error) {
+      rmSync(path, { force: true });
+      throw error;
+    }
+    res.status(201).json({ id, size });
   });
   api.get('/admin/payments', (req, res) => {
     res.json(all(`SELECT o.id, o.amount, o.transaction_ref AS reference, o.payment_note AS note,
@@ -522,6 +660,143 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     run(`UPDATE orders SET payment_status='rejected', credits_used=0, reviewed_at=?, reviewed_by=?, review_note=?
       WHERE id=? AND payment_status='pending'`, new Date().toISOString(), req.user.uid, reviewNote, order.id);
     res.sendStatus(204);
+  });
+  const priceInput = value => {
+    if (!Number.isInteger(value) || value < 100 || value > 10_000_000) fail(422, 'Price must be ₹1–₹1,00,000.');
+    return value;
+  };
+  api.get('/admin/published', (_req, res) => {
+    const tests = all(`SELECT t.id, t.course, c.title AS courseTitle, t.title, t.questions, t.created_at AS createdAt,
+      (SELECT COUNT(*) FROM attempts a WHERE a.test=t.id) AS attempts
+      FROM tests t JOIN courses c ON c.id=t.course ORDER BY t.created_at DESC, t.rowid DESC`)
+      .map(test => ({ ...test, questions: JSON.parse(test.questions) }));
+    res.json({
+      courses: all(`SELECT c.id, c.title, c.description, c.price, c.created_at AS createdAt,
+        (SELECT COUNT(*) FROM orders o WHERE o.course=c.id) AS enrollments,
+        (SELECT COUNT(*) FROM tests t WHERE t.course=c.id) AS tests,
+        (SELECT COUNT(*) FROM books b WHERE b.course=c.id) + (SELECT COUNT(*) FROM chapter_videos v WHERE v.course=c.id) AS materials,
+        (SELECT COUNT(*) FROM videos v WHERE v.course=c.id) AS linkedVideos
+        FROM courses c ORDER BY c.created_at DESC, c.rowid DESC`),
+      tests,
+      books: all(`SELECT b.id, b.course, c.title AS courseTitle, b.title, b.pages, b.subject, b.chapter, b.created_at AS createdAt
+        FROM books b JOIN courses c ON c.id=b.course ORDER BY b.created_at DESC, b.rowid DESC`),
+      chapterVideos: all(`SELECT v.id, v.course, c.title AS courseTitle, v.title, v.subject, v.chapter, v.size,
+        v.created_at AS createdAt FROM chapter_videos v JOIN courses c ON c.id=v.course ORDER BY v.created_at DESC`),
+      videos: all(`SELECT v.id, v.title, v.description, v.video_id AS videoId, v.course, c.title AS courseTitle,
+        v.created_at AS createdAt FROM videos v LEFT JOIN courses c ON c.id=v.course ORDER BY v.created_at DESC`),
+      resources: all(`SELECT id, kind, title, summary, body, created_at AS createdAt, published_at AS publishedAt
+        FROM resources ORDER BY created_at DESC`),
+      physicalBooks: all(`SELECT b.id, b.title, b.description, b.price, b.stock, b.active, b.created_at AS createdAt,
+        (SELECT COUNT(*) FROM physical_orders o WHERE o.book=b.id) AS orders FROM physical_books b ORDER BY b.created_at DESC`),
+      schedules: all(`SELECT id, title, day, starts_at AS startsAt, duration, description, created_at AS createdAt
+        FROM schedules ORDER BY created_at DESC`),
+    });
+  });
+  const found = (table, id, label) => {
+    const row = one(`SELECT * FROM ${table} WHERE id=?`, id);
+    if (!row) fail(404, `${label} not found.`);
+    return row;
+  };
+  const editors = {
+    courses(id, body) {
+      found('courses', id, 'Course');
+      run('UPDATE courses SET title=?, description=?, price=? WHERE id=?', text(body.title, 'Title', 120),
+        text(body.description, 'Description', 2000), priceInput(body.price), id);
+    },
+    tests(id, body) {
+      found('tests', id, 'Test');
+      run('UPDATE tests SET title=?, questions=? WHERE id=?', text(body.title, 'Title', 120),
+        JSON.stringify(validateQuestions(body.questions)), id);
+    },
+    books(id, body) {
+      found('books', id, 'Study book');
+      run('UPDATE books SET title=?, subject=?, chapter=? WHERE id=?', text(body.title, 'Title', 120),
+        text(body.subject, 'Subject', 100), text(body.chapter, 'Chapter', 120), id);
+    },
+    chapterVideos(id, body) {
+      found('chapter_videos', id, 'Chapter video');
+      run('UPDATE chapter_videos SET title=?, subject=?, chapter=? WHERE id=?', text(body.title, 'Title', 120),
+        text(body.subject, 'Subject', 100), text(body.chapter, 'Chapter', 120), id);
+    },
+    videos(id, body) {
+      found('videos', id, 'Video');
+      const selected = typeof body.course === 'string' ? body.course : '';
+      if (selected) course(selected);
+      run('UPDATE videos SET title=?, description=?, course=? WHERE id=?', text(body.title, 'Video title', 120),
+        text(body.description, 'Description', 1000), selected, id);
+    },
+    resources(id, body) {
+      found('resources', id, 'Resource');
+      if (typeof body.publishedAt !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(body.publishedAt) ||
+          Number.isNaN(Date.parse(body.publishedAt))) fail(422, 'Enter a valid publish date.');
+      run('UPDATE resources SET title=?, summary=?, body=?, published_at=? WHERE id=?', text(body.title, 'Title', 120),
+        text(body.summary, 'Summary', 300), text(body.body, 'Content', 10_000), body.publishedAt, id);
+    },
+    physicalBooks(id, body) {
+      found('physical_books', id, 'Physical book');
+      const { stock } = body;
+      if (!Number.isInteger(stock) || stock < 0 || stock > 10000) fail(422, 'Stock must be a whole number from 0 to 10,000.');
+      if (typeof body.active !== 'boolean') fail(422, 'Choose whether the book is visible in the store.');
+      run('UPDATE physical_books SET title=?, description=?, price=?, stock=?, active=? WHERE id=?', text(body.title, 'Title', 120),
+        text(body.description, 'Description', 2000), priceInput(body.price), stock, body.active ? 1 : 0, id);
+    },
+    schedules(id, body) {
+      found('schedules', id, 'Timetable session');
+      run('UPDATE schedules SET title=?, day=?, starts_at=?, duration=?, description=? WHERE id=?', text(body.title, 'Title', 120),
+        text(body.day, 'Day', 20), text(body.startsAt, 'Start time', 20), text(body.duration, 'Duration', 30),
+        text(body.description, 'Description', 1000), id);
+    },
+  };
+  const removers = {
+    courses(id) {
+      found('courses', id, 'Course');
+      if (one('SELECT 1 FROM orders WHERE course=?', id)) {
+        fail(409, 'Students have purchased or requested this course, so it cannot be deleted. Edit it instead.');
+      }
+      const files = all('SELECT id FROM chapter_videos WHERE course=?', id);
+      transaction(() => {
+        for (const table of ['attempts', 'messages', 'reviews', 'tests', 'books', 'chapter_videos']) {
+          run(`DELETE FROM ${table} WHERE course=?`, id);
+        }
+        run("UPDATE videos SET course='' WHERE course=?", id);
+        run('DELETE FROM courses WHERE id=?', id);
+      });
+      for (const file of files) rmSync(videoPath(file.id), { force: true });
+    },
+    tests(id) {
+      found('tests', id, 'Test');
+      transaction(() => {
+        run('DELETE FROM attempts WHERE test=?', id);
+        run('DELETE FROM tests WHERE id=?', id);
+      });
+    },
+    books: id => { found('books', id, 'Study book'); run('DELETE FROM books WHERE id=?', id); },
+    chapterVideos(id) {
+      found('chapter_videos', id, 'Chapter video');
+      run('DELETE FROM chapter_videos WHERE id=?', id);
+      rmSync(videoPath(id), { force: true });
+    },
+    videos: id => { found('videos', id, 'Video'); run('DELETE FROM videos WHERE id=?', id); },
+    resources: id => { found('resources', id, 'Resource'); run('DELETE FROM resources WHERE id=?', id); },
+    schedules: id => { found('schedules', id, 'Timetable session'); run('DELETE FROM schedules WHERE id=?', id); },
+    physicalBooks(id) {
+      found('physical_books', id, 'Physical book');
+      // Orders reference the book, so it is hidden from the store instead of being removed.
+      if (one('SELECT 1 FROM physical_orders WHERE book=?', id)) {
+        run('UPDATE physical_books SET active=0 WHERE id=?', id);
+        return { archived: true };
+      }
+      run('DELETE FROM physical_books WHERE id=?', id);
+    },
+  };
+  const managedType = type => Object.hasOwn(editors, type) ? type : fail(404, 'Content type not found.');
+  api.put('/admin/published/:type/:id', (req, res) => {
+    editors[managedType(req.params.type)](req.params.id, req.body ?? {});
+    res.sendStatus(204);
+  });
+  api.delete('/admin/published/:type/:id', (req, res) => {
+    const result = removers[managedType(req.params.type)](req.params.id);
+    res.json({ deleted: !result?.archived, archived: Boolean(result?.archived) });
   });
   api.get('/admin/support', (_req, res) => res.json(all(`SELECT s.phone, t.text FROM tickets t
     JOIN students s USING (uid) ORDER BY t.id DESC LIMIT 100`)));

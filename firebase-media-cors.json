@@ -1,0 +1,8 @@
+[
+  {
+    "origin": ["https://mission-selection-ba819.web.app"],
+    "method": ["PUT"],
+    "responseHeader": ["Content-Type", "Content-Length", "Cache-Control", "X-Goog-If-Generation-Match", "X-Goog-Meta-Upload-Id"],
+    "maxAgeSeconds": 3600
+  }
+]

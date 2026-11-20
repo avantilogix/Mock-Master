@@ -1,8 +1,43 @@
 import {api} from './services.js';
+import {publishedManager, weekdays} from './admin-manage.js?v=expiry-covers-1';
 import {adminContentForm} from './reports.js';
-import {bindForm, button, el, entries, field, heading, idPart, loadInto, panel, run, say, status, textValue} from './ui.js';
+import {coverPicker} from './publishing-media.js';
+import {bindForm, button, el, entries, field, fieldError, heading, idPart, loadInto, panel, rule, run, say, status, textValue} from './ui.js';
 
 const pdfAccept = '.pdf,application/pdf';
+const videoAccept = '.mp4,.m4v,.webm,.mov,video/mp4,video/webm,video/quicktime';
+const maxVideoBytes = 300 * 1024 * 1024;
+const videoTypes = {mp4: 'video/mp4', m4v: 'video/mp4', webm: 'video/webm', mov: 'video/quicktime'};
+const videoType = file => file && (Object.values(videoTypes).includes(file.type) ? file.type :
+  videoTypes[file.name.split('.').pop().toLowerCase()]);
+
+function youtubeId(input) {
+  try {
+    const url = new URL(input);
+    const id = url.hostname === 'youtu.be' ? url.pathname.slice(1).split('/')[0] :
+      url.hostname.endsWith('youtube.com') ? url.searchParams.get('v') || url.pathname.split('/').filter(Boolean).at(-1) : '';
+    return /^[A-Za-z0-9_-]{11}$/.test(id || '') ? id : '';
+  } catch {
+    return '';
+  }
+}
+
+const httpsLink = control => rule(control, value =>
+  !value || /^https:\/\/[^/\s]+/i.test(value) ? '' : 'Enter a secure link starting with https://');
+
+// Admins enter rupees; the API stores whole paise (₹1–₹1,00,000).
+const PRICE_HINT = 'Enter the amount in rupees, for example 500 for ₹500. Allowed: ₹1 to ₹1,00,000.';
+const rupeeInput = () => {
+  const control = el('input', {type: 'number', step: 'any', required: '', inputmode: 'decimal',
+    placeholder: '500', 'data-label': 'Price'});
+  rule(control, value => {
+    const amount = Number(value);
+    if (!Number.isFinite(amount) || amount < 1 || amount > 100000) return 'Enter a price from ₹1 to ₹1,00,000.';
+    return Math.abs(amount * 100 - Math.round(amount * 100)) > 1e-6 ? 'Price can have at most 2 decimal places, for example 499.50.' : '';
+  });
+  return control;
+};
+const toPaise = control => Math.round(control.valueAsNumber * 100);
 
 function questionData(source) {
   let data;
@@ -20,26 +55,32 @@ function questionData(source) {
 }
 
 export function showAdmin(main, ctx) {
-  main.append(...heading('Admin workspace', 'Approve course payments, publish learning material, and support students from your phone.'));
+  main.append(...heading('Admin Workspace', 'Approve course payments, publish learning material, and support students from your phone.'));
   const get = path => api(path, {ctx, auth: true});
-  const post = (path, body) => api(path, {ctx, auth: true, method: 'POST', ...body});
+  let manager;
+  const publishes = /^\/admin\/(videos|physical-books|content\/|courses|seed-samples|timetable)/;
+  const post = async (path, body) => {
+    const result = await api(path, {ctx, auth: true, method: 'POST', ...body});
+    if (publishes.test(path) && !path.endsWith('/videos/upload')) manager?.reload();
+    return result;
+  };
   const payments = el('div');
-  const paymentRefresh = button('Refresh requests', 'secondary');
-  const samples = button('Load sample missions', 'secondary');
+  const paymentRefresh = button('Refresh Requests', 'secondary');
+  const samples = button('Load Sample Missions', 'secondary');
   const sampleStatus = status();
   const content = el('div');
-  const timetable = el('div');
   const physicalBooks = el('div');
   const physicalOrders = el('div');
   const students = el('div');
   const videoCoursePlaceholder = el('select', {required: ''});
   const videoTitle = el('input', {required: '', maxlength: '120'});
   const videoDescription = el('textarea', {rows: '3', required: '', maxlength: '1000'});
-  const videoUrl = el('input', {type: 'url', required: '', placeholder: 'https://youtu.be/…'});
-  const publishVideo = button('Publish video', null, 'submit');
+  const videoUrl = rule(el('input', {type: 'url', required: '', placeholder: 'https://youtu.be/…'}), value =>
+    youtubeId(value) ? '' : 'Enter a YouTube video link, for example https://youtu.be/VIDEO_ID.');
+  const publishVideo = button('Publish Video', null, 'submit');
   const videoFeedback = status();
   const videoForm = el('form', {}, field('Course', videoCoursePlaceholder),
-    field('Video title', videoTitle), field('Description', videoDescription),
+    field('Video Title', videoTitle), field('Description', videoDescription),
     field('YouTube URL', videoUrl), publishVideo, videoFeedback);
   bindForm(videoForm, publishVideo, videoFeedback, async () => {
     await post('/admin/videos', {json: {
@@ -49,18 +90,24 @@ export function showAdmin(main, ctx) {
     videoForm.reset();
     say(videoFeedback, 'Video published in the YouTube library.');
   }, 'Publishing video…');
-  const payeeName = el('input', {maxlength: '100', placeholder: 'Mission Selection'});
-  const upiId = el('input', {maxlength: '120', placeholder: 'missionselection@upi'});
+  const payeeName = el('input', {required: '', maxlength: '100', placeholder: 'Mission Selection'});
+  const upiId = el('input', {maxlength: '120', autocomplete: 'off', placeholder: 'missionselection@upi'});
   const paymentMethod = el('select', {required: ''},
     el('option', {value: 'upi'}, 'UPI ID only'), el('option', {value: 'qr'}, 'QR code only'),
     el('option', {value: 'both'}, 'UPI ID and QR code'));
-  const paymentQr = el('input', {type: 'file', accept: 'image/png,image/jpeg,image/webp'});
-  const savePayment = button('Save payment options', null, 'submit');
-  const uploadQr = button('Upload QR image', 'secondary');
+  rule(upiId, value => {
+    if (!value) return paymentMethod.value === 'qr' ? '' : 'UPI ID is required when UPI checkout is enabled.';
+    return /^[A-Za-z0-9._-]{2,80}@[A-Za-z0-9.-]{2,40}$/.test(value) ? '' : 'Enter a valid UPI ID, for example name@bank.';
+  });
+  paymentMethod.addEventListener('change', () => upiId.dispatchEvent(new Event('change')));
+  const paymentQr = rule(el('input', {type: 'file', accept: 'image/png,image/jpeg,image/webp'}), (_, control) =>
+    !control.files[0] || /^image\/(png|jpeg|webp)$/i.test(control.files[0].type) ? '' : 'Choose a PNG, JPEG, or WebP image.');
+  const savePayment = button('Save Payment Options', null, 'submit');
+  const uploadQr = button('Upload QR Image', 'secondary');
   const paymentFeedback = status();
-  const paymentForm = el('form', {}, field('Payment method shown to students', paymentMethod),
-    field('UPI payee name', payeeName), field('UPI ID', upiId),
-    field('QR image (optional unless QR is enabled)', paymentQr),
+  const paymentForm = el('form', {}, field('Payment Method Shown to Students', paymentMethod),
+    field('UPI Payee Name', payeeName), field('UPI ID', upiId),
+    field('QR Image (optional unless QR is enabled)', paymentQr),
     el('div', {class: 'actions'}, uploadQr, savePayment), paymentFeedback);
   savePayment.type = 'submit';
   api('/admin/payment-settings', {ctx, auth: true}).then(values => {
@@ -70,7 +117,11 @@ export function showAdmin(main, ctx) {
   }).catch(error => { if (ctx.current()) say(paymentFeedback, error.message, true); });
   uploadQr.addEventListener('click', async () => {
     const file = paymentQr.files[0];
-    if (!file) return say(paymentFeedback, 'Choose a QR image first.', true);
+    if (!file) {
+      fieldError(paymentQr, 'Choose a QR image to upload.');
+      return paymentQr.focus();
+    }
+    if (!fieldError(paymentQr, paymentQr.validate('', paymentQr))) return paymentQr.focus();
     run(uploadQr, paymentFeedback, async () => {
       await api('/admin/payment-qr', {ctx, auth: true, method: 'POST', binary: file,
         imageUpload: file.type});
@@ -83,10 +134,10 @@ export function showAdmin(main, ctx) {
     }});
     say(paymentFeedback, 'Student checkout payment options updated.');
   }, 'Saving payment options…');
-  const youtube = el('input', {type: 'url', placeholder: 'https://youtube.com/@yourchannel'});
-  const instagram = el('input', {type: 'url', placeholder: 'https://instagram.com/yourpage'});
-  const telegram = el('input', {type: 'url', placeholder: 'https://t.me/yourcommunity'});
-  const socialSave = button('Save social links', null, 'submit');
+  const youtube = httpsLink(el('input', {type: 'url', placeholder: 'https://youtube.com/@yourchannel'}));
+  const instagram = httpsLink(el('input', {type: 'url', placeholder: 'https://instagram.com/yourpage'}));
+  const telegram = httpsLink(el('input', {type: 'url', placeholder: 'https://t.me/yourcommunity'}));
+  const socialSave = button('Save Social Links', null, 'submit');
   const socialFeedback = status();
   const socialForm = el('form', {}, field('YouTube URL', youtube), field('Instagram URL', instagram),
     field('Telegram URL', telegram), socialSave, socialFeedback);
@@ -114,7 +165,7 @@ export function showAdmin(main, ctx) {
   function setCourses(list) {
     for (const select of courseSelects) {
       const selected = select.value;
-      select.replaceChildren(el('option', {value: ''}, list.length ? 'Choose a course' : 'No courses available'),
+      select.replaceChildren(el('option', {value: ''}, list.length ? 'Choose a Course' : 'No Courses Available'),
         ...list.map(course => el('option', {value: course.id}, course.title)));
       if (list.some(course => String(course.id) === selected)) select.value = selected;
     }
@@ -127,7 +178,7 @@ export function showAdmin(main, ctx) {
   const loadPayments = () => loadInto(payments, ctx, async () => {
     const requests = await get('/admin/payments');
     payments.replaceChildren(...(requests.length ? requests.map(request => {
-      const approve = button('Approve and unlock');
+      const approve = button('Approve and Unlock');
       const reject = button('Reject', 'danger secondary');
       const rejection = el('textarea', {rows: '2', maxlength: '500', placeholder: 'Reason for rejection'});
       const feedback = status();
@@ -139,7 +190,11 @@ export function showAdmin(main, ctx) {
         setTimeout(loadPayments, 500);
       }, 'Approving…'));
       reject.addEventListener('click', () => run(reject, feedback, async () => {
-        if (!rejection.value.trim()) throw new Error('Enter a rejection reason.');
+        if (!rejection.value.trim()) {
+          fieldError(rejection, 'Enter a rejection reason before rejecting this request.');
+          rejection.focus();
+          throw new Error('Enter a rejection reason.');
+        }
         await post(`/admin/payments/${idPart(request.id)}/reject`, {json: {note: rejection.value.trim()}});
         say(feedback, 'Request rejected. The student can resubmit payment proof.');
         setTimeout(loadPayments, 500);
@@ -149,11 +204,11 @@ export function showAdmin(main, ctx) {
           el('p', {class: 'muted'}, request.phone)), el('span', {class: `request-state ${request.status}`}, request.status)),
         el('h3', {}, request.course), el('p', {class: 'price'}, new Intl.NumberFormat('en-IN',
           {style: 'currency', currency: 'INR'}).format(request.amount / 100)),
-        el('dl', {class: 'payment-summary'}, el('dt', {}, 'UPI reference'), el('dd', {}, request.reference),
+        el('dl', {class: 'payment-summary'}, el('dt', {}, 'UPI Reference'), el('dd', {}, request.reference),
           el('dt', {}, 'Submitted'), el('dd', {}, request.submittedAt ? new Date(request.submittedAt).toLocaleString('en-IN') : 'Unavailable')),
         request.note ? el('p', {class: 'muted'}, request.note) : null,
         request.reviewNote ? el('p', {class: 'rejection'}, request.reviewNote) : null,
-        request.status === 'pending' ? field('Rejection reason (only if needed)', rejection) : null,
+        request.status === 'pending' ? field('Rejection Reason (only if needed)', rejection) : null,
         el('div', {class: 'actions'}, approve, reject), feedback);
     }) : [el('p', {class: 'empty'}, 'No payment requests yet.')]));
   });
@@ -164,42 +219,16 @@ export function showAdmin(main, ctx) {
     say(sampleStatus, `${result.courses} sample missions are available in the catalog.`);
   }, 'Loading sample missions…'));
 
-  const day = el('select', {required: ''}, ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
-    .map(value => el('option', {value}, value)));
-  const scheduleTitle = el('input', {required: '', maxlength: '120'});
-  const start = el('input', {type: 'time', required: ''});
-  const duration = el('input', {required: '', maxlength: '30', placeholder: '60 minutes'});
-  const scheduleDescription = el('textarea', {rows: '3', required: '', maxlength: '1000'});
-  const scheduleSubmit = button('Publish schedule', null, 'submit');
-  const scheduleFeedback = status();
-  const scheduleForm = el('form', {}, field('Day', day), field('Session title', scheduleTitle),
-    field('Start time', start), field('Duration', duration), field('Description', scheduleDescription),
-    scheduleSubmit, scheduleFeedback);
-  const loadTimetable = () => loadInto(timetable, ctx, async () => {
-    const rows = await get('/admin/timetable');
-    timetable.replaceChildren(entries(rows, 'No timetable sessions published.', item => [
-      el('strong', {}, `${item.day || ''} · ${item.starts_at || item.startsAt}`),
-      el('p', {}, item.title), el('p', {class: 'muted'}, `${item.duration} — ${item.description}`),
-    ]));
-  });
-  bindForm(scheduleForm, scheduleSubmit, scheduleFeedback, async () => {
-    await post('/admin/timetable', {json: {
-      day: day.value, title: textValue(scheduleTitle, 'Session title'), startsAt: start.value,
-      duration: textValue(duration, 'Duration'), description: textValue(scheduleDescription, 'Description'),
-    }});
-    scheduleForm.reset();
-    say(scheduleFeedback, 'Timetable session published.');
-    loadTimetable();
-  }, 'Publishing schedule…');
-
   const physicalTitle = el('input', {required: '', maxlength: '120'});
   const physicalDescription = el('textarea', {rows: '3', required: '', maxlength: '2000'});
-  const physicalPrice = el('input', {type: 'number', min: '100', max: '10000000', step: '1', required: ''});
+  const physicalPrice = rupeeInput();
   const stock = el('input', {type: 'number', min: '0', max: '10000', step: '1', required: ''});
-  const physicalSubmit = button('Publish physical book', null, 'submit');
+  const physicalCovers = ctx.publishingMedia ? coverPicker(ctx) : null;
+  const physicalSubmit = button('Publish Physical Book', null, 'submit');
   const physicalFeedback = status();
-  const physicalForm = el('form', {}, field('Book title', physicalTitle),
-    field('Description', physicalDescription), field('Price in paise', physicalPrice), field('Stock', stock),
+  const physicalForm = el('form', {}, field('Book Title', physicalTitle),
+    field('Description', physicalDescription), field('Price (₹)', physicalPrice, PRICE_HINT),
+    field('Stock', stock), physicalCovers?.node,
     physicalSubmit, physicalFeedback);
   const loadPhysicalBooks = () => loadInto(physicalBooks, ctx, async () => {
     const rows = await get('/admin/physical-books');
@@ -209,11 +238,13 @@ export function showAdmin(main, ctx) {
     ]));
   });
   bindForm(physicalForm, physicalSubmit, physicalFeedback, async () => {
+    const images = await physicalCovers?.upload();
     await post('/admin/physical-books', {json: {
       title: textValue(physicalTitle, 'Book title'), description: textValue(physicalDescription, 'Description'),
-      price: physicalPrice.valueAsNumber, stock: stock.valueAsNumber,
+      price: toPaise(physicalPrice), stock: stock.valueAsNumber, images,
     }});
     physicalForm.reset();
+    physicalCovers?.clear();
     say(physicalFeedback, 'Physical book published.');
     loadPhysicalBooks();
   }, 'Publishing book…');
@@ -227,7 +258,7 @@ export function showAdmin(main, ctx) {
       note.value = order.review_note || order.reviewNote || '';
       const feedback = status();
       const controls = el('div', {class: 'actions'});
-      for (const [nextStatus, label] of [['approved', 'Approve payment'], ['shipped', 'Mark shipped'], ['delivered', 'Delivered'], ['cancelled', 'Cancel']]) {
+      for (const [nextStatus, label] of [['approved', 'Approve Payment'], ['shipped', 'Mark Shipped'], ['delivered', 'Delivered'], ['cancelled', 'Cancel']]) {
         const action = button(label, nextStatus === 'cancelled' ? 'danger secondary' : 'secondary');
         action.disabled = order.status === nextStatus;
         action.addEventListener('click', () => run(action, feedback, async () => {
@@ -244,14 +275,31 @@ export function showAdmin(main, ctx) {
           el('p', {class: 'muted'}, order.phone || order.accountPhone)), el('span', {class: `request-state ${order.status}`}, order.status)),
         el('h3', {}, order.bookTitle), el('p', {}, `${order.quantity} copies · ₹${(order.amount / 100).toFixed(2)}`),
         el('p', {class: 'entry-text'}, order.address), el('p', {class: 'muted'}, `UPI reference: ${order.transaction_ref || order.transactionRef}`),
-        field('Tracking', tracking), field('Order note', note), controls, feedback);
+        field('Tracking Reference', tracking), field('Order Note', note), controls, feedback);
     }) : [el('p', {class: 'empty'}, 'No physical book orders yet.')]));
   });
+
+  const day = el('select', {required: ''}, weekdays.map(value => el('option', {value}, value)));
+  const scheduleTitle = el('input', {required: '', maxlength: '120'});
+  const start = el('input', {type: 'time', required: ''});
+  const duration = el('input', {required: '', maxlength: '30', placeholder: '60 minutes'});
+  const scheduleDescription = el('textarea', {rows: '3', required: '', maxlength: '1000'});
+  const scheduleSubmit = button('Publish Schedule', null, 'submit');
+  const scheduleFeedback = status();
+  const scheduleForm = el('form', {}, field('Day', day), field('Session Title', scheduleTitle),
+    field('Start Time', start), field('Duration', duration), field('Description', scheduleDescription),
+    scheduleSubmit, scheduleFeedback);
+  bindForm(scheduleForm, scheduleSubmit, scheduleFeedback, async () => {
+    await post('/admin/timetable', {json: {day: day.value, title: textValue(scheduleTitle, 'Session title'),
+      startsAt: start.value, duration: textValue(duration, 'Duration'), description: textValue(scheduleDescription, 'Description')}});
+    scheduleForm.reset();
+    say(scheduleFeedback, 'Timetable session published.');
+  }, 'Publishing schedule…');
   const loadStudents = () => loadInto(students, ctx, async () => {
     const rows = await get('/admin/students');
     students.replaceChildren(...(rows.length ? rows.map(student => {
       const disabled = Boolean(student.disabled);
-      const action = button(disabled ? 'Reactivate account' : 'Disable account',
+      const action = button(disabled ? 'Reactivate Account' : 'Disable Account',
         disabled ? 'secondary' : 'danger secondary');
       const feedback = status();
       action.addEventListener('click', () => run(action, feedback, async () => {
@@ -268,19 +316,21 @@ export function showAdmin(main, ctx) {
 
   const title = el('input', {required: '', maxlength: '120'});
   const description = el('textarea', {rows: '3', required: '', maxlength: '2000'});
-  const price = el('input', {type: 'number', min: '100', max: '10000000', step: '1', required: '', inputmode: 'numeric'});
-  const create = button('Create live course', null, 'submit');
+  const price = rupeeInput();
+  const expiresOn = el('input', {type: 'date', required: ''});
+  const covers = ctx.publishingMedia ? coverPicker(ctx) : null;
+  const create = button('Create Live Course', null, 'submit');
   const courseStatus = status();
-  const createForm = el('form', {}, field('Course title', title), field('Description', description),
-    field('Price in paise', price, 'Enter 100 to 10000000 paise. For example, enter 49900 for ₹499.'),
+  const createForm = el('form', {}, field('Course Title', title), field('Description', description),
+    field('Price (₹)', price, PRICE_HINT), covers?.node,
+    covers ? field('Course Expiry Date', expiresOn, 'Purchases and study access end at midnight India time after this date.') : null,
     create, courseStatus);
   bindForm(createForm, create, courseStatus, async () => {
-    if (!Number.isInteger(price.valueAsNumber) || price.valueAsNumber < 100 || price.valueAsNumber > 10000000) {
-      throw new Error('Enter a whole number between 100 and 10000000 paise.');
-    }
+    const images = await covers?.upload();
     await post('/admin/courses', {json: {title: textValue(title, 'Title'), description: textValue(description, 'Description'),
-      price: price.valueAsNumber}});
+      price: toPaise(price), expiresOn: covers ? expiresOn.value : undefined, images}});
     createForm.reset();
+    covers?.clear();
     try {
       await refresh();
       say(courseStatus, 'Course created and available in the catalog.');
@@ -294,32 +344,36 @@ export function showAdmin(main, ctx) {
     await refresh();
     content.replaceChildren();
   });
-  main.append(panel('Payment approvals',
+  manager = publishedManager({ctx, rupeeInput, toPaise, questionData, priceHint: PRICE_HINT, courses: () => courseList,
+    onChange: type => { if (type === 'courses') refresh().catch(() => {}); }});
+  main.append(panel('Payment Approvals',
     el('p', {class: 'muted'}, 'Verify each UPI transaction in the receiving account before unlocking a student course.'),
     paymentRefresh, el('div', {class: 'payment-requests'}, payments)),
-  panel('Quick start', el('p', {class: 'muted'},
+  panel('Quick Start', el('p', {class: 'muted'},
     'Add or refresh three ready-made missions with mock tests and protected starter books.'), samples, sampleStatus),
-  panel('Create a course', createForm), content);
+  panel('Create a Course', createForm), content,
+  panel('Manage Published Content', el('p', {class: 'muted'},
+    'See everything you have published with its date. Edit details or delete items students should no longer see.'), manager.node));
   loadPayments();
-  main.append(panel('Payment information', el('p', {class: 'muted'},
+  main.append(panel('Payment Information', el('p', {class: 'muted'},
     'Choose what students see at checkout. UPI and QR payment proofs still require admin approval.'), paymentForm),
-    panel('Student timetable', scheduleForm, timetable),
-    panel('Physical books', physicalForm, physicalBooks),
-    panel('Physical book orders', physicalOrders),
-    panel('Student accounts', students),
-    panel('Social media links', socialForm),
+    panel('Student Timetable', scheduleForm),
+    panel('Physical Books', physicalForm, physicalBooks),
+    panel('Physical Book Orders', physicalOrders),
+    panel('Student Accounts', students),
+    panel('Social Media Links', socialForm),
     panel('YouTube Videos', videoForm));
-  loadTimetable();
   loadPhysicalBooks();
   loadPhysicalOrders();
   loadStudents();
 
   const example = JSON.stringify([{prompt: 'What is 2 + 2?', options: ['3', '4'], answer: 1}], null, 2);
   const editor = el('textarea', {class: 'json', rows: '12', required: '', spellcheck: 'false', placeholder: example});
-  const importFile = el('input', {type: 'file', accept: '.pdf,.docx,.txt', required: ''});
-  const importButton = button('Import questions', 'secondary', 'submit');
+  const importFile = rule(el('input', {type: 'file', accept: '.pdf,.docx,.txt', required: ''}), (_, control) =>
+    /\.(pdf|docx|txt)$/i.test(control.files[0]?.name || '') ? '' : 'Choose a PDF, DOCX, or TXT file.');
+  const importButton = button('Import Questions', 'secondary', 'submit');
   const importStatus = status();
-  const importForm = el('form', {}, field('Question file', importFile, 'PDF, DOCX, or TXT. Importing replaces the JSON draft below.'),
+  const importForm = el('form', {}, field('Question File', importFile, 'PDF, DOCX, or TXT. Importing replaces the JSON draft below.'),
     importButton, importStatus);
   bindForm(importForm, importButton, importStatus, async () => {
     const file = importFile.files[0];
@@ -335,9 +389,12 @@ export function showAdmin(main, ctx) {
 
   const [testCourse, testField] = courseField();
   const testTitle = el('input', {required: '', maxlength: '120'});
-  const publish = button('Publish test', null, 'submit');
+  rule(editor, value => {
+    try { questionData(value); return ''; } catch (error) { return error.message; }
+  });
+  const publish = button('Publish Test', null, 'submit');
   const testStatus = status();
-  const testForm = el('form', {}, testField, field('Test title', testTitle),
+  const testForm = el('form', {}, testField, field('Test Title', testTitle),
     field('Questions (JSON)', editor, 'Enter an array of objects with prompt, options, and answer. The first option is answer 0.'),
     publish, testStatus);
   bindForm(testForm, publish, testStatus, async () => {
@@ -346,38 +403,159 @@ export function showAdmin(main, ctx) {
     testForm.reset();
     say(testStatus, 'Test published.');
   }, 'Publishing test…');
-  main.append(panel('Publish a test', el('h3', {}, 'Import questions (optional)'), importForm,
-    el('div', {class: 'section'}, el('h3', {}, 'Review, edit, and publish'), testForm)));
+  main.append(panel('Publish a Test', el('h3', {}, 'Import Questions (optional)'), importForm,
+    el('div', {class: 'section'}, el('h3', {}, 'Review, Edit, and Publish'), testForm)));
 
   const [bookCourse, bookField] = courseField();
+  const contentType = el('select', {required: ''},
+    el('option', {value: 'pdf'}, 'PDF Study Book'), el('option', {value: 'video'}, 'Chapter Video'));
   const bookTitle = el('input', {required: '', maxlength: '120'});
-  const subject = el('input', {required: '', maxlength: '100', value: 'General'});
-  const chapter = el('input', {required: '', maxlength: '120', placeholder: 'Chapter 1: Introduction'});
-  const pdf = el('input', {type: 'file', accept: pdfAccept, required: ''});
-  const upload = button('Upload book', null, 'submit');
+  const subjectSelect = el('select', {required: '', disabled: ''});
+  const chapterSelect = el('select', {required: '', disabled: ''});
+  const subject = el('input', {required: '', maxlength: '100', placeholder: 'e.g. Mathematics'});
+  const chapter = el('input', {required: '', maxlength: '120', placeholder: 'e.g. Chapter 4: Fractions'});
+  const newSubject = field('New Subject Name', subject);
+  const newChapter = field('New Chapter Name', chapter);
+  newSubject.hidden = newChapter.hidden = true;
+  const placementFeedback = status();
+  const retryPlacement = button('Retry Loading Chapters', 'secondary');
+  retryPlacement.hidden = true;
+  const isVideo = () => contentType.value === 'video';
+  const pdf = rule(el('input', {type: 'file', accept: pdfAccept, required: ''}), (_, control) => {
+    const file = control.files[0];
+    if (!isVideo()) return /\.pdf$/i.test(file?.name || '') ? '' : 'Choose a PDF file.';
+    if (!videoType(file)) return 'Choose an MP4, WebM, or MOV video.';
+    return file.size < 12 || file.size > maxVideoBytes ? 'Choose a non-empty video up to 300 MB.' : '';
+  });
+  const upload = button('Upload Book', null, 'submit');
   const bookStatus = status();
-  const bookForm = el('form', {}, bookField, field('Subject', subject),
-    field('Chapter', chapter), field('Book title / chapter file', bookTitle), field('PDF file', pdf), upload, bookStatus);
+  const fileField = field('PDF File', pdf, 'PDF files are converted into protected, watermarked pages.');
+  const fileHint = fileField.querySelector(`#${pdf.id}-hint`);
+  const bookCovers = ctx.publishingMedia ? coverPicker(ctx) : null;
+  contentType.addEventListener('change', () => {
+    pdf.value = '';
+    pdf.accept = isVideo() ? videoAccept : pdfAccept;
+    pdf.dataset.label = isVideo() ? 'Video File' : 'PDF File';
+    fileField.querySelector('label').textContent = pdf.dataset.label;
+    fileHint.textContent = isVideo() ? 'MP4, WebM, or MOV, up to 300 MB. It will appear under the chosen chapter.' :
+      'PDF files are converted into protected, watermarked pages.';
+    upload.textContent = isVideo() ? 'Upload Video' : 'Upload Book';
+    if (bookCovers) {
+      bookCovers.node.hidden = isVideo();
+      bookCovers.file.disabled = isVideo();
+    }
+    fieldError(pdf, '');
+  });
+  const addNew = '__add-new__';
+  let items = [];
+  let placementRequest = 0;
+  function choose(select, label, entries, current = '') {
+    const values = [...new Set(entries)].sort((a, b) => a.localeCompare(b, undefined, {numeric: true}));
+    select.replaceChildren(el('option', {value: ''}, `Choose ${label}`),
+      ...values.map(value => el('option', {value: `existing:${value}`}, value)),
+      el('option', {value: addNew}, `+ Add ${label}`));
+    select.value = values.includes(current) ? `existing:${current}` : values.length ? '' : addNew;
+  }
+  const chosen = (select, input) => select.value === addNew ? input.value.trim() : select.value.slice('existing:'.length);
+  const renderChapters = (current = '') => {
+    newSubject.hidden = subjectSelect.disabled || subjectSelect.value !== addNew;
+    chapterSelect.disabled = subjectSelect.disabled || !subjectSelect.value;
+    choose(chapterSelect, 'a chapter', items.filter(item => item.subject === chosen(subjectSelect, subject)).map(item => item.chapter), current);
+    newChapter.hidden = chapterSelect.disabled || chapterSelect.value !== addNew;
+  };
+  const loadPlacement = async (keep = {}) => {
+    const courseId = bookCourse.value;
+    const request = ++placementRequest;
+    subjectSelect.disabled = true;
+    upload.disabled = true;
+    retryPlacement.hidden = true;
+    items = [];
+    choose(subjectSelect, 'a subject', []);
+    renderChapters();
+    say(placementFeedback, courseId ? 'Loading subjects and chapters…' : '');
+    if (!courseId) return;
+    try {
+      const {books = [], videos = []} = await get(`/courses/${idPart(courseId)}`);
+      if (request !== placementRequest) return;
+      items = [...books, ...videos];
+      subjectSelect.disabled = false;
+      choose(subjectSelect, 'a subject', items.map(item => item.subject), keep.subject);
+      renderChapters(keep.chapter);
+      upload.disabled = false;
+      say(placementFeedback, '');
+    } catch (error) {
+      if (request !== placementRequest || error.name === 'AbortError') return;
+      say(placementFeedback, error.message, true);
+      retryPlacement.hidden = false;
+    }
+  };
+  upload.disabled = true;
+  bookCourse.addEventListener('change', () => { subject.value = chapter.value = ''; loadPlacement(); });
+  retryPlacement.addEventListener('click', () => loadPlacement());
+  subjectSelect.addEventListener('change', () => { chapter.value = ''; renderChapters(); });
+  chapterSelect.addEventListener('change', () => { newChapter.hidden = chapterSelect.value !== addNew; });
+  const uploadFields = el('fieldset', {class: 'upload-fields'}, bookField,
+    field('Subject', subjectSelect), newSubject,
+    field('Chapter', chapterSelect, 'Select an existing chapter to add more files to it.'), newChapter,
+    placementFeedback, retryPlacement, field('Content Type', contentType), field('Title', bookTitle), fileField, bookCovers?.node);
+  const bookForm = el('form', {}, uploadFields, upload, bookStatus);
   bindForm(bookForm, upload, bookStatus, async () => {
     const file = pdf.files[0];
-    if (!file || !/\.pdf$/i.test(file.name)) throw new Error('Choose a PDF file.');
-    const query = new URLSearchParams({
-      title: textValue(bookTitle, 'Book title'),
-      subject: textValue(subject, 'Subject'),
-      chapter: textValue(chapter, 'Chapter'),
-    });
-    await post(`/admin/courses/${idPart(bookCourse.value)}/books?${query}`, {binary: file});
-    bookForm.reset();
-    say(bookStatus, 'Book uploaded.');
-  }, 'Uploading book…');
+    const placement = {
+      title: textValue(bookTitle, 'Title'),
+      subject: chosen(subjectSelect, subject),
+      chapter: chosen(chapterSelect, chapter),
+    };
+    const query = new URLSearchParams(placement);
+    const courseId = idPart(bookCourse.value);
+    const video = isVideo();
+    uploadFields.disabled = true;
+    try {
+      if (video) {
+        const type = videoType(file);
+        const {id, url, headers, direct} = await post(`/admin/courses/${courseId}/videos/upload`,
+          {json: {...placement, type, size: file.size}});
+        if (direct) {
+          await post(`/admin/courses/${courseId}/videos?${query}`, {binary: file, imageUpload: type});
+        } else {
+          const response = await fetch(url, {method: 'PUT', headers: {...headers, 'Content-Type': type},
+            body: file, signal: ctx.signal, credentials: 'omit', redirect: 'error'});
+          if (!response.ok) throw new Error(`The video could not be uploaded (${response.status}). Please try again.`);
+          say(bookStatus, 'Publishing video…');
+          await post(`/admin/courses/${courseId}/videos/${idPart(id)}/publish`, {json: {}});
+        }
+      } else {
+        const images = await bookCovers?.upload();
+        if (images) query.set('images', images.join(','));
+        await post(`/admin/courses/${courseId}/books?${query}`, {binary: file});
+      }
+      bookTitle.value = pdf.value = '';
+      bookCovers?.clear();
+      await loadPlacement(placement);
+      say(bookStatus, `${video ? 'Video' : 'PDF'} published to ${placement.subject} › ${placement.chapter}.`);
+    } finally {
+      uploadFields.disabled = false;
+    }
+  }, 'Uploading…');
   setCourses(courseList);
-  main.append(panel('Upload a study book', bookForm),
-    panel('Publish learning resources', adminContentForm(post, () => refresh())),
-    panel('Support inbox', inbox));
+  main.append(panel('Upload a Study Book or Video', bookForm),
+    panel('Publish Learning Resources', adminContentForm(post, () => refresh())),
+    panel('Support Inbox', inbox));
   loadInto(inbox, ctx, async () => {
     const messages = await get('/admin/support');
     inbox.replaceChildren(entries(messages, 'No support requests have arrived yet.', item => [
       el('strong', {}, item.phone), el('p', {class: 'entry-text'}, item.text)
     ]));
   });
+  const jump = el('nav', {class: 'admin-jump', 'aria-label': 'Jump to an admin section'},
+    [...main.querySelectorAll(':scope > section.panel > h2')].map(title => {
+      const chip = button(title.textContent, 'chip');
+      chip.addEventListener('click', () => {
+        title.tabIndex = -1;
+        title.closest('section').scrollIntoView({behavior: 'smooth', block: 'start'});
+        title.focus({preventScroll: true});
+      });
+      return chip;
+    }));
+  main.querySelector(':scope > .lead')?.after(jump);
 }

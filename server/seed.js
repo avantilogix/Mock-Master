@@ -90,14 +90,15 @@ export function seedCatalog(databasePath) {
   try {
     db.exec('BEGIN');
     try {
+      const now = new Date().toISOString();
       for (const course of courses) {
-        db.prepare(`INSERT INTO courses (id, title, description, price) VALUES (?, ?, ?, ?)
+        db.prepare(`INSERT INTO courses (id, title, description, price, created_at) VALUES (?, ?, ?, ?, ?)
           ON CONFLICT (id) DO UPDATE SET title=excluded.title, description=excluded.description, price=excluded.price`)
-          .run(course.id, course.title, course.description, course.price);
-        db.prepare(`INSERT INTO tests (id, course, title, questions) VALUES (?, ?, ?, ?)
+          .run(course.id, course.title, course.description, course.price, now);
+        db.prepare(`INSERT INTO tests (id, course, title, questions, created_at) VALUES (?, ?, ?, ?, ?)
           ON CONFLICT (id) DO UPDATE SET title=excluded.title, questions=excluded.questions`)
-          .run(`${course.id}-test-01`, course.id, course.test, JSON.stringify(course.questions));
-        db.prepare(`INSERT INTO books (id, course, title, pages, pdf, subject, chapter) VALUES (?, ?, ?, ?, ?, ?, ?)
+          .run(`${course.id}-test-01`, course.id, course.test, JSON.stringify(course.questions), now);
+        db.prepare(`INSERT INTO books (id, course, title, pages, pdf, subject, chapter, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT (id) DO UPDATE SET title=excluded.title, pages=excluded.pages, pdf=excluded.pdf,
             subject=excluded.subject, chapter=excluded.chapter`)
           .run(`${course.id}-book-01`, course.id, course.book, 1, pdf([
@@ -110,9 +111,8 @@ export function seedCatalog(databasePath) {
             'Study consistently, review mistakes, and track progress.',
             '',
             'This page is protected with your verified mobile number.',
-          ]), 'Foundation', 'Chapter 1: Getting Started');
+          ]), 'Foundation', 'Chapter 1: Getting Started', now);
       }
-      const now = new Date().toISOString();
       for (const [kind, id, title, summary, body] of resources) {
         db.prepare(`INSERT INTO resources VALUES (?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT (id) DO UPDATE SET title=excluded.title, summary=excluded.summary, body=excluded.body`)

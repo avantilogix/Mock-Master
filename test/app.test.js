@@ -15,12 +15,12 @@ const has = command => {
   try { execFileSync('which', [command]); return true; } catch { return false; }
 };
 
-function fixturePdf() {
+function fixturePdf(mediaBox = '0 0 612 792') {
   const contents = `BT /F1 14 Tf 40 700 Td 20 TL ${source.split('\n').map(line => `(${line}) Tj T*`).join('\n')} ET\n`;
   const objects = [
     '<< /Type /Catalog /Pages 2 0 R >>',
     '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
-    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>',
+    `<< /Type /Page /Parent 2 0 R /MediaBox [${mediaBox}] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>`,
     '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
     `<< /Length ${contents.length} >>\nstream\n${contents}endstream`,
   ];
@@ -65,6 +65,13 @@ test('counts and securely renders PDF books without OS tools', async () => {
   const [first, second] = await Promise.all([renderPage(pdf, 1, '+919000000001'), renderPage(pdf, 1, '+919000000002')]);
   assert.equal(first.subarray(1, 4).toString(), 'PNG');
   assert.notDeepEqual(first, second);
+});
+
+test('renders A4 and tall PDF pages within the watermark pixel limit', async () => {
+  for (const mediaBox of ['0 0 595 842', '0 0 600 3000']) {
+    const png = await renderPage(fixturePdf(mediaBox), 1, '+919000000001');
+    assert.equal(png.subarray(1, 4).toString(), 'PNG');
+  }
 });
 
 test('admin approval grants only the confirmed student access to their course, test and discussion', async t => {
@@ -194,4 +201,128 @@ test('admin approval grants only the confirmed student access to their course, t
     assert.equal(page.headers.get('content-type'), 'image/png');
     assert.equal(Buffer.from(await page.arrayBuffer()).subarray(1, 4).toString(), 'PNG');
   }
+});
+
+test('chapter videos upload for admins and stream only through signed links for buyers', async t => {
+  const db = openDatabase(':memory:');
+  const videoDir = mkdtempSync(join(tmpdir(), 'mock-master-video-test-'));
+  const users = new Map([
+    ['buyer', { uid: 'buyer', phone: '+919000000001' }],
+    ['other', { uid: 'other', phone: '+919000000002' }],
+    ['admin', { uid: 'admin', phone: '+919000000003' }],
+  ]);
+  const server = createApp({ db, verifyToken: async token => users.get(token), adminUids: ['admin'], videoDir })
+    .listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  t.after(() => new Promise(resolve => server.close(() => { db.close(); rmSync(videoDir, { recursive: true, force: true }); resolve(); })));
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  const request = (path, user, method = 'GET', body, type) => fetch(`${origin}/api${path}`, {
+    method,
+    headers: { ...(user ? { Authorization: `Bearer ${user}` } : {}), ...(type ? { 'Content-Type': type } : {}) },
+    body,
+  });
+  const created = await request('/admin/courses', 'admin', 'POST',
+    JSON.stringify({ title: 'Maths', description: 'Practice', price: 14900 }), 'application/json');
+  const { id } = await created.json();
+  const mp4 = Buffer.concat([Buffer.from([0, 0, 0, 24]), Buffer.from('ftypisom'), Buffer.alloc(64, 1)]);
+  const uploadPath = `/admin/courses/${id}/videos?title=Algebra%20Lesson&subject=Maths&chapter=Chapter%204`;
+
+  assert.equal((await request(uploadPath, 'buyer', 'POST', mp4, 'video/mp4')).status, 403);
+  assert.equal((await request(uploadPath, 'admin', 'POST', mp4, 'application/pdf')).status, 415);
+  assert.equal((await request(uploadPath, 'admin', 'POST', Buffer.from('not a video at all'), 'video/mp4')).status, 422);
+  const upload = await request(uploadPath, 'admin', 'POST', mp4, 'video/mp4');
+  assert.equal(upload.status, 201);
+  const { id: videoId } = await upload.json();
+
+  const material = await (await request(`/courses/${id}`, 'admin')).json();
+  assert.deepEqual(material.videos, [{ id: videoId, title: 'Algebra Lesson', subject: 'Maths', chapter: 'Chapter 4',
+    type: 'video/mp4', size: mp4.length }]);
+  assert.equal((await request(`/videos/${videoId}/link`, 'buyer')).status, 403);
+
+  for (const uid of ['buyer', 'other']) db.prepare('INSERT OR IGNORE INTO students (uid, phone) VALUES (?, ?)').run(uid, users.get(uid).phone);
+  db.prepare('INSERT INTO orders (id, uid, course, amount, payment) VALUES (?, ?, ?, ?, ?)').run('order-1', 'buyer', id, 14900, 'pay-1');
+  const linked = await request(`/videos/${videoId}/link`, 'buyer');
+  assert.equal(linked.status, 200);
+  const { url } = await linked.json();
+  const file = await fetch(origin + url);
+  assert.equal(file.status, 200);
+  assert.equal(file.headers.get('content-type'), 'video/mp4');
+  assert.deepEqual(Buffer.from(await file.arrayBuffer()), mp4);
+  const download = await fetch(`${origin}${url}&download=1`);
+  assert.match(download.headers.get('content-disposition'), /attachment; filename="Algebra Lesson\.mp4"/);
+  assert.equal((await fetch(origin + url, { headers: { Range: 'bytes=0-3' } })).status, 206);
+
+  assert.equal((await fetch(origin + url.replace(/signature=[^&]+/, 'signature=forged'))).status, 403);
+  assert.equal((await fetch(origin + url.replace('uid=buyer', 'uid=other'))).status, 403);
+  const expired = new URL(origin + url);
+  expired.searchParams.set('expires', '1');
+  assert.equal((await fetch(expired)).status, 403);
+});
+function jsonServer(t, users) {
+  const db = openDatabase(':memory:');
+  const server = createApp({ db, verifyToken: async token => users.get(token), adminUids: ['admin'] }).listen(0, '127.0.0.1');
+  t.after(() => new Promise(resolve => server.close(() => { db.close(); resolve(); })));
+  const request = async (path, user, method = 'GET', body) => {
+    const response = await fetch(`http://127.0.0.1:${server.address().port}/api${path}`, {
+      method,
+      headers: { Authorization: `Bearer ${user}`, ...(body ? { 'Content-Type': 'application/json' } : {}) },
+      body: body && JSON.stringify(body),
+    });
+    return { status: response.status, body: response.status === 204 ? null : await response.json() };
+  };
+  return { db, server, request };
+}
+
+test('students manage a personal timetable that other students cannot see or change', async t => {
+  const users = new Map([['asha', { uid: 'asha', phone: '+919000000011' }], ['ravi', { uid: 'ravi', phone: '+919000000012' }]]);
+  const { server, request } = jsonServer(t, users);
+  await once(server, 'listening');
+  const session = { day: 'Tuesday', title: 'Polity Revision', startsAt: '07:30', duration: 60, description: 'Chapter 4' };
+
+  assert.equal((await request('/timetable/mine', 'asha', 'POST', { ...session, startsAt: '25:00' })).status, 422);
+  assert.equal((await request('/timetable/mine', 'asha', 'POST', { ...session, day: 'Someday' })).status, 422);
+  assert.equal((await request('/timetable/mine', 'asha', 'POST', { ...session, duration: 2 })).status, 422);
+  const { status, body: { id } } = await request('/timetable/mine', 'asha', 'POST', session);
+  assert.equal(status, 201);
+  await request('/timetable/mine', 'asha', 'POST', { ...session, day: 'Monday', title: 'Maths' });
+
+  const mine = (await request('/timetable/mine', 'asha')).body;
+  assert.deepEqual(mine.map(item => item.title), ['Maths', 'Polity Revision']);
+  assert.deepEqual((await request('/timetable/mine', 'ravi')).body, []);
+  assert.equal((await request(`/timetable/mine/${id}`, 'ravi', 'PUT', session)).status, 404);
+  assert.equal((await request(`/timetable/mine/${id}`, 'ravi', 'DELETE')).status, 404);
+
+  assert.equal((await request(`/timetable/mine/${id}`, 'asha', 'PUT', { ...session, title: 'Polity Mock Test' })).status, 204);
+  assert.equal((await request(`/timetable/mine/${id}`, 'asha', 'DELETE')).status, 204);
+  assert.deepEqual((await request('/timetable/mine', 'asha')).body.map(item => item.title), ['Maths']);
+});
+
+test('admins list published content with dates, edit it, and delete it safely', async t => {
+  const users = new Map([['admin', { uid: 'admin', phone: '+919000000021' }], ['student', { uid: 'student', phone: '+919000000022' }]]);
+  const { db, server, request } = jsonServer(t, users);
+  await once(server, 'listening');
+  const course = { title: 'Reasoning', description: 'Daily practice', price: 50000 };
+  const { body: { id } } = await request('/admin/courses', 'admin', 'POST', course);
+  const questions = [{ prompt: '2 + 2?', options: ['3', '4'], answer: 1 }];
+  const { body: { id: testId } } = await request(`/admin/courses/${id}/tests`, 'admin', 'POST', { title: 'Mock 1', questions });
+
+  assert.equal((await request('/admin/published', 'student')).status, 403);
+  const listed = (await request('/admin/published', 'admin')).body;
+  assert.equal(listed.courses[0].title, 'Reasoning');
+  assert.ok(!Number.isNaN(Date.parse(listed.courses[0].createdAt)));
+  assert.equal(listed.tests[0].courseTitle, 'Reasoning');
+  assert.deepEqual(listed.tests[0].questions, questions);
+
+  assert.equal((await request(`/admin/published/courses/${id}`, 'admin', 'PUT', { ...course, price: 50 })).status, 422);
+  assert.equal((await request(`/admin/published/courses/${id}`, 'student', 'PUT', course)).status, 403);
+  assert.equal((await request(`/admin/published/courses/${id}`, 'admin', 'PUT', { ...course, title: 'Reasoning Pro' })).status, 204);
+  assert.equal((await request(`/admin/published/tests/${testId}`, 'admin', 'PUT', { title: 'Mock 1', questions: [] })).status, 422);
+  assert.equal((await request('/admin/published/unknown/x', 'admin', 'DELETE')).status, 404);
+
+  db.prepare('INSERT INTO orders (id, uid, course, amount) VALUES (?, ?, ?, ?)').run('order-1', 'admin', id, 50000);
+  assert.equal((await request(`/admin/published/courses/${id}`, 'admin', 'DELETE')).status, 409);
+  db.prepare('DELETE FROM orders').run();
+  assert.equal((await request(`/admin/published/courses/${id}`, 'admin', 'DELETE')).status, 200);
+  const after = (await request('/admin/published', 'admin')).body;
+  assert.deepEqual([after.courses.length, after.tests.length], [0, 0]);
 });

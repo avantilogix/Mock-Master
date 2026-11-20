@@ -73,7 +73,23 @@ export function openDatabase(path) {
       id TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT NOT NULL,
       video_id TEXT NOT NULL, course TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL
     ) STRICT;
+    CREATE TABLE IF NOT EXISTS chapter_videos (
+      id TEXT PRIMARY KEY, course TEXT NOT NULL REFERENCES courses, title TEXT NOT NULL,
+      subject TEXT NOT NULL, chapter TEXT NOT NULL, type TEXT NOT NULL, size INTEGER NOT NULL,
+      created_at TEXT NOT NULL
+    ) STRICT;
+    CREATE TABLE IF NOT EXISTS student_schedules (
+      id TEXT PRIMARY KEY, uid TEXT NOT NULL REFERENCES students, title TEXT NOT NULL, day TEXT NOT NULL,
+      starts_at TEXT NOT NULL, duration INTEGER NOT NULL, description TEXT NOT NULL,
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    ) STRICT;
+    CREATE INDEX IF NOT EXISTS student_schedules_uid ON student_schedules (uid);
   `);
+  // Rows created before this column existed keep '' and are shown as "Date not recorded".
+  for (const table of ['courses', 'tests', 'books']) {
+    const columns = new Set(db.prepare(`PRAGMA table_info(${table})`).all().map(column => column.name));
+    if (!columns.has('created_at')) db.exec(`ALTER TABLE ${table} ADD COLUMN created_at TEXT NOT NULL DEFAULT ''`);
+  }
   const orderColumns = new Set(db.prepare('PRAGMA table_info(orders)').all().map(column => column.name));
   if (!orderColumns.has('credits_used')) db.exec('ALTER TABLE orders ADD COLUMN credits_used INTEGER NOT NULL DEFAULT 0');
   if (!orderColumns.has('original_amount')) db.exec('ALTER TABLE orders ADD COLUMN original_amount INTEGER NOT NULL DEFAULT 0');

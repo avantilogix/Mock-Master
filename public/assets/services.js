@@ -44,10 +44,47 @@ export async function api(path, {ctx, auth = false, method = 'GET', json, binary
 }
 
 export async function firebaseAuth() {
-  const [{firebase}, {initializeApp}, sdk] = await Promise.all([
-    api('/config'),
+  const config = await api('/config');
+  if (config.dummyLogin) return {...dummyAuth(), personalTimetable: config.personalTimetable};
+  const [{initializeApp}, sdk] = await Promise.all([
     import(`${firebaseBase}firebase-app.js`),
     import(`${firebaseBase}firebase-auth.js`)
   ]);
-  return {sdk, auth: sdk.getAuth(initializeApp(firebase))};
+  return {sdk, auth: sdk.getAuth(initializeApp(config.firebase)), personalTimetable: config.personalTimetable,
+    publishingMedia: config.publishingMedia === true};
+}
+
+// Local development only: the server enables this with `npm run start:dummy`.
+function dummyAuth() {
+  const key = 'mission-selection-dummy-phone';
+  const listeners = new Set();
+  const userFor = phone => ({uid: `dummy-${phone.slice(1)}`, phoneNumber: phone, getIdToken: async () => `dummy:${phone}`});
+  const saved = localStorage.getItem(key);
+  const auth = {dummy: true, currentUser: saved ? userFor(saved) : null};
+  const update = user => {
+    auth.currentUser = user;
+    listeners.forEach(listener => listener(user));
+  };
+  const sdk = {
+    onAuthStateChanged(_auth, listener) {
+      listeners.add(listener);
+      queueMicrotask(() => listener(auth.currentUser));
+      return () => listeners.delete(listener);
+    },
+    async signOut() {
+      localStorage.removeItem(key);
+      update(null);
+    },
+    RecaptchaVerifier: class { clear() {} },
+    async signInWithPhoneNumber(_auth, phone) {
+      return {
+        async confirm(code) {
+          if (code !== '123456') throw Object.assign(new Error('Invalid code'), {code: 'auth/invalid-verification-code'});
+          localStorage.setItem(key, phone);
+          update(userFor(phone));
+        }
+      };
+    }
+  };
+  return {sdk, auth};
 }

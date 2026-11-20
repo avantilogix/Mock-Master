@@ -1,7 +1,7 @@
 import {api} from './services.js';
 import {bindForm, button, el, entries, field, heading, link, loadInto, panel, say, status, textValue} from './ui.js';
 
-const contentKinds = {
+export const contentKinds = {
   'free-tests': {title: 'Free Tests', icon: '✓', description: 'Try selected practice resources without purchasing a mission.'},
   'current-affairs': {title: 'Current Affairs', icon: '◫', description: 'Read concise updates prepared for competitive examinations.'},
   'pyqs': {title: 'Previous Year Questions', icon: '?', description: 'Revise important question patterns from earlier examinations.'},
@@ -9,61 +9,73 @@ const contentKinds = {
 };
 
 export function showProgress(main, ctx, action) {
-  main.append(...heading('Progress report', 'Review every submitted test and track your overall accuracy.'));
+  main.append(...heading('Progress Report', 'Review every submitted test and track your overall accuracy.'));
   if (!ctx.user) {
-    main.append(panel('Your preparation analytics', el('p', {}, 'Sign in to see your scored test attempts.'),
+    main.append(panel('Your Preparation Analytics', el('p', {}, 'Sign in to see your scored test attempts.'),
       action.signInLink()));
     return;
   }
   const summary = el('div', {class: 'progress-summary'});
   const insights = el('div', {class: 'progress-insights'});
   const history = el('div');
-  main.append(summary, insights, panel('Attempt history', history));
+  main.append(summary, insights, panel('Attempt History', history));
   loadInto(history, ctx, async () => {
     const result = await api('/progress', {ctx, auth: true});
-    summary.replaceChildren(
-      ...[
-        ['Attempts', result.summary.attempts, 'Tests submitted'],
-        ['Accuracy', `${result.summary.accuracy}%`, 'Correct answers'],
-        ['Best score', `${result.summary.best || 0}%`, 'Personal best'],
-      ].map(([label, value, hint]) => el('article', {class: 'progress-tile'},
-        el('span', {}, label), el('strong', {}, String(value)), el('small', {}, hint))));
-    const filter = el('select', {}, el('option', {value: ''}, 'All missions'),
-      ...(result.courses || []).map(course => el('option', {value: course.course}, course.title)));
+    const allCourses = result.courses || [];
+    const percent = item => Math.round(item.score / item.total * 100);
+    const filter = el('select', {}, el('option', {value: ''}, 'All Missions'),
+      ...allCourses.map(course => el('option', {value: course.course}, course.title)));
     const trend = el('div', {class: 'score-trend'});
-    const renderTrend = selected => {
-      const attempts = result.attempts.filter(item => !selected || item.course === selected).slice(0, 10).reverse();
-      trend.replaceChildren(...(attempts.length ? attempts.map(item => {
-        const score = Math.round(item.score / item.total * 100);
+    const performance = el('div');
+    insights.replaceChildren(el('section', {class: 'progress-chart'},
+      el('div', {class: 'chart-head'}, el('div', {}, el('h2', {}, 'Score Trend'),
+        el('p', {class: 'muted'}, 'Your last 10 test results')), field('Mission', filter)),
+      trend),
+      el('section', {class: 'mission-progress'}, el('h2', {}, 'Mission Performance'), performance));
+    const render = selected => {
+      const attempts = result.attempts.filter(item => !selected || item.course === selected);
+      const courses = allCourses.filter(course => !selected || course.course === selected);
+      let stats = result.summary;
+      if (selected) {
+        const total = attempts.reduce((sum, item) => sum + item.total, 0);
+        const correct = attempts.reduce((sum, item) => sum + item.score, 0);
+        stats = {attempts: attempts.length, accuracy: total ? Math.round(correct / total * 100) : 0,
+          best: attempts.length ? Math.max(...attempts.map(percent)) : 0};
+      }
+      summary.replaceChildren(
+        ...[
+          ['Attempts', stats.attempts, 'Tests Submitted'],
+          ['Accuracy', `${stats.accuracy}%`, 'Correct Answers'],
+          ['Best Score', `${stats.best || 0}%`, 'Personal Best'],
+        ].map(([label, value, hint]) => el('article', {class: 'progress-tile'},
+          el('span', {}, label), el('strong', {}, String(value)), el('small', {}, hint))));
+      const recent = attempts.slice(0, 10).reverse();
+      trend.replaceChildren(...(recent.length ? recent.map(item => {
+        const score = percent(item);
         return el('div', {class: 'trend-point', 'aria-label': `${item.title}: ${score}%`},
           el('span', {style: `height:${Math.max(score, 8)}%`}), el('small', {}, `${score}%`));
       }) : [el('p', {class: 'muted'}, 'No tests in this mission yet.')]));
+      performance.replaceChildren(...(courses.length ? courses.map(course => el('article', {class: 'mission-progress-row'},
+        el('div', {}, el('strong', {}, course.title), el('p', {class: 'muted'}, `${course.attempts} attempts · Best ${course.best}%`)),
+        el('div', {class: 'accuracy-ring', style: `--value:${course.accuracy * 3.6}deg`},
+          el('span', {}, `${course.accuracy}%`)))) :
+        [el('p', {class: 'muted'}, 'Complete a test to see mission-level performance.')]));
+      history.replaceChildren(entries(attempts, 'Complete your first test to begin your progress report.', attempt =>
+        el('div', {class: 'attempt-row'},
+          el('div', {}, el('strong', {}, attempt.title), el('p', {class: 'muted'}, attempt.courseTitle),
+            el('small', {class: 'muted'}, new Date(attempt.createdAt).toLocaleString('en-IN'))),
+          el('div', {}, el('div', {class: 'attempt-score'}, `${attempt.score}/${attempt.total}`),
+            el('small', {class: 'attempt-percent'}, `${percent(attempt)}%`)))));
     };
-    filter.addEventListener('change', () => renderTrend(filter.value));
-    renderTrend('');
-    insights.replaceChildren(el('section', {class: 'progress-chart'},
-      el('div', {class: 'chart-head'}, el('div', {}, el('h2', {}, 'Score trend'),
-        el('p', {class: 'muted'}, 'Your last 10 test results')), field('Mission', filter)),
-      trend),
-      el('section', {class: 'mission-progress'}, el('h2', {}, 'Mission performance'),
-        ...(result.courses?.length ? result.courses.map(course => el('article', {class: 'mission-progress-row'},
-          el('div', {}, el('strong', {}, course.title), el('p', {class: 'muted'}, `${course.attempts} attempts · Best ${course.best}%`)),
-          el('div', {class: 'accuracy-ring', style: `--value:${course.accuracy * 3.6}deg`},
-            el('span', {}, `${course.accuracy}%`)))) :
-          [el('p', {class: 'muted'}, 'Complete a test to see mission-level performance.')])));
-    history.replaceChildren(entries(result.attempts, 'Complete your first test to begin your progress report.', attempt =>
-      el('div', {class: 'attempt-row'},
-        el('div', {}, el('strong', {}, attempt.title), el('p', {class: 'muted'}, attempt.courseTitle),
-          el('small', {class: 'muted'}, new Date(attempt.createdAt).toLocaleString('en-IN'))),
-        el('div', {}, el('div', {class: 'attempt-score'}, `${attempt.score}/${attempt.total}`),
-          el('small', {class: 'attempt-percent'}, `${Math.round(attempt.score / attempt.total * 100)}%`)))));
+    filter.addEventListener('change', () => render(filter.value));
+    render('');
   });
 }
 
 export function showNotifications(main, ctx, action) {
   main.append(...heading('Notifications', 'Updates about your course payments and learning access.'));
   if (!ctx.user) {
-    main.append(panel('Your inbox', el('p', {}, 'Sign in to see payment and course notifications.'),
+    main.append(panel('Your Inbox', el('p', {}, 'Sign in to see payment and course notifications.'),
       action.signInLink()));
     return;
   }
@@ -75,7 +87,7 @@ export function showNotifications(main, ctx, action) {
       const card = link('', item.href || '#home', 'notification-card');
       card.append(
         item.unread ? el('span', {class: 'notification-dot', 'aria-label': 'New'}) : null,
-        el('div', {}, el('strong', {}, item.title?.replace(/^null\s*/, '') || 'Course update'), el('p', {class: 'muted'}, item.body || ''),
+        el('div', {}, el('strong', {}, item.title?.replace(/^null\s*/, '') || 'Course Update'), el('p', {class: 'muted'}, item.body || ''),
           el('small', {class: 'muted'}, item.date ? new Date(item.date).toLocaleString('en-IN') : '')));
       return card;
     }));
@@ -110,8 +122,8 @@ export function showLearningContent(main, ctx, kind, action) {
             el('summary', {}, el('span', {}, monthName(month)), el('small', {}, `${items.length} ${items.length === 1 ? 'item' : 'items'}`)),
             ...items.map(item => el('article', {class: 'resource-card'},
               el('h3', {}, item.title), el('p', {class: 'muted'}, item.summary),
-              el('details', {}, el('summary', {}, 'Read update'), el('div', {class: 'resource-body'}, item.body)))))))) :
-        [el('div', {class: 'empty-library'}, el('h2', {}, 'No current affairs published yet'),
+              el('details', {}, el('summary', {}, 'Read Update'), el('div', {class: 'resource-body'}, item.body)))))))) :
+        [el('div', {class: 'empty-library'}, el('h2', {}, 'No Current Affairs Published Yet'),
           el('p', {class: 'muted'}, 'Admin can add dated updates from the Admin workspace.'))]));
       return;
     }
@@ -119,9 +131,9 @@ export function showLearningContent(main, ctx, kind, action) {
       el('article', {class: 'resource-card'},
         el('span', {class: 'resource-icon', 'aria-hidden': 'true'}, config.icon),
         el('h2', {}, item.title), el('p', {class: 'lead'}, item.summary),
-        el('details', {}, el('summary', {}, 'Open resource'), el('div', {class: 'resource-body'}, item.body)))) :
+        el('details', {}, el('summary', {}, 'Open Resource'), el('div', {class: 'resource-body'}, item.body)))) :
       [el('div', {class: 'empty-library'}, el('span', {class: 'resource-icon'}, config.icon),
-        el('h2', {}, `No ${config.title.toLowerCase()} published yet`),
+        el('h2', {}, `No ${config.title} Published Yet`),
         el('p', {class: 'muted'}, 'Your admin can publish new resources from the Admin workspace.'))]));
   });
 }
@@ -132,14 +144,14 @@ export function adminContentForm(post, refresh) {
   const title = el('input', {required: '', maxlength: '120'});
   const summary = el('textarea', {rows: '2', required: '', maxlength: '300'});
   const body = el('textarea', {rows: '7', required: '', maxlength: '10000'});
-  const published = el('input', {type: 'date', value: new Date().toISOString().slice(0, 10)});
-  const publishedField = field('Publish date', published, 'Current Affairs uses this year and month in the student archive.');
+  const published = el('input', {type: 'date', required: '', value: new Date().toISOString().slice(0, 10)});
+  const publishedField = field('Publish Date', published, 'Current Affairs uses this year and month in the student archive.');
   publishedField.hidden = kind.value !== 'current-affairs';
   kind.addEventListener('change', () => { publishedField.hidden = kind.value !== 'current-affairs'; });
-  const submit = button('Publish resource', null, 'submit');
+  const submit = button('Publish Resource', null, 'submit');
   const feedback = status();
-  const form = el('form', {}, field('Section', kind), publishedField, field('Resource title', title),
-    field('Short summary', summary), field('Content', body), submit, feedback);
+  const form = el('form', {}, field('Section', kind), publishedField, field('Resource Title', title),
+    field('Short Summary', summary), field('Content', body), submit, feedback);
   bindForm(form, submit, feedback, async () => {
     await post(`/admin/content/${kind.value}`, {json: {
       title: textValue(title, 'Title'), summary: textValue(summary, 'Summary'), body: textValue(body, 'Content'),

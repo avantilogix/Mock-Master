@@ -11,6 +11,9 @@ import QRCode from 'qrcode';
 import { fail, importQuestions, mobile, pageCount, renderPage, validateQuestions } from './documents.js';
 import { paymentReference, upiDetails, upiPaymentUri } from './manual-payments.js';
 import { sampleBookPdf, sampleCourses, sampleResources } from './sample-data.js';
+import { registerVideoRoutes } from './chapter-videos.js';
+import { registerPublishedRoutes } from './published.js';
+import { courseCutoff, expiryInput, publishingMedia, requireActive } from './publishing-media.js';
 
 initializeApp();
 
@@ -57,6 +60,9 @@ function publicCourse(item) {
     title: item.title,
     description: item.description,
     price: item.price,
+    images: item.images || [],
+    expiresOn: item.expiresOn || '',
+    expired: (courseCutoff(item.expiresOn) ?? Infinity) <= Date.now(),
   };
 }
 
@@ -72,9 +78,11 @@ async function owned(uid, courseId) {
 }
 
 async function requirePurchase(user, courseId, allowAdmin = true) {
-  if (!(allowAdmin && user.admin) && !await owned(user.uid, courseId)) {
-    fail(403, 'Purchase this course to unlock it.');
-  }
+  const item = await course(courseId);
+  if (allowAdmin && user.admin) return null;
+  const cutoff = requireActive(item);
+  if (!await owned(user.uid, courseId)) fail(403, 'Purchase this course to unlock it.');
+  return cutoff;
 }
 
 async function queryCollection(name) {
@@ -181,6 +189,7 @@ function createApp() {
       },
       payment: await paymentDetails(),
       social: socialConfig,
+      publishingMedia: true,
     });
   });
   api.get('/social', async (_req, res) => {
@@ -192,6 +201,7 @@ function createApp() {
   });
   api.get('/courses/:id/payment-qr', async (req, res) => {
     const row = await course(req.params.id);
+    requireActive(row);
     const payment = await paymentDetails();
     const setting = value(await db.collection('settings').doc('payment').get());
     if (setting?.customQr && payment.method !== 'upi') {
@@ -232,7 +242,8 @@ function createApp() {
   });
   api.get('/physical-books', async (_req, res) => {
     const books = (await db.collection('physicalBooks').where('active', '==', true).get()).docs.map(value).sort(byNewest);
-    res.json(books.map(book => ({ id: book.id, title: book.title, description: book.description, price: book.price, stock: book.stock })));
+    res.json(books.map(book => ({ id: book.id, title: book.title, description: book.description, price: book.price,
+      stock: book.stock, images: book.images || [] })));
   });
   api.get('/videos', async (_req, res) => {
     res.json(await Promise.all((await queryCollection('videos')).sort(byNewest).map(async video => ({
@@ -245,6 +256,7 @@ function createApp() {
     }))));
   });
 
+  const media = publishingMedia(api, { bucket, processDocument });
   api.use(authLimit, login);
   api.get('/me', async (req, res) => {
     const { uid, phone, admin: isAdmin } = req.user;
@@ -389,13 +401,15 @@ function createApp() {
     const books = (await db.collection('books').where('course', '==', id).get()).docs.map(value)
       .sort((a, b) => `${a.subject || ''}${a.chapter || ''}`.localeCompare(`${b.subject || ''}${b.chapter || ''}`))
       .map(item => ({ id: item.id, title: item.title, pages: item.pages,
-        subject: item.subject || 'General', chapter: item.chapter || 'Chapter 1' }));
+        subject: item.subject || 'General', chapter: item.chapter || 'Chapter 1', images: item.images || [] }));
+    const videos = (await db.collection('chapterVideos').where('course', '==', id).get()).docs.map(value).sort(byNewest)
+      .map(({ id, title, subject, chapter, type, size }) => ({ id, title, subject, chapter, type, size }));
     const messages = (await db.collection('messages').where('course', '==', id).get()).docs.map(value).sort(byNewest).slice(0, 100);
     const namedMessages = await Promise.all(messages.map(async message => {
       const student = value(await db.collection('students').doc(message.uid).get());
       return { name: student?.name || 'Student', text: message.text };
     }));
-    res.json({ tests, books, messages: namedMessages.reverse() });
+    res.json({ tests, books, videos, messages: namedMessages.reverse() });
   });
   api.post('/courses/:id/messages', async (req, res) => {
     const { id } = await course(req.params.id);
@@ -438,7 +452,9 @@ function createApp() {
     res.sendStatus(204);
   });
   api.get('/courses/:id/payment', async (req, res) => {
-    const { id, price } = await course(req.params.id);
+    const selected = await course(req.params.id);
+    requireActive(selected);
+    const { id, price } = selected;
     const snapshot = await db.collection('orders').where('uid', '==', req.user.uid).where('course', '==', id).limit(1).get();
     const item = snapshot.docs.map(value)[0];
     const referral = value(await db.collection('referrals').doc(req.user.uid).get());
@@ -458,7 +474,9 @@ function createApp() {
     });
   });
   api.post('/courses/:id/payment', paymentLimit, async (req, res) => {
-    const { id, price } = await course(req.params.id);
+    const selected = await course(req.params.id);
+    requireActive(selected);
+    const { id } = selected;
     const { uid } = req.user;
     const details = await paymentDetails();
     if (typeof req.body?.note !== 'undefined' && (typeof req.body.note !== 'string' || req.body.note.length > 500)) {
@@ -471,7 +489,13 @@ function createApp() {
     const referralRef = db.collection('referrals').doc(uid);
     let result;
     await db.runTransaction(async transaction => {
-      const [snapshot, referralSnapshot] = await Promise.all([transaction.get(orderRef), transaction.get(referralRef)]);
+      const [snapshot, referralSnapshot, courseSnapshot] = await Promise.all([
+        transaction.get(orderRef), transaction.get(referralRef), transaction.get(db.collection('courses').doc(id)),
+      ]);
+      const currentCourse = value(courseSnapshot);
+      if (!currentCourse) fail(404, 'Course not found.');
+      requireActive(currentCourse);
+      const { price } = currentCourse;
       const existing = value(snapshot);
       const referral = value(referralSnapshot);
       if (existing && typeof existing.payment === 'string' && existing.payment.length > 0) {
@@ -638,6 +662,9 @@ function createApp() {
   });
 
   api.use('/admin', admin);
+  media.adminRoutes();
+  registerVideoRoutes(api, { db, bucket, value, text, course, requirePurchase });
+  registerPublishedRoutes(api, { db, bucket, value, text, byNewest, queryCollection, media });
   api.post('/admin/videos', async (req, res) => {
     const input = String(req.body?.url || '');
     let videoId = '';
@@ -754,6 +781,7 @@ function createApp() {
       description: text(req.body?.description, 'Description', 2000),
       price,
       stock,
+      images: await media.validate(req.body?.images),
       active: true,
       createdAt: new Date().toISOString(),
     });
@@ -870,6 +898,8 @@ function createApp() {
       title: text(title, 'Title', 120),
       description: text(description, 'Description', 2000),
       price,
+      expiresOn: expiryInput(req.body?.expiresOn, { future: true }),
+      images: await media.validate(req.body?.images),
     });
     res.status(201).json({ id });
   });
@@ -890,13 +920,14 @@ function createApp() {
     const { id: courseId } = await course(req.params.id);
     const id = randomUUID();
     const title = text(req.query.title, 'Title', 120);
+    const images = await media.validate(typeof req.query.images === 'string' ? req.query.images.split(',') : []);
     if (!Buffer.isBuffer(req.body)) fail(400, 'Upload a PDF.');
     const pages = await processDocument(() => pageCount(req.body));
     const file = bucket.file(`books/${id}.pdf`);
     await file.save(req.body, { resumable: false, contentType: 'application/pdf', metadata: { cacheControl: 'private, no-store' } });
     try {
       await db.collection('books').doc(id).create({
-        course: courseId, title, pages, subject: text(req.query.subject || 'General', 'Subject', 100),
+        course: courseId, title, pages, images, subject: text(req.query.subject || 'General', 'Subject', 100),
         chapter: text(req.query.chapter || 'Chapter 1', 'Chapter', 120), createdAt: new Date().toISOString(),
       });
     } catch (error) {
@@ -937,6 +968,9 @@ function createApp() {
       if (!order) fail(404, 'Payment request not found.');
       if (order.paymentStatus === 'approved') return;
       if (order.paymentStatus !== 'pending') fail(409, 'Only pending requests can be approved.');
+      const selected = value(await transaction.get(db.collection('courses').doc(order.course)));
+      if (!selected) fail(404, 'Course not found.');
+      requireActive(selected);
       transaction.update(orderRef, {
         payment: `manual:${order.id}`,
         paymentStatus: 'approved',

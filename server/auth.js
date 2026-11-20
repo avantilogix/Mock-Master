@@ -2,6 +2,13 @@ import { createRemoteJWKSet, jwtVerify } from 'jose';
 
 const keys = createRemoteJWKSet(new URL('https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com'));
 
+// Local development only: accepts "dummy:+91XXXXXXXXXX" tokens instead of Firebase phone OTP.
+export async function dummyVerifier(token) {
+  const match = /^dummy:(\+91[6-9]\d{9})$/.exec(token);
+  if (!match) throw new Error('Invalid dummy sign-in token.');
+  return { uid: `dummy-${match[1].slice(1)}`, phone: match[1] };
+}
+
 export function firebaseVerifier(projectId) {
   return async token => {
     if (!projectId) throw Object.assign(new Error('Phone sign-in is not configured.'), { status: 503 });

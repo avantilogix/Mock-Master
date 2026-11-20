@@ -1,3 +1,4 @@
+import {coverGallery} from './publishing-media.js';
 import {api} from './services.js';
 import {bindForm, button, el, empty, heading, idPart, link, loadInto, say, status} from './ui.js';
 
@@ -6,15 +7,15 @@ const protectedGet = (ctx, path, image = false) => api(path, {ctx, auth: true, i
 export function showTest(main, ctx, courseId, testId, phone) {
   const path = `/tests/${idPart(testId)}`;
   const content = el('div', {class: 'narrow'});
-  const back = () => link('Back to course', `#course/${idPart(courseId)}`, 'back');
-  main.append(back(), ...heading('Practice test'), content);
+  const back = () => link('Back to Course', `#course/${idPart(courseId)}`, 'back');
+  main.append(back(), ...heading('Practice Test'), content);
   loadInto(content, ctx, async () => {
     const {title, questions} = await protectedGet(ctx, path);
     if (!questions.length) {
       main.replaceChildren(back(), ...heading(title), empty('This test has no questions yet.'));
       return;
     }
-    const submit = button('Submit answers', null, 'submit');
+    const submit = button('Submit Answers', null, 'submit');
     const feedback = status();
     const watermark = () => phone ? el('p', {class: 'watermark', 'aria-hidden': 'true'}, `Verified mobile · ${phone}`) : null;
     const form = el('form', {},
@@ -32,8 +33,8 @@ export function showTest(main, ctx, courseId, testId, phone) {
         return value === null ? null : Number(value);
       });
       const result = await api(`${path}/submit`, {ctx, auth: true, method: 'POST', json: {answers}});
-      const resultTitle = el('h2', {tabindex: '-1'}, 'Test result');
-      const retry = button('Practice again', 'secondary');
+      const resultTitle = el('h2', {tabindex: '-1'}, 'Test Result');
+      const retry = button('Practice Again', 'secondary');
       retry.addEventListener('click', () => {
         form.reset();
         say(feedback, '');
@@ -49,15 +50,33 @@ export function showTest(main, ctx, courseId, testId, phone) {
   });
 }
 
-export function showBook(main, ctx, courseId, bookId) {
-  const back = () => link('Back to course', `#course/${idPart(courseId)}`, 'back');
+export function showVideo(main, ctx, courseId, videoId) {
+  const back = () => link('Back to Study Materials', '#materials', 'back');
   const content = el('div');
-  main.append(back(), ...heading('Study book'), content);
+  main.append(back(), ...heading('Chapter Video'), content);
+  loadInto(content, ctx, async () => {
+    const {videos = []} = await protectedGet(ctx, `/courses/${idPart(courseId)}`);
+    const video = videos.find(item => String(item.id) === videoId);
+    if (!video) throw new Error('This video is not available in the course.');
+    const {url} = await protectedGet(ctx, `/videos/${idPart(videoId)}/link`);
+    if (!ctx.current()) return;
+    main.replaceChildren(back(), ...heading(video.title, `${video.subject} · ${video.chapter}`), content);
+    content.replaceChildren(el('section', {class: 'panel'},
+      el('video', {class: 'chapter-video', src: url, controls: '', controlslist: 'nodownload', preload: 'metadata',
+        playsinline: '', 'aria-label': video.title})));
+  });
+}
+
+export function showBook(main, ctx, courseId, bookId) {
+  const back = () => link('Back to Course', `#course/${idPart(courseId)}`, 'back');
+  const content = el('div');
+  main.append(back(), ...heading('Study Book'), content);
   loadInto(content, ctx, async () => {
     const {books} = await protectedGet(ctx, `/courses/${idPart(courseId)}`);
     const book = books.find(item => String(item.id) === bookId);
     if (!book) throw new Error('This book is not available in the course.');
-    main.replaceChildren(back(), ...heading(book.title), content);
+    const gallery = coverGallery(book, 'reader-gallery');
+    main.replaceChildren(back(), ...heading(book.title), ...(gallery ? [gallery] : []), content);
     if (!Number.isSafeInteger(book.pages) || book.pages < 1) {
       content.replaceChildren(empty('This book has no pages to display.'));
       return;
@@ -67,8 +86,8 @@ export function showBook(main, ctx, courseId, bookId) {
     let loading = false;
     const imageArea = el('div', {class: 'panel'});
     const counter = status();
-    const prev = button('Previous page', 'secondary');
-    const next = button('Next page', 'secondary');
+    const prev = button('Previous Page', 'secondary');
+    const next = button('Next Page', 'secondary');
     const revoke = () => {
       if (objectUrl) URL.revokeObjectURL(objectUrl);
       objectUrl = null;
