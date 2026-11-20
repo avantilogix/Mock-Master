@@ -81,8 +81,21 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     if (!(allowAdmin && req.user.admin) && !owns(req.user.uid, id)) fail(403, 'Purchase this course to unlock it.');
   }
   api.use(express.json({ limit: '1mb', inflate: false }));
-  const paymentDetails = upiDetails(manualPayment);
-  api.get('/config', (_req, res) => res.json({ firebase, payment: paymentDetails }));
+  const runtimePayment = () => {
+    const setting = one('SELECT * FROM payment_settings WHERE id=1');
+    const details = upiDetails({
+      upiId: setting?.upi_id ?? manualPayment.upiId,
+      payeeName: setting?.payee_name ?? manualPayment.payeeName,
+    });
+    const method = ['upi', 'qr', 'both'].includes(setting?.method) ? setting.method : 'upi';
+    return {
+      ...details,
+      method,
+      customQr: Boolean(setting?.qr),
+      configured: (method !== 'qr' && details.configured) || (method !== 'upi' && Boolean(setting?.qr)),
+    };
+  };
+  api.get('/config', (_req, res) => res.json({ firebase, payment: runtimePayment() }));
   api.get('/social', (_req, res) => {
     const rows = all('SELECT key, value FROM settings WHERE key IN (?, ?, ?)', 'youtube', 'instagram', 'telegram');
     res.json(Object.fromEntries(rows.map(row => [row.key, row.value])));
@@ -90,8 +103,25 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
   api.get('/courses', (_req, res) => res.json(all('SELECT * FROM courses ORDER BY rowid DESC')));
   api.get('/courses/:id/payment-qr', async (req, res) => {
     const row = course(req.params.id);
-    const uri = upiPaymentUri(paymentDetails, row.price, `Mission Selection ${row.title}`);
+    const payment = runtimePayment();
+    const setting = one('SELECT qr, qr_type FROM payment_settings WHERE id=1');
+    if (setting?.qr && payment.method !== 'upi') {
+      res.type(setting.qr_type || 'png').send(Buffer.from(setting.qr));
+      return;
+    }
+    const uri = upiPaymentUri(payment, row.price, `Mission Selection ${row.title}`);
     if (!uri) fail(503, 'UPI payment details are not configured.');
+    res.type('svg').send(await QRCode.toString(uri, { type: 'svg', margin: 1, errorCorrectionLevel: 'M' }));
+  });
+  api.get('/payment-qr', async (_req, res) => {
+    const payment = runtimePayment();
+    const setting = one('SELECT qr, qr_type FROM payment_settings WHERE id=1');
+    if (setting?.qr && payment.method !== 'upi') {
+      res.type(setting.qr_type || 'png').send(Buffer.from(setting.qr));
+      return;
+    }
+    const uri = upiPaymentUri(payment, 100, 'Mission Selection payment');
+    if (!uri) fail(503, 'Payment details are not configured.');
     res.type('svg').send(await QRCode.toString(uri, { type: 'svg', margin: 1, errorCorrectionLevel: 'M' }));
   });
   api.get('/courses/:id/reviews', (req, res) => {
@@ -101,6 +131,9 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
   });
   api.get('/timetable', (_req, res) => res.json(all('SELECT * FROM schedules ORDER BY day, starts_at')));
   api.get('/physical-books', (_req, res) => res.json(all('SELECT id, title, description, price, stock FROM physical_books WHERE active=1 ORDER BY rowid DESC')));
+  api.get('/videos', (_req, res) => res.json(all(`SELECT v.id, v.title, v.description, v.video_id AS videoId,
+    v.created_at AS createdAt, c.title AS courseTitle FROM videos v LEFT JOIN courses c ON c.id=v.course
+    ORDER BY v.created_at DESC`)));
   api.use(authLimit, login);
   api.get('/me', (req, res) => {
     const { uid, phone, admin } = req.user;
@@ -167,7 +200,7 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     requirePurchase(req, id);
     res.json({
       tests: all('SELECT id, title FROM tests WHERE course=? ORDER BY rowid', id),
-      books: all('SELECT id, title, pages FROM books WHERE course=? ORDER BY rowid', id),
+      books: all('SELECT id, title, pages, subject, chapter FROM books WHERE course=? ORDER BY subject, chapter, rowid', id),
       messages: all(`SELECT COALESCE(NULLIF(s.name, ''), 'Student') AS name, m.text
         FROM messages m JOIN students s USING (uid) WHERE m.course=? ORDER BY m.id DESC LIMIT 100`, id).reverse(),
     });
@@ -197,15 +230,19 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     const order = one(`SELECT id, amount, payment_status AS status, transaction_ref AS reference,
       payment_note AS note, review_note AS reviewNote, submitted_at AS submittedAt FROM orders
       WHERE uid=? AND course=?`, req.user.uid, id);
-    res.json({ amount: price, payment: { ...paymentDetails, qr: `/api/courses/${id}/payment-qr` }, order });
+    const credits = one('SELECT credits FROM referrals WHERE uid=?', req.user.uid)?.credits || 0;
+    res.json({ amount: price, credits, payment: { ...runtimePayment(), qr: `/api/courses/${id}/payment-qr` }, order });
   });
   api.post('/courses/:id/payment', paymentLimit, (req, res) => {
     const { id, price } = course(req.params.id);
     const { uid } = req.user;
     if (owns(uid, id)) fail(409, 'You already own this course.');
-    if (!paymentDetails.configured) fail(503, 'UPI payment details are not configured.');
+    const referral = one('SELECT credits FROM referrals WHERE uid=?', uid);
+    const creditsUsed = req.body?.useCredits === true ? Math.min(Number(referral?.credits || 0), Math.ceil(price / 100)) : 0;
+    const amountDue = Math.max(0, price - creditsUsed * 100);
+    if (amountDue > 0 && !runtimePayment().configured) fail(503, 'Payment details are not configured.');
     const reference = paymentReference(req.body?.reference);
-    if (!reference) fail(422, 'Enter a valid UPI transaction reference (4–80 characters).');
+    if (amountDue > 0 && !reference) fail(422, 'Enter a valid UPI transaction reference (4–80 characters).');
     if (typeof req.body?.note !== 'undefined' && (typeof req.body.note !== 'string' || req.body.note.length > 500)) {
       fail(422, 'Payment note must be 500 characters or fewer.');
     }
@@ -216,13 +253,18 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
       return res.status(409).json({ error: 'A payment request is already waiting for admin review.' });
     }
     const orderId = existing?.id || randomUUID();
-    run(`INSERT INTO orders (id, uid, course, amount, payment_status, transaction_ref, payment_note, submitted_at)
-      VALUES (?, ?, ?, ?, 'pending', ?, ?, ?)
-      ON CONFLICT (uid, course) DO UPDATE SET amount=excluded.amount, payment_status='pending',
+    if (creditsUsed) run('UPDATE referrals SET credits=credits-? WHERE uid=? AND credits>=?', creditsUsed, uid, creditsUsed);
+    run(`INSERT INTO orders (id, uid, course, amount, original_amount, credits_used, payment_status,
+      transaction_ref, payment_note, submitted_at, payment)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT (uid, course) DO UPDATE SET amount=excluded.amount, original_amount=excluded.original_amount,
+        credits_used=excluded.credits_used, payment=excluded.payment, payment_status=excluded.payment_status,
         transaction_ref=excluded.transaction_ref, payment_note=excluded.payment_note, submitted_at=excluded.submitted_at,
         review_note='', reviewed_at='', reviewed_by=''`,
-    orderId, uid, id, price, reference, note, submittedAt);
-    res.status(201).json({ id: orderId, amount: price, status: 'pending', reference, submittedAt });
+    orderId, uid, id, amountDue, price, creditsUsed, amountDue === 0 ? 'approved' : 'pending',
+      reference || 'CREDITS', note, submittedAt, amountDue === 0 ? `credits:${orderId}` : null);
+    res.status(201).json({ id: orderId, amount: amountDue, creditsUsed,
+      status: amountDue === 0 ? 'approved' : 'pending', reference: reference || 'CREDITS', submittedAt });
   });
 
   function test(id) {
@@ -256,10 +298,27 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
       WHERE a.uid=? ORDER BY a.created_at DESC LIMIT 100`, req.user.uid);
     const total = attempts.reduce((sum, item) => sum + item.total, 0);
     const correct = attempts.reduce((sum, item) => sum + item.score, 0);
+    const courses = Object.values(attempts.reduce((groups, item) => {
+      const entry = groups[item.course] ||= { course: item.course, title: item.courseTitle, attempts: 0, correct: 0, total: 0, best: 0 };
+      entry.attempts++;
+      entry.correct += item.score;
+      entry.total += item.total;
+      entry.best = Math.max(entry.best, Math.round(item.score / item.total * 100));
+      entry.accuracy = Math.round(entry.correct / entry.total * 100);
+      return groups;
+    }, {}));
+    const trend = attempts.slice(0, 10).reverse().map(item => ({
+      label: new Date(item.created_at || item.createdAt).toLocaleDateString('en-IN', {day: 'numeric', month: 'short'}),
+      value: Math.round(item.score / item.total * 100), title: item.title,
+    }));
     res.json({
       attempts,
       summary: { attempts: attempts.length, questions: total, correct,
-        accuracy: total ? Math.round(correct / total * 100) : 0 },
+        accuracy: total ? Math.round(correct / total * 100) : 0,
+        best: attempts.length ? Math.max(...attempts.map(item => Math.round(item.score / item.total * 100))) : 0,
+        courses: courses.length },
+      courses,
+      trend,
     });
   });
   api.get('/notifications', (req, res) => {
@@ -280,7 +339,9 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
   });
   api.get('/content/:kind', (req, res) => {
     if (!['current-affairs', 'pyqs', 'syllabus', 'free-tests'].includes(req.params.kind)) fail(404, 'Content not found.');
-    res.json(all('SELECT id, kind, title, summary, body, created_at AS createdAt FROM resources WHERE kind=? ORDER BY created_at DESC',
+    res.json(all(`SELECT id, kind, title, summary, body, created_at AS createdAt,
+      published_at AS publishedAt FROM resources WHERE kind=?
+      ORDER BY CASE WHEN published_at='' THEN created_at ELSE published_at END DESC`,
       req.params.kind));
   });
   api.get('/books/:id/pages/:page', async (req, res) => {
@@ -303,6 +364,44 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
   });
 
   api.use('/admin', admin);
+  api.post('/admin/videos', (req, res) => {
+    const raw = req.body?.url || '';
+    const input = String(raw);
+    let videoId = '';
+    try {
+      const url = new URL(input);
+      if (url.hostname === 'youtu.be') videoId = url.pathname.slice(1).split('/')[0];
+      else if (url.hostname.endsWith('youtube.com')) videoId = url.searchParams.get('v') || url.pathname.split('/').filter(Boolean).at(-1);
+    } catch { /* Invalid URL rejected below. */ }
+    if (!/^[A-Za-z0-9_-]{11}$/.test(videoId)) fail(422, 'Enter a valid YouTube video URL.');
+    const selectedCourse = typeof req.body?.course === 'string' ? req.body.course : '';
+    if (selectedCourse) course(selectedCourse);
+    const id = randomUUID();
+    run('INSERT INTO videos VALUES (?, ?, ?, ?, ?, ?)', id, text(req.body?.title, 'Video title', 120),
+      text(req.body?.description, 'Description', 1000), videoId, selectedCourse, new Date().toISOString());
+    res.status(201).json({ id, videoId });
+  });
+  api.get('/admin/payment-settings', (_req, res) => res.json(runtimePayment()));
+  api.put('/admin/payment-settings', (req, res) => {
+    const method = req.body?.method;
+    if (!['upi', 'qr', 'both'].includes(method)) fail(422, 'Choose UPI, QR code, or both.');
+    const upi = upiDetails({ upiId: req.body?.upiId, payeeName: req.body?.payeeName });
+    const existing = one('SELECT qr, qr_type FROM payment_settings WHERE id=1');
+    if (method !== 'qr' && !upi.configured) fail(422, 'Enter a valid UPI ID and payee name.');
+    if (method !== 'upi' && !existing?.qr) fail(422, 'Upload a payment QR image before enabling QR checkout.');
+    run(`INSERT INTO payment_settings (id, upi_id, payee_name, method) VALUES (1, ?, ?, ?)
+      ON CONFLICT (id) DO UPDATE SET upi_id=excluded.upi_id, payee_name=excluded.payee_name, method=excluded.method`,
+    req.body?.upiId || '', text(req.body?.payeeName, 'Payee name', 100), method);
+    res.sendStatus(204);
+  });
+  api.post('/admin/payment-qr', express.raw({ type: /^image\//, limit: '2mb', inflate: false }), (req, res) => {
+    if (!Buffer.isBuffer(req.body) || req.body.length < 8) fail(400, 'Upload a non-empty PNG, JPEG, or WebP QR image.');
+    const type = req.get('Content-Type') || '';
+    if (!/^image\/(png|jpeg|webp)$/i.test(type)) fail(422, 'Upload a PNG, JPEG, or WebP QR image.');
+    run(`INSERT INTO payment_settings (id, upi_id, payee_name, qr, qr_type) VALUES (1, '', '', ?, ?)
+      ON CONFLICT (id) DO UPDATE SET qr=excluded.qr, qr_type=excluded.qr_type`, req.body, type);
+    res.status(201).json({ configured: true });
+  });
   api.get('/admin/students', (_req, res) => res.json(all(`SELECT uid, phone, name, disabled FROM students ORDER BY name, phone LIMIT 500`)));
   api.post('/admin/students/:uid/status', (req, res) => {
     const disabled = req.body?.disabled;
@@ -359,9 +458,11 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     const kind = req.params.kind;
     if (!['current-affairs', 'pyqs', 'syllabus', 'free-tests'].includes(kind)) fail(422, 'Choose a valid content section.');
     const id = randomUUID();
-    run('INSERT INTO resources VALUES (?, ?, ?, ?, ?, ?)', id, kind,
+    const publishedAt = typeof req.body?.publishedAt === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(req.body.publishedAt)
+      ? req.body.publishedAt : new Date().toISOString().slice(0, 10);
+    run('INSERT INTO resources VALUES (?, ?, ?, ?, ?, ?, ?)', id, kind,
       text(req.body?.title, 'Title', 120), text(req.body?.summary, 'Summary', 300),
-      text(req.body?.body, 'Content', 10_000), new Date().toISOString());
+      text(req.body?.body, 'Content', 10_000), new Date().toISOString(), publishedAt);
     res.status(201).json({ id });
   });
   api.post('/admin/courses', (req, res) => {
@@ -387,7 +488,10 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     const title = text(req.query.title, 'Title', 120);
     if (!Buffer.isBuffer(req.body)) fail(400, 'Upload a PDF.');
     const pages = await processDocument(() => pageCount(req.body));
-    run('INSERT INTO books VALUES (?, ?, ?, ?, ?)', id, courseId, title, pages, req.body);
+    const subject = text(req.query.subject || 'General', 'Subject', 100);
+    const chapter = text(req.query.chapter || 'Chapter 1', 'Chapter', 120);
+    run('INSERT INTO books (id, course, title, pages, pdf, subject, chapter) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      id, courseId, title, pages, req.body, subject, chapter);
     res.status(201).json({ id, pages });
   });
   api.get('/admin/payments', (req, res) => {
@@ -408,12 +512,14 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     res.sendStatus(204);
   });
   api.post('/admin/payments/:id/reject', (req, res) => {
-    const order = one('SELECT id, payment_status FROM orders WHERE id=?', req.params.id);
+    const order = one('SELECT id, uid, payment_status, credits_used FROM orders WHERE id=?', req.params.id);
     if (!order) fail(404, 'Payment request not found.');
     if (order.payment_status !== 'pending') fail(409, 'Only pending requests can be rejected.');
     const reviewNote = typeof req.body?.note === 'string' ? req.body.note.trim() : '';
     if (!reviewNote || reviewNote.length > 500) fail(422, 'Enter a rejection reason (maximum 500 characters).');
-    run(`UPDATE orders SET payment_status='rejected', reviewed_at=?, reviewed_by=?, review_note=?
+    if (order.credits_used) run('UPDATE referrals SET credits=credits+? WHERE uid=?',
+      order.credits_used, order.uid);
+    run(`UPDATE orders SET payment_status='rejected', credits_used=0, reviewed_at=?, reviewed_by=?, review_note=?
       WHERE id=? AND payment_status='pending'`, new Date().toISOString(), req.user.uid, reviewNote, order.id);
     res.sendStatus(204);
   });

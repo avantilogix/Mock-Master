@@ -51,6 +51,7 @@ export const sampleCourses = [
 export const sampleResources = [
   {
     kind: 'current-affairs', id: 'sample-current-affairs',
+    publishedAt: '2026-11-01',
     title: 'Current Affairs Study Plan: November 2026',
     summary: 'A focused revision structure for national, international, economy, science, and sports updates.',
     body: '1. Revise the last 30 days of national and international updates.\n2. Note major economic announcements and government schemes.\n3. Make one-line facts for science, technology, awards, and sports.\n4. Attempt a weekly current-affairs quiz and review incorrect answers.',

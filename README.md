@@ -18,6 +18,12 @@ Run `npm run seed` to add or refresh three sample preparation missions, each wit
 
 The Phase 2 and Phase 3 student experience includes persisted test reports, notifications, current affairs, PYQs, syllabus resources, a student timetable, referral codes, protected page downloads, and physical-book UPI/shipping orders. Admins can publish timetable entries and learning resources, manage physical-book inventory and fulfillment, configure social links, and disable or reactivate student accounts from the Admin workspace. Physical-book stock is reduced only when the admin approves the payment; course access remains separate.
 
+Current Affairs resources are grouped by publication year and month. Set the publish date in the Admin learning-resource form when adding an update. Payment checkout is also admin-configurable: save a UPI ID/payee, upload a PNG/JPEG/WebP QR image, then enable UPI, QR, or both. Admin approval of the submitted transaction reference remains mandatory before digital-course access is unlocked.
+
+Study-book uploads now require a subject and chapter label. Students open materials by mission, subject, and chapter while the original PDF remains private and every rendered page retains its mobile-number watermark. Progress reports include best-score, mission performance, and a filterable score trend in addition to attempt history.
+
+Referral credits are shown as rupee credits at checkout. Students can apply any available balance to a course; partial use reduces the amount that must be paid by UPI/QR, while a fully covered purchase unlocks after the credits are reserved. Admin rejection restores reserved credits. Syllabus has its own student destination and no longer shares the Previous Year Questions route.
+
 ### Firebase phone sign-in
 
 1. Register a Web App in a Firebase project and enable **Phone** in Authentication. Configure the SMS region policy for India and add the actual web hostname to Firebase's authorized domains. Use a configured development HTTPS hostname and Firebase's fictional phone numbers to test without sending SMS.

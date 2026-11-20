@@ -1,10 +1,11 @@
 import {showAdmin} from './admin.js?v=phase2-20261120';
-import {showCatalog, showContentLibrary, showCourse, showDashboard, showMyCourses} from './course.js?v=phase2-20261120';
+import {showCatalog, showContentLibrary, showCourse, showDashboard, showMyCourses} from './course.js?v=phase6-20261120';
 import {api, firebaseAuth} from './services.js';
 import {showSignIn} from './signin.js';
 import {showBook, showTest} from './study.js';
-import {showLearningContent, showNotifications, showProgress} from './reports.js?v=phase3-20261120';
-import {showDownloads, showPhysicalStore, showReferrals, showTimetable, socialFooter} from './features.js?v=phase3-20261120';
+import {showLearningContent, showNotifications, showProgress} from './reports.js?v=phase6-20261120';
+import {showDownloads, showPhysicalStore, showReferrals, showTimetable, socialFooter} from './features.js?v=phase4-20261120';
+import {showCourseGroups, showShareRate, showVideos} from './engagement.js?v=phase7-20261120';
 import {bindForm, button, el, field, heading, link, panel, run, say, status, textValue} from './ui.js';
 
 const main = document.querySelector('#main');
@@ -14,6 +15,7 @@ const routes = new Map([
   ['home', 0], ['catalog', 0], ['my-courses', 0], ['test-series', 0], ['book-store', 0], ['materials', 0],
   ['free-tests', 0], ['current-affairs', 0], ['pyqs', 0], ['syllabus', 0], ['progress', 0], ['notifications', 0],
   ['timetable', 0], ['referrals', 0], ['physical-books', 0], ['downloads', 0],
+  ['videos', 0], ['groups', 0], ['share-app', 0],
   ['course', 1], ['test', 2], ['book', 2], ['signin', 0],
   ['profile', 0], ['support', 0], ['admin', 0]
 ]);
@@ -165,6 +167,8 @@ function showProfile(ctx) {
         el('div', {}, el('strong', {}, String(session.me?.purchases?.length || 0)), el('span', {class: 'muted'}, 'Courses unlocked')),
         el('div', {}, el('strong', {}, 'Secure'), el('span', {class: 'muted'}, 'Protected learning access'))),
       el('div', {class: 'actions section'}, link('Explore courses', '#catalog', 'button'),
+        link('Share & rate app', '#share-app', 'button secondary'),
+        link('Course groups', '#groups', 'button secondary'),
         link('Referrals', '#referrals', 'button secondary'), socialFooter(ctx), signOut, disable)));
   if (!session.me) {
     main.append(panel('Display name', profileUnavailable()));
@@ -233,6 +237,9 @@ function render(focus = false) {
     case 'referrals': showReferrals(main, ctx, {signInLink}); break;
     case 'physical-books': showPhysicalStore(main, ctx, {signInLink}); break;
     case 'downloads': showDownloads(main, ctx, {signInLink}); break;
+    case 'videos': showVideos(main); break;
+    case 'groups': showCourseGroups(main, ctx, current?.me, {signInLink}); break;
+    case 'share-app': showShareRate(main); break;
     case 'free-tests':
     case 'current-affairs':
     case 'pyqs':

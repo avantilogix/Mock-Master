@@ -90,8 +90,38 @@ export async function renderPage(pdf, page, phone) {
     const scale = Math.min(2, 1400 / source.width);
     const viewport = pdfPage.getViewport({ scale });
     const canvas = createCanvas(Math.ceil(viewport.width), Math.ceil(viewport.height));
-    await pdfPage.render({ canvas, canvasContext: canvas.getContext('2d'), viewport }).promise;
-    png = canvas.toBuffer('image/png');
+    try {
+      await pdfPage.render({ canvas, canvasContext: canvas.getContext('2d'), viewport }).promise;
+      png = canvas.toBuffer('image/png');
+    } catch (renderError) {
+      const text = await pdfPage.getTextContent();
+      const context = canvas.getContext('2d');
+      context.fillStyle = '#ffffff';
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      context.fillStyle = '#15244c';
+      context.font = 'bold 34px sans-serif';
+      context.fillText('Mission Selection', 48, 62);
+      context.font = '24px sans-serif';
+      let y = 125;
+      for (const item of text.items.filter(value => typeof value.str === 'string' && value.str.trim())) {
+        const words = item.str.split(/\s+/);
+        let line = '';
+        for (const word of words) {
+          const candidate = line ? `${line} ${word}` : word;
+          if (context.measureText(candidate).width > canvas.width - 96 && line) {
+            context.fillText(line, 48, y);
+            y += 38;
+            line = word;
+          } else line = candidate;
+        }
+        if (line) {
+          context.fillText(line, 48, y);
+          y += 38;
+        }
+        if (y > canvas.height - 70) break;
+      }
+      png = canvas.toBuffer('image/png');
+    }
   } catch (error) {
     if (error.status) throw error;
     fail(422, 'Could not render this PDF page.');

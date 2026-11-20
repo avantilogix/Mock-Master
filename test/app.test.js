@@ -113,9 +113,15 @@ test('admin approval grants only the confirmed student access to their course, t
   assert.equal((await request(testPath, 'buyer')).status, 403);
   assert.equal((await request(`${path}/messages`, 'buyer', 'POST', { text: 'Hello' })).status, 403);
 
-  const submitted = await request(`${path}/payment`, 'buyer', 'POST', { reference: 'UPI123456789', note: 'Paid in app' });
+  db.prepare(`INSERT INTO referrals (uid, code, credits) VALUES (?, ?, ?)
+    ON CONFLICT (uid) DO UPDATE SET credits=excluded.credits`).run('buyer', 'MSBUYER1', 100);
+  const submitted = await request(`${path}/payment`, 'buyer', 'POST', {
+    reference: 'UPI123456789', note: 'Paid in app', useCredits: true,
+  });
   assert.equal(submitted.status, 201);
-  const requestId = (await submitted.json()).id;
+  const submittedOrder = await submitted.json();
+  assert.equal(submittedOrder.amount, 4900);
+  const requestId = submittedOrder.id;
   assert.equal((await request(`${path}/payment`, 'buyer', 'POST', { reference: 'UPI123456789' })).status, 409);
   assert.equal((await request(path, 'buyer')).status, 403);
   const pending = await (await request('/admin/payments', 'admin')).json();
@@ -137,12 +143,22 @@ test('admin approval grants only the confirmed student access to their course, t
     [{ prompt: questions[0].prompt, options: questions[0].options }]);
   assert.deepEqual(await (await request(`${testPath}/submit`, 'buyer', 'POST', { answers: [1] })).json(), { score: 1, total: 1 });
   const progress = await (await request('/progress', 'buyer')).json();
-  assert.deepEqual(progress.summary, { attempts: 1, questions: 1, correct: 1, accuracy: 100 });
+  assert.deepEqual(progress.summary, { attempts: 1, questions: 1, correct: 1, accuracy: 100, best: 100, courses: 1 });
   assert.equal(progress.attempts[0].course, id);
   assert.equal((await request('/content/syllabus', 'buyer')).status, 200);
+  assert.equal((await request('/admin/payment-settings', 'buyer')).status, 403);
   assert.equal((await request('/admin/content/syllabus', 'buyer', 'POST', {
     title: 'Not allowed', summary: 'Denied', body: 'Denied',
   })).status, 403);
+  assert.equal((await request('/admin/videos', 'buyer', 'POST', {
+    title: 'Denied', description: 'Denied', url: 'https://youtu.be/dQw4w9WgXcQ',
+  })).status, 403);
+  assert.equal((await request('/admin/videos', 'admin', 'POST', {
+    title: 'Lesson', description: 'Practice lesson', url: 'https://youtu.be/dQw4w9WgXcQ', course: id,
+  })).status, 201);
+  assert.equal((await (await request('/videos')).json())[0].videoId, 'dQw4w9WgXcQ');
+  assert.deepEqual(Object.keys(progress.summary).sort(),
+    ['accuracy', 'attempts', 'best', 'correct', 'courses', 'questions'].sort());
   const schedule = await request('/admin/timetable', 'admin', 'POST', {
     title: 'Evening practice', day: 'Monday', startsAt: '19:00', duration: '60 minutes', description: 'Mock review',
   });

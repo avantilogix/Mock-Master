@@ -97,8 +97,9 @@ export function seedCatalog(databasePath) {
         db.prepare(`INSERT INTO tests (id, course, title, questions) VALUES (?, ?, ?, ?)
           ON CONFLICT (id) DO UPDATE SET title=excluded.title, questions=excluded.questions`)
           .run(`${course.id}-test-01`, course.id, course.test, JSON.stringify(course.questions));
-        db.prepare(`INSERT INTO books (id, course, title, pages, pdf) VALUES (?, ?, ?, ?, ?)
-          ON CONFLICT (id) DO UPDATE SET title=excluded.title, pages=excluded.pages, pdf=excluded.pdf`)
+        db.prepare(`INSERT INTO books (id, course, title, pages, pdf, subject, chapter) VALUES (?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT (id) DO UPDATE SET title=excluded.title, pages=excluded.pages, pdf=excluded.pdf,
+            subject=excluded.subject, chapter=excluded.chapter`)
           .run(`${course.id}-book-01`, course.id, course.book, 1, pdf([
             'MISSION SELECTION',
             '',
@@ -109,13 +110,13 @@ export function seedCatalog(databasePath) {
             'Study consistently, review mistakes, and track progress.',
             '',
             'This page is protected with your verified mobile number.',
-          ]));
+          ]), 'Foundation', 'Chapter 1: Getting Started');
       }
       const now = new Date().toISOString();
       for (const [kind, id, title, summary, body] of resources) {
-        db.prepare(`INSERT INTO resources VALUES (?, ?, ?, ?, ?, ?)
+        db.prepare(`INSERT INTO resources VALUES (?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT (id) DO UPDATE SET title=excluded.title, summary=excluded.summary, body=excluded.body`)
-          .run(id, kind, title, summary, body, now);
+          .run(id, kind, title, summary, body, now, now.slice(0, 10));
       }
       db.exec('COMMIT');
     } catch (error) {

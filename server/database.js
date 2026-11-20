@@ -64,10 +64,26 @@ export function openDatabase(path) {
     CREATE TABLE IF NOT EXISTS settings (
       key TEXT PRIMARY KEY, value TEXT NOT NULL
     ) STRICT;
+    CREATE TABLE IF NOT EXISTS payment_settings (
+      id INTEGER PRIMARY KEY CHECK (id=1), upi_id TEXT NOT NULL DEFAULT '',
+      payee_name TEXT NOT NULL DEFAULT '', method TEXT NOT NULL DEFAULT 'upi',
+      qr BLOB, qr_type TEXT NOT NULL DEFAULT ''
+    ) STRICT;
+    CREATE TABLE IF NOT EXISTS videos (
+      id TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT NOT NULL,
+      video_id TEXT NOT NULL, course TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL
+    ) STRICT;
   `);
   const orderColumns = new Set(db.prepare('PRAGMA table_info(orders)').all().map(column => column.name));
+  if (!orderColumns.has('credits_used')) db.exec('ALTER TABLE orders ADD COLUMN credits_used INTEGER NOT NULL DEFAULT 0');
+  if (!orderColumns.has('original_amount')) db.exec('ALTER TABLE orders ADD COLUMN original_amount INTEGER NOT NULL DEFAULT 0');
   const studentColumns = new Set(db.prepare('PRAGMA table_info(students)').all().map(column => column.name));
   if (!studentColumns.has('disabled')) db.exec("ALTER TABLE students ADD COLUMN disabled INTEGER NOT NULL DEFAULT 0");
+  const resourceColumns = new Set(db.prepare('PRAGMA table_info(resources)').all().map(column => column.name));
+  if (!resourceColumns.has('published_at')) db.exec("ALTER TABLE resources ADD COLUMN published_at TEXT NOT NULL DEFAULT ''");
+  const bookColumns = new Set(db.prepare('PRAGMA table_info(books)').all().map(column => column.name));
+  if (!bookColumns.has('subject')) db.exec("ALTER TABLE books ADD COLUMN subject TEXT NOT NULL DEFAULT 'General'");
+  if (!bookColumns.has('chapter')) db.exec("ALTER TABLE books ADD COLUMN chapter TEXT NOT NULL DEFAULT 'Chapter 1'");
   const additions = [
     ['payment_status', "TEXT NOT NULL DEFAULT 'pending'"],
     ['transaction_ref', 'TEXT NOT NULL DEFAULT \'\''],

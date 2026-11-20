@@ -1,6 +1,6 @@
 const firebaseBase = 'https://www.gstatic.com/firebasejs/11.10.0/';
 
-export async function api(path, {ctx, auth = false, method = 'GET', json, binary, image = false} = {}) {
+export async function api(path, {ctx, auth = false, method = 'GET', json, binary, image = false, imageUpload} = {}) {
   const signal = ctx?.signal;
   const check = () => {
     if (ctx && !ctx.current()) throw new DOMException('Request cancelled', 'AbortError');
@@ -14,7 +14,7 @@ export async function api(path, {ctx, auth = false, method = 'GET', json, binary
     check();
   }
   if (json !== undefined) headers.set('Content-Type', 'application/json');
-  if (binary !== undefined) headers.set('Content-Type', 'application/octet-stream');
+  if (binary !== undefined) headers.set('Content-Type', imageUpload || 'application/octet-stream');
   let response;
   try {
     response = await fetch(`/api${path}`, {

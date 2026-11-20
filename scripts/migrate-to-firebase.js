@@ -65,7 +65,10 @@ try {
   const books = db.prepare('SELECT * FROM books').all();
   for (const book of books) {
     await uploadBook(book.id, Buffer.from(book.pdf));
-    await writeDocument('books', book.id, { course: book.course, title: book.title, pages: book.pages, createdAt });
+    await writeDocument('books', book.id, {
+      course: book.course, title: book.title, pages: book.pages, createdAt,
+      subject: book.subject || 'Foundation', chapter: book.chapter || 'Chapter 1: Getting Started',
+    });
   }
 
   for (const student of db.prepare('SELECT * FROM students').all()) {
@@ -96,7 +99,7 @@ try {
   for (const resource of resources) {
     await writeDocument('resources', resource.id, {
       kind: resource.kind, title: resource.title, summary: resource.summary, body: resource.body,
-      createdAt: resource.created_at,
+      createdAt: resource.created_at, publishedAt: resource.published_at || resource.created_at.slice(0, 10),
     });
   }
   console.log(`Migrated ${courses.length} courses, ${tests.length} tests, ${books.length} protected books, and ${resources.length} resources.`);

@@ -43,11 +43,15 @@ export function showDashboard(main, ctx, me) {
         shortcut('◫', 'Current Affairs', 'Daily exam updates', '#current-affairs', 'rose'),
         shortcut('↗', 'Progress', 'Accuracy and attempts', '#progress', 'yellow'),
         shortcut('●', 'Notifications', 'Course and payment updates', '#notifications', 'blue'),
-        shortcut('?', 'PYQs & Syllabus', 'Plan focused revision', '#pyqs', 'mint'),
+        shortcut('?', 'Previous Year Questions', 'Practice earlier questions', '#pyqs', 'mint'),
+        shortcut('☷', 'Syllabus', 'View topics and learning plan', '#syllabus', 'purple'),
         shortcut('▦', 'Timetable', 'Plan your study week', '#timetable', 'blue'),
         shortcut('↗', 'Refer & Earn', 'Share your personal code', '#referrals', 'yellow'),
         shortcut('▤', 'Physical Books', 'Order printed study books', '#physical-books', 'orange'),
         shortcut('↓', 'Downloads', 'Save approved content', '#downloads', 'purple'),
+        shortcut('▶', 'YouTube Videos', 'Watch focused lessons', '#videos', 'rose'),
+        shortcut('●', 'Course Groups', 'Discuss with purchasers', '#groups', 'blue'),
+        shortcut('↗', 'Share & Rate', 'Invite and review', '#share-app', 'yellow'),
         shortcut('●', me ? 'Profile' : 'Sign in', me ? 'Manage your account' : 'Use your mobile number', me ? '#profile' : '#signin', 'yellow'))),
     el('section', {class: 'section'},
       el('div', {class: 'section-heading'}, el('h2', {}, me?.purchases?.length ? 'Continue learning' : 'Popular missions'),
@@ -113,14 +117,30 @@ export function showContentLibrary(main, ctx, me, kind, action) {
           link(owns(me, course.id) ? 'Open mission' : `View at ${priceText(course.price)}`, `#course/${idPart(course.id)}`, 'button secondary'));
       }
       const material = await api(`/courses/${idPart(course.id)}`, {ctx, auth: true});
+      if (config.item === 'books') {
+        const subjects = new Map();
+        for (const book of material.books) {
+          if (!subjects.has(book.subject)) subjects.set(book.subject, []);
+          subjects.get(book.subject).push(book);
+        }
+        return el('article', {class: 'course-material'},
+          el('div', {class: 'course-material-head'},
+            el('span', {class: 'folder-icon', 'aria-hidden': 'true'}, config.icon),
+            el('div', {}, el('h2', {}, course.title), el('p', {class: 'muted'},
+              `${subjects.size} subjects · ${material.books.length} chapters`))),
+          el('div', {class: 'subject-list'}, ...[...subjects].map(([subject, books]) =>
+            el('details', {class: 'subject-folder', open: ''},
+              el('summary', {}, el('strong', {}, subject), el('span', {}, `${books.length} chapters`)),
+              el('div', {class: 'chapter-list'}, ...books.map(book =>
+                link(book.chapter, `#book/${idPart(course.id)}/${idPart(book.id)}`, 'chapter-link')))))));
+      }
       return el('article', {class: 'library-folder'},
         el('span', {class: 'folder-icon', 'aria-hidden': 'true'}, config.icon),
         el('div', {class: 'library-folder-content'},
           el('h2', {}, course.title),
           entries(material[config.item], config.empty, item => el('a',
-            {class: 'material-link', href: config.item === 'tests' ?
-              `#test/${idPart(course.id)}/${idPart(item.id)}` : `#book/${idPart(course.id)}/${idPart(item.id)}`},
-            item.title, config.item === 'books' ? el('span', {class: 'muted'}, `${item.pages} protected pages`) : null))));
+            {class: 'material-link', href: `#test/${idPart(course.id)}/${idPart(item.id)}`},
+            item.title))));
     }));
     content.replaceChildren(...folders);
   });
@@ -253,7 +273,7 @@ function showMaterials(access, ctx, path, id) {
 
 function showManualPayment(target, ctx, session, course, path, action) {
   loadInto(target, ctx, async () => {
-    const {amount, payment, order} = await api(`${path}/payment`, {ctx, auth: true});
+    const {amount, credits = 0, payment, order} = await api(`${path}/payment`, {ctx, auth: true});
     if (order?.status === 'pending') {
       const refresh = button('Check approval status', 'secondary');
       const feedback = status();
@@ -276,16 +296,54 @@ function showManualPayment(target, ctx, session, course, path, action) {
         link('Contact support', '#support', 'button secondary')));
       return;
     }
+    const methodButtons = el('div', {class: 'payment-methods'});
+    const methodPanel = el('div');
+    const renderMethod = method => {
+      methodButtons.querySelectorAll('button').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.method === method)));
+      if (method === 'upi') {
+        methodPanel.replaceChildren(el('div', {class: 'upi-details'},
+          el('span', {}, 'UPI ID'), el('strong', {}, payment.upiId), el('small', {}, `Payee: ${payment.payeeName}`)));
+      } else {
+        methodPanel.replaceChildren(el('div', {class: 'qr-card'}, el('img', {src: payment.qr,
+          alt: `Payment QR for ${payment.payeeName || 'Mission Selection'}`, width: '220', height: '220'}),
+          el('strong', {}, payment.payeeName || 'Mission Selection'),
+          payment.customQr ? el('small', {}, 'Scan using your UPI application') : el('small', {}, payment.upiId)));
+      }
+    };
+    const methods = payment.method === 'both' ? ['upi', 'qr'] : [payment.method];
+    for (const method of methods) {
+      const control = button(method === 'upi' ? 'Pay by UPI ID' : 'Scan QR code', 'secondary');
+      control.dataset.method = method;
+      control.addEventListener('click', () => renderMethod(method));
+      methodButtons.append(control);
+    }
     const reference = el('input', {required: '', maxlength: '80', autocomplete: 'off', placeholder: 'Example: 418276930125'});
+    const useCredits = el('input', {type: 'checkbox'});
+    const creditPanel = credits > 0 ? el('label', {class: 'credit-option'},
+      useCredits, el('span', {}, `Use available credits: ₹${credits}`)) : null;
     const note = el('textarea', {rows: '2', maxlength: '500', placeholder: 'Optional note from your payment app'});
     const submit = button('Submit for admin approval', null, 'submit');
     const feedback = status();
-    const form = el('form', {class: 'payment-proof'},
+    const amountMessage = el('p', {class: 'due-amount'});
+    const updateAmount = () => {
+      const due = Math.max(0, amount - (useCredits.checked ? Math.min(credits, Math.ceil(amount / 100)) * 100 : 0));
+      amountMessage.textContent = `Amount to pay: ${priceText(due)}`;
+      reference.required = due > 0;
+      reference.closest('.field').hidden = due === 0;
+    };
+    useCredits.addEventListener('change', updateAmount);
+    const form = el('form', {class: 'payment-proof'}, creditPanel, amountMessage,
       field('UPI transaction reference', reference, 'Copy the reference shown after your payment succeeds.'),
       field('Payment note (optional)', note), submit, feedback);
     bindForm(form, submit, feedback, async () => {
-      await api(`${path}/payment`, {ctx, auth: true, method: 'POST',
-        json: {reference: textValue(reference, 'UPI transaction reference'), note: note.value.trim()}});
+      const result = await api(`${path}/payment`, {ctx, auth: true, method: 'POST',
+        json: {reference: reference.required ? textValue(reference, 'UPI transaction reference') : reference.value.trim(),
+          note: note.value.trim(), useCredits: useCredits.checked}});
+      if (result.status === 'approved') {
+        await action.refreshProfile(session);
+        action.purchased(course.title);
+        return;
+      }
       showManualPayment(target, ctx, session, course, path, action);
     }, 'Submitting payment…');
     target.replaceChildren(el('div', {class: 'manual-payment'},
@@ -293,9 +351,7 @@ function showManualPayment(target, ctx, session, course, path, action) {
         el('div', {}, el('h2', {}, `Pay ${priceText(amount)}`),
           el('p', {class: 'muted'}, `Use your preferred UPI app to pay ${payment.payeeName}.`))),
       el('div', {class: 'payment-grid'},
-        el('div', {class: 'qr-card'}, el('img', {src: payment.qr,
-          alt: `UPI QR code to pay ${payment.payeeName}`, width: '220', height: '220'}),
-          el('strong', {}, payment.payeeName), el('code', {}, payment.upiId)),
+        el('div', {class: 'payment-choice'}, methodButtons, methodPanel),
         el('div', {class: 'payment-instructions'}, el('h3', {}, 'After paying'),
           el('ol', {}, el('li', {}, 'Keep the successful payment screen or SMS.'),
             el('li', {}, 'Copy its transaction reference.'), el('li', {}, 'Submit the reference below for admin approval.')),
@@ -303,5 +359,7 @@ function showManualPayment(target, ctx, session, course, path, action) {
             el('strong', {}, 'Payment not approved'), el('p', {}, order.reviewNote || 'Check the payment and submit again.')) : null)),
       el('div', {class: 'payment-form-panel'}, el('span', {}, '2'),
         el('div', {}, el('h3', {}, 'Submit payment proof'), form))));
+    renderMethod(methods[0]);
+    updateAmount();
   });
 }

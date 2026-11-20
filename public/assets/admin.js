@@ -32,6 +32,57 @@ export function showAdmin(main, ctx) {
   const physicalBooks = el('div');
   const physicalOrders = el('div');
   const students = el('div');
+  const videoCoursePlaceholder = el('select', {required: ''});
+  const videoTitle = el('input', {required: '', maxlength: '120'});
+  const videoDescription = el('textarea', {rows: '3', required: '', maxlength: '1000'});
+  const videoUrl = el('input', {type: 'url', required: '', placeholder: 'https://youtu.be/…'});
+  const publishVideo = button('Publish video', null, 'submit');
+  const videoFeedback = status();
+  const videoForm = el('form', {}, field('Course', videoCoursePlaceholder),
+    field('Video title', videoTitle), field('Description', videoDescription),
+    field('YouTube URL', videoUrl), publishVideo, videoFeedback);
+  bindForm(videoForm, publishVideo, videoFeedback, async () => {
+    await post('/admin/videos', {json: {
+      course: videoCoursePlaceholder.value, title: textValue(videoTitle, 'Video title'),
+      description: textValue(videoDescription, 'Description'), url: textValue(videoUrl, 'YouTube URL'),
+    }});
+    videoForm.reset();
+    say(videoFeedback, 'Video published in the YouTube library.');
+  }, 'Publishing video…');
+  const payeeName = el('input', {maxlength: '100', placeholder: 'Mission Selection'});
+  const upiId = el('input', {maxlength: '120', placeholder: 'missionselection@upi'});
+  const paymentMethod = el('select', {required: ''},
+    el('option', {value: 'upi'}, 'UPI ID only'), el('option', {value: 'qr'}, 'QR code only'),
+    el('option', {value: 'both'}, 'UPI ID and QR code'));
+  const paymentQr = el('input', {type: 'file', accept: 'image/png,image/jpeg,image/webp'});
+  const savePayment = button('Save payment options', null, 'submit');
+  const uploadQr = button('Upload QR image', 'secondary');
+  const paymentFeedback = status();
+  const paymentForm = el('form', {}, field('Payment method shown to students', paymentMethod),
+    field('UPI payee name', payeeName), field('UPI ID', upiId),
+    field('QR image (optional unless QR is enabled)', paymentQr),
+    el('div', {class: 'actions'}, uploadQr, savePayment), paymentFeedback);
+  savePayment.type = 'submit';
+  api('/admin/payment-settings', {ctx, auth: true}).then(values => {
+    paymentMethod.value = values.method || 'upi';
+    payeeName.value = values.payeeName || '';
+    upiId.value = values.upiId || '';
+  }).catch(error => { if (ctx.current()) say(paymentFeedback, error.message, true); });
+  uploadQr.addEventListener('click', async () => {
+    const file = paymentQr.files[0];
+    if (!file) return say(paymentFeedback, 'Choose a QR image first.', true);
+    run(uploadQr, paymentFeedback, async () => {
+      await api('/admin/payment-qr', {ctx, auth: true, method: 'POST', binary: file,
+        imageUpload: file.type});
+      say(paymentFeedback, 'QR image uploaded. Save the selected payment method to enable it.');
+    }, 'Uploading QR image…');
+  });
+  bindForm(paymentForm, savePayment, paymentFeedback, async () => {
+    await api('/admin/payment-settings', {ctx, auth: true, method: 'PUT', json: {
+      method: paymentMethod.value, payeeName: payeeName.value.trim(), upiId: upiId.value.trim(),
+    }});
+    say(paymentFeedback, 'Student checkout payment options updated.');
+  }, 'Saving payment options…');
   const youtube = el('input', {type: 'url', placeholder: 'https://youtube.com/@yourchannel'});
   const instagram = el('input', {type: 'url', placeholder: 'https://instagram.com/yourpage'});
   const telegram = el('input', {type: 'url', placeholder: 'https://t.me/yourcommunity'});
@@ -54,6 +105,7 @@ export function showAdmin(main, ctx) {
   });
   const inbox = el('div');
   const courseSelects = [];
+  courseSelects.push(videoCoursePlaceholder);
   function courseField() {
     const select = el('select', {required: ''});
     courseSelects.push(select);
@@ -249,11 +301,14 @@ export function showAdmin(main, ctx) {
     'Add or refresh three ready-made missions with mock tests and protected starter books.'), samples, sampleStatus),
   panel('Create a course', createForm), content);
   loadPayments();
-  main.append(panel('Student timetable', scheduleForm, timetable),
+  main.append(panel('Payment information', el('p', {class: 'muted'},
+    'Choose what students see at checkout. UPI and QR payment proofs still require admin approval.'), paymentForm),
+    panel('Student timetable', scheduleForm, timetable),
     panel('Physical books', physicalForm, physicalBooks),
     panel('Physical book orders', physicalOrders),
     panel('Student accounts', students),
-    panel('Social media links', socialForm));
+    panel('Social media links', socialForm),
+    panel('YouTube Videos', videoForm));
   loadTimetable();
   loadPhysicalBooks();
   loadPhysicalOrders();
@@ -296,14 +351,21 @@ export function showAdmin(main, ctx) {
 
   const [bookCourse, bookField] = courseField();
   const bookTitle = el('input', {required: '', maxlength: '120'});
+  const subject = el('input', {required: '', maxlength: '100', value: 'General'});
+  const chapter = el('input', {required: '', maxlength: '120', placeholder: 'Chapter 1: Introduction'});
   const pdf = el('input', {type: 'file', accept: pdfAccept, required: ''});
   const upload = button('Upload book', null, 'submit');
   const bookStatus = status();
-  const bookForm = el('form', {}, bookField, field('Book title', bookTitle), field('PDF file', pdf), upload, bookStatus);
+  const bookForm = el('form', {}, bookField, field('Subject', subject),
+    field('Chapter', chapter), field('Book title / chapter file', bookTitle), field('PDF file', pdf), upload, bookStatus);
   bindForm(bookForm, upload, bookStatus, async () => {
     const file = pdf.files[0];
     if (!file || !/\.pdf$/i.test(file.name)) throw new Error('Choose a PDF file.');
-    const query = new URLSearchParams({title: textValue(bookTitle, 'Book title')});
+    const query = new URLSearchParams({
+      title: textValue(bookTitle, 'Book title'),
+      subject: textValue(subject, 'Subject'),
+      chapter: textValue(chapter, 'Chapter'),
+    });
     await post(`/admin/courses/${idPart(bookCourse.value)}/books?${query}`, {binary: file});
     bookForm.reset();
     say(bookStatus, 'Book uploaded.');

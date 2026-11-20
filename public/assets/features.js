@@ -50,7 +50,7 @@ export function showReferrals(main, ctx, action) {
     }, 'Linking referral…');
     content.replaceChildren(el('section', {class: 'referral-hero'},
       el('span', {class: 'referral-icon', 'aria-hidden': 'true'}, '↗'), el('h2', {}, 'Your personal code'), code,
-      el('p', {class: 'muted'}, `Credits available: ${referral.credits || 0}`), copy),
+      el('p', {class: 'muted'}, `Credits available: ₹${referral.credits || 0}`), copy),
       referral.referred_by || referral.referredBy ? null : panel('Use a friend’s code', applyForm));
   });
 }
@@ -61,12 +61,12 @@ export function showPhysicalStore(main, ctx, action) {
   const orders = el('div');
   main.append(books, ctx.user ? panel('Your physical orders', orders) : null);
   loadInto(books, ctx, async () => {
-    const rows = await api('/physical-books', {ctx});
+    const [rows, config] = await Promise.all([api('/physical-books', {ctx}), api('/config', {ctx})]);
     books.replaceChildren(...(rows.length ? rows.map(item => el('article', {class: 'panel physical-book'},
       el('div', {class: 'book-cover', 'aria-hidden': 'true'}, 'BOOK'), el('h2', {}, item.title),
       el('p', {class: 'muted'}, item.description), el('p', {class: 'price'}, `₹${(item.price / 100).toFixed(2)}`),
       el('small', {class: 'muted'}, `${item.stock} in stock`),
-      ctx.user ? orderForm(ctx, item) : action.signInLink('Sign in to order'))) :
+      ctx.user ? orderForm(ctx, item, config.payment) : action.signInLink('Sign in to order'))) :
       [el('div', {class: 'empty-library'}, el('h2', {}, 'Physical books are coming soon'),
         el('p', {class: 'muted'}, 'Admin can publish stock and fulfil orders from the Admin workspace.'))]));
   });
@@ -80,7 +80,7 @@ export function showPhysicalStore(main, ctx, action) {
   });
 }
 
-function orderForm(ctx, item) {
+function orderForm(ctx, item, payment) {
   const details = el('details', {class: 'shipping-order'}, el('summary', {}, 'Order now'));
   const quantity = el('input', {type: 'number', min: '1', max: String(Math.min(5, item.stock)), value: '1', required: ''});
   const reference = el('input', {required: '', maxlength: '80', placeholder: 'UPI transaction reference'});
@@ -93,7 +93,12 @@ function orderForm(ctx, item) {
   const pin = el('input', {required: '', inputmode: 'numeric', maxlength: '6', autocomplete: 'postal-code'});
   const submit = button(`Submit ₹${(item.price / 100).toFixed(2)} payment`, null, 'submit');
   const feedback = status();
-  const form = el('form', {}, field('Quantity', quantity), field('UPI reference', reference),
+  const methods = payment.method === 'both' ? 'UPI ID or QR code' : payment.method === 'qr' ? 'QR code' : 'UPI ID';
+  const form = el('form', {}, el('div', {class: 'payment-instructions'},
+    el('strong', {}, `Pay using ${methods}`),
+    payment.method !== 'upi' ? el('img', {class: 'order-qr', src: '/api/payment-qr', alt: 'Payment QR code'}) : null,
+    payment.method !== 'qr' ? el('p', {}, payment.upiId) : null),
+    field('Quantity', quantity), field('UPI reference', reference),
     field('Full name', fullName), field('Delivery mobile', phone), field('Address line 1', line1),
     field('Address line 2 (optional)', line2), field('City', city), field('State', state),
     field('PIN code', pin), submit, feedback);

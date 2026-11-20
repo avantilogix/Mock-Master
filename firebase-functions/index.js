@@ -157,10 +157,18 @@ function createApp() {
     if (!req.user.admin) fail(403, 'Admin access required.');
     next();
   };
-  const paymentDetails = () => upiDetails({
-    upiId: parameterValue(upiIdParameter),
-    payeeName: parameterValue(upiPayeeNameParameter),
-  });
+  const paymentDetails = async () => {
+    const setting = value(await db.collection('settings').doc('payment').get());
+    const details = upiDetails({
+      upiId: setting?.upiId ?? parameterValue(upiIdParameter),
+      payeeName: setting?.payeeName ?? parameterValue(upiPayeeNameParameter),
+    });
+    const method = ['upi', 'qr', 'both'].includes(setting?.method) ? setting.method : 'upi';
+    return {
+      ...details, method, customQr: Boolean(setting?.customQr),
+      configured: (method !== 'qr' && details.configured) || (method !== 'upi' && Boolean(setting?.customQr)),
+    };
+  };
 
   api.get('/config', async (_req, res) => {
     const social = value(await db.collection('settings').doc('social').get());
@@ -171,7 +179,7 @@ function createApp() {
         apiKey: parameterValue(firebaseApiKeyParameter),
         authDomain: parameterValue(firebaseAuthDomainParameter),
       },
-      payment: paymentDetails(),
+      payment: await paymentDetails(),
       social: socialConfig,
     });
   });
@@ -184,8 +192,27 @@ function createApp() {
   });
   api.get('/courses/:id/payment-qr', async (req, res) => {
     const row = await course(req.params.id);
-    const uri = upiPaymentUri(paymentDetails(), row.price, `Mission Selection ${row.title}`);
+    const payment = await paymentDetails();
+    const setting = value(await db.collection('settings').doc('payment').get());
+    if (setting?.customQr && payment.method !== 'upi') {
+      const [qr] = await bucket.file('payment-config/qr').download();
+      res.type(setting.qrType || 'png').send(qr);
+      return;
+    }
+    const uri = upiPaymentUri(payment, row.price, `Mission Selection ${row.title}`);
     if (!uri) fail(503, 'UPI payment details are not configured.');
+    res.type('svg').send(await QRCode.toString(uri, { type: 'svg', margin: 1, errorCorrectionLevel: 'M' }));
+  });
+  api.get('/payment-qr', async (_req, res) => {
+    const payment = await paymentDetails();
+    const setting = value(await db.collection('settings').doc('payment').get());
+    if (setting?.customQr && payment.method !== 'upi') {
+      const [qr] = await bucket.file('payment-config/qr').download();
+      res.type(setting.qrType || 'png').send(qr);
+      return;
+    }
+    const uri = upiPaymentUri(payment, 100, 'Mission Selection payment');
+    if (!uri) fail(503, 'Payment details are not configured.');
     res.type('svg').send(await QRCode.toString(uri, { type: 'svg', margin: 1, errorCorrectionLevel: 'M' }));
   });
   api.get('/courses/:id/reviews', async (req, res) => {
@@ -206,6 +233,16 @@ function createApp() {
   api.get('/physical-books', async (_req, res) => {
     const books = (await db.collection('physicalBooks').where('active', '==', true).get()).docs.map(value).sort(byNewest);
     res.json(books.map(book => ({ id: book.id, title: book.title, description: book.description, price: book.price, stock: book.stock })));
+  });
+  api.get('/videos', async (_req, res) => {
+    res.json(await Promise.all((await queryCollection('videos')).sort(byNewest).map(async video => ({
+      id: video.id,
+      title: video.title,
+      description: video.description,
+      videoId: video.videoId,
+      courseTitle: video.course ? value(await db.collection('courses').doc(video.course).get())?.title : '',
+      createdAt: video.createdAt,
+    }))));
   });
 
   api.use(authLimit, login);
@@ -349,8 +386,10 @@ function createApp() {
     await requirePurchase(req.user, id);
     const tests = (await db.collection('tests').where('course', '==', id).get()).docs.map(value).sort(byNewest).reverse()
       .map(item => ({ id: item.id, title: item.title }));
-    const books = (await db.collection('books').where('course', '==', id).get()).docs.map(value).sort(byNewest).reverse()
-      .map(item => ({ id: item.id, title: item.title, pages: item.pages }));
+    const books = (await db.collection('books').where('course', '==', id).get()).docs.map(value)
+      .sort((a, b) => `${a.subject || ''}${a.chapter || ''}`.localeCompare(`${b.subject || ''}${b.chapter || ''}`))
+      .map(item => ({ id: item.id, title: item.title, pages: item.pages,
+        subject: item.subject || 'General', chapter: item.chapter || 'Chapter 1' }));
     const messages = (await db.collection('messages').where('course', '==', id).get()).docs.map(value).sort(byNewest).slice(0, 100);
     const namedMessages = await Promise.all(messages.map(async message => {
       const student = value(await db.collection('students').doc(message.uid).get());
@@ -362,12 +401,12 @@ function createApp() {
     const { id } = await course(req.params.id);
     await requirePurchase(req.user, id);
     const messageId = randomUUID();
-    await db.runTransaction(transaction => transaction.create(db.collection('messages').doc(messageId), {
+    await db.collection('messages').doc(messageId).create({
       course: id,
       uid: req.user.uid,
       text: text(req.body?.text, 'Message', 1000),
       createdAt: new Date().toISOString(),
-    }));
+    });
     res.sendStatus(204);
   });
   api.put('/courses/:id/reviews', async (req, res) => {
@@ -391,20 +430,22 @@ function createApp() {
   });
   api.post('/support', async (req, res) => {
     const id = randomUUID();
-    await db.runTransaction(transaction => transaction.create(db.collection('tickets').doc(id), {
+    await db.collection('tickets').doc(id).create({
       uid: req.user.uid,
       text: text(req.body?.text, 'Support request', 2000),
       createdAt: new Date().toISOString(),
-    }));
+    });
     res.sendStatus(204);
   });
   api.get('/courses/:id/payment', async (req, res) => {
     const { id, price } = await course(req.params.id);
     const snapshot = await db.collection('orders').where('uid', '==', req.user.uid).where('course', '==', id).limit(1).get();
     const item = snapshot.docs.map(value)[0];
+    const referral = value(await db.collection('referrals').doc(req.user.uid).get());
     res.json({
       amount: price,
-      payment: { ...paymentDetails(), qr: `/api/courses/${id}/payment-qr` },
+      credits: referral?.credits || 0,
+      payment: { ...await paymentDetails(), qr: `/api/courses/${id}/payment-qr` },
       order: item ? {
         id: item.id,
         amount: item.amount,
@@ -419,10 +460,7 @@ function createApp() {
   api.post('/courses/:id/payment', paymentLimit, async (req, res) => {
     const { id, price } = await course(req.params.id);
     const { uid } = req.user;
-    const details = paymentDetails();
-    if (!details.configured) fail(503, 'UPI payment details are not configured.');
-    const reference = paymentReference(req.body?.reference);
-    if (!reference) fail(422, 'Enter a valid UPI transaction reference (4–80 characters).');
+    const details = await paymentDetails();
     if (typeof req.body?.note !== 'undefined' && (typeof req.body.note !== 'string' || req.body.note.length > 500)) {
       fail(422, 'Payment note must be 500 characters or fewer.');
     }
@@ -430,22 +468,39 @@ function createApp() {
     const submittedAt = new Date().toISOString();
     const orderId = idFor(uid, id);
     const orderRef = db.collection('orders').doc(orderId);
+    const referralRef = db.collection('referrals').doc(uid);
+    let result;
     await db.runTransaction(async transaction => {
-      const snapshot = await transaction.get(orderRef);
+      const [snapshot, referralSnapshot] = await Promise.all([transaction.get(orderRef), transaction.get(referralRef)]);
       const existing = value(snapshot);
+      const referral = value(referralSnapshot);
       if (existing && typeof existing.payment === 'string' && existing.payment.length > 0) {
         fail(409, 'You already own this course.');
       }
       if (existing?.paymentStatus === 'pending') {
         throw Object.assign(new Error('A payment request is already waiting for admin review.'), { status: 409 });
       }
+      const creditsUsed = req.body?.useCredits === true ?
+        Math.min(Number(referral?.credits || 0), Math.ceil(price / 100)) : 0;
+      const amountDue = Math.max(0, price - creditsUsed * 100);
+      const reference = paymentReference(req.body?.reference);
+      if (amountDue > 0 && !details.configured) fail(503, 'Payment details are not configured.');
+      if (amountDue > 0 && !reference) fail(422, 'Enter a valid UPI transaction reference (4–80 characters).');
+      if (creditsUsed) transaction.update(referralRef, { credits: Number(referral.credits) - creditsUsed });
+      result = {
+        id: orderId, amount: amountDue, creditsUsed,
+        status: amountDue === 0 ? 'approved' : 'pending',
+        reference: reference || 'CREDITS', submittedAt,
+      };
       transaction.set(orderRef, {
         uid,
         course: id,
-        amount: price,
-        payment: '',
-        paymentStatus: 'pending',
-        transactionRef: reference,
+        amount: amountDue,
+        originalAmount: price,
+        creditsUsed,
+        payment: amountDue === 0 ? `credits:${orderId}` : '',
+        paymentStatus: result.status,
+        transactionRef: result.reference,
         paymentNote: note,
         reviewNote: '',
         submittedAt,
@@ -454,7 +509,7 @@ function createApp() {
         createdAt: existing?.createdAt || submittedAt,
       });
     });
-    res.status(201).json({ id: orderId, amount: price, status: 'pending', reference, submittedAt });
+    res.status(201).json(result);
   });
 
   async function test(id) {
@@ -493,20 +548,37 @@ function createApp() {
       ...attempt,
       courseTitle: value(await db.collection('courses').doc(attempt.course).get())?.title || 'Mission',
     })));
+    const courses = Object.values(output.reduce((groups, item) => {
+      const entry = groups[item.course] ||= { course: item.course, title: item.courseTitle, attempts: 0, correct: 0, total: 0, best: 0 };
+      entry.attempts++;
+      entry.correct += item.score;
+      entry.total += item.total;
+      entry.best = Math.max(entry.best, Math.round(item.score / item.total * 100));
+      entry.accuracy = Math.round(entry.correct / entry.total * 100);
+      return groups;
+    }, {}));
+    const trend = output.slice(0, 10).reverse().map(item => ({
+      label: new Date(item.createdAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }),
+      value: Math.round(item.score / item.total * 100),
+      title: item.title,
+    }));
     res.json({ attempts: output, summary: {
       attempts: attempts.length, questions: total, correct, accuracy: total ? Math.round(correct / total * 100) : 0,
-    } });
+      best: attempts.length ? Math.max(...attempts.map(item => Math.round(item.score / item.total * 100))) : 0,
+      courses: courses.length,
+    }, courses, trend });
   });
   api.get('/notifications', async (req, res) => {
     const orders = (await db.collection('orders').where('uid', '==', req.user.uid).get()).docs.map(value)
       .sort(byNewest).slice(0, 50);
     res.json(await Promise.all(orders.map(async order => {
       const selected = value(await db.collection('courses').doc(order.course).get());
+      const title = typeof selected?.title === 'string' && selected.title.trim() ? selected.title : 'Course';
       return {
         id: `payment-${order.id}`,
-        title: order.paymentStatus === 'approved' ? `${selected?.title || 'Mission'} is unlocked` :
-          order.paymentStatus === 'rejected' ? `${selected?.title || 'Mission'} payment needs attention` :
-          `${selected?.title || 'Mission'} payment is under review`,
+        title: order.paymentStatus === 'approved' ? `${title} is unlocked` :
+          order.paymentStatus === 'rejected' ? `${title} payment needs attention` :
+          `${title} payment is under review`,
         body: order.paymentStatus === 'rejected' ? order.reviewNote : order.paymentStatus === 'approved' ?
           'Your mission, tests and books are ready.' : 'The admin is verifying your UPI transaction.',
         href: `#course/${order.course}`,
@@ -518,7 +590,7 @@ function createApp() {
   api.get('/content/:kind', async (req, res) => {
     if (!['current-affairs', 'pyqs', 'syllabus', 'free-tests'].includes(req.params.kind)) fail(404, 'Content not found.');
     res.json((await db.collection('resources').where('kind', '==', req.params.kind).get()).docs
-      .map(value).sort(byNewest));
+      .map(value).sort((a, b) => String(b.publishedAt || b.createdAt).localeCompare(String(a.publishedAt || a.createdAt))));
   });
   api.get('/books/:id/pages/:page', async (req, res) => {
     const book = value(await db.collection('books').doc(req.params.id).get());
@@ -526,8 +598,20 @@ function createApp() {
     await requirePurchase(req.user, book.course);
     const page = Number(req.params.page);
     if (!Number.isSafeInteger(page) || page < 1 || page > book.pages) fail(404, 'Page not found.');
-    const [pdf] = await bucket.file(`books/${book.id}.pdf`).download();
-    const png = await processDocument(() => renderPage(pdf, page, req.user.phone));
+    let pdf;
+    try {
+      [pdf] = await bucket.file(`books/${book.id}.pdf`).download();
+    } catch (error) {
+      console.error('Book storage download failed', { book: book.id, message: error.message, code: error.code });
+      throw error;
+    }
+    let png;
+    try {
+      png = await processDocument(() => renderPage(pdf, page, req.user.phone));
+    } catch (error) {
+      console.error('Book render failed', { book: book.id, page, message: error.message, stack: error.stack });
+      throw error;
+    }
     res.type('png').send(png);
   });
   api.get('/books/:id/pages/:page/download', async (req, res) => {
@@ -536,12 +620,67 @@ function createApp() {
     await requirePurchase(req.user, book.course);
     const page = Number(req.params.page);
     if (!Number.isSafeInteger(page) || page < 1 || page > book.pages) fail(404, 'Page not found.');
-    const [pdf] = await bucket.file(`books/${book.id}.pdf`).download();
-    const png = await processDocument(() => renderPage(pdf, page, req.user.phone));
+    let pdf;
+    try {
+      [pdf] = await bucket.file(`books/${book.id}.pdf`).download();
+    } catch (error) {
+      console.error('Book download storage fetch failed', { book: book.id, message: error.message, code: error.code });
+      throw error;
+    }
+    let png;
+    try {
+      png = await processDocument(() => renderPage(pdf, page, req.user.phone));
+    } catch (error) {
+      console.error('Book download render failed', { book: book.id, page, message: error.message, stack: error.stack });
+      throw error;
+    }
     res.attachment(`${book.title}-page-${page}.png`).type('png').send(png);
   });
 
   api.use('/admin', admin);
+  api.post('/admin/videos', async (req, res) => {
+    const input = String(req.body?.url || '');
+    let videoId = '';
+    try {
+      const url = new URL(input);
+      if (url.hostname === 'youtu.be') videoId = url.pathname.slice(1).split('/')[0];
+      else if (url.hostname.endsWith('youtube.com')) videoId =
+        url.searchParams.get('v') || url.pathname.split('/').filter(Boolean).at(-1);
+    } catch { /* Invalid URL rejected below. */ }
+    if (!/^[A-Za-z0-9_-]{11}$/.test(videoId)) fail(422, 'Enter a valid YouTube video URL.');
+    const selectedCourse = typeof req.body?.course === 'string' ? req.body.course : '';
+    if (selectedCourse) await course(selectedCourse);
+    const id = await createWithId('videos', {
+      title: text(req.body?.title, 'Video title', 120),
+      description: text(req.body?.description, 'Description', 1000),
+      videoId, course: selectedCourse,
+    });
+    res.status(201).json({ id, videoId });
+  });
+  api.get('/admin/payment-settings', async (_req, res) => res.json(await paymentDetails()));
+  api.put('/admin/payment-settings', async (req, res) => {
+    const method = req.body?.method;
+    if (!['upi', 'qr', 'both'].includes(method)) fail(422, 'Choose UPI, QR code, or both.');
+    const existing = value(await db.collection('settings').doc('payment').get()) || {};
+    const upi = upiDetails({ upiId: req.body?.upiId, payeeName: req.body?.payeeName });
+    if (method !== 'qr' && !upi.configured) fail(422, 'Enter a valid UPI ID and payee name.');
+    if (method !== 'upi' && !existing.customQr) fail(422, 'Upload a payment QR image before enabling QR checkout.');
+    await db.collection('settings').doc('payment').set({
+      method, upiId: req.body?.upiId || '', payeeName: text(req.body?.payeeName, 'Payee name', 100),
+      customQr: Boolean(existing.customQr), qrType: existing.qrType || '',
+    });
+    res.sendStatus(204);
+  });
+  api.post('/admin/payment-qr', express.raw({ type: /^image\//, limit: '2mb', inflate: false }), async (req, res) => {
+    if (!Buffer.isBuffer(req.body) || req.body.length < 8) fail(400, 'Upload a non-empty PNG, JPEG, or WebP QR image.');
+    const type = req.get('Content-Type') || '';
+    if (!/^image\/(png|jpeg|webp)$/i.test(type)) fail(422, 'Upload a PNG, JPEG, or WebP QR image.');
+    await bucket.file('payment-config/qr').save(req.body, {
+      resumable: false, contentType: type, metadata: { cacheControl: 'public, max-age=300' },
+    });
+    await db.collection('settings').doc('payment').set({ customQr: true, qrType: type }, { merge: true });
+    res.status(201).json({ configured: true });
+  });
   api.get('/admin/students', async (_req, res) => {
     res.json((await queryCollection('students')).sort((a, b) =>
       String(a.name || a.phone).localeCompare(String(b.name || b.phone))).slice(0, 500)
@@ -683,11 +822,14 @@ function createApp() {
   api.post('/admin/content/:kind', async (req, res) => {
     const kind = req.params.kind;
     if (!['current-affairs', 'pyqs', 'syllabus', 'free-tests'].includes(kind)) fail(422, 'Choose a valid content section.');
+    const publishedAt = typeof req.body?.publishedAt === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(req.body.publishedAt)
+      ? req.body.publishedAt : new Date().toISOString().slice(0, 10);
     const id = await createWithId('resources', {
       kind,
       title: text(req.body?.title, 'Title', 120),
       summary: text(req.body?.summary, 'Summary', 300),
       body: text(req.body?.body, 'Content', 10_000),
+      publishedAt,
     });
     res.status(201).json({ id });
   });
@@ -704,7 +846,8 @@ function createApp() {
           course: sample.id, title: sample.test, questions: sample.questions, createdAt,
         }, { merge: true }),
         db.collection('books').doc(bookId).set({
-          course: sample.id, title: sample.book, pages: 1, createdAt,
+          course: sample.id, title: sample.book, pages: 1, subject: 'Foundation',
+          chapter: 'Chapter 1: Getting Started', createdAt,
         }, { merge: true }),
         bucket.file(`books/${bookId}.pdf`).save(await sampleBookPdf(sample.book), {
           resumable: false, contentType: 'application/pdf', metadata: { cacheControl: 'private, no-store' },
@@ -713,6 +856,7 @@ function createApp() {
     }));
     await Promise.all(sampleResources.map(resource => db.collection('resources').doc(resource.id).set({
       kind: resource.kind, title: resource.title, summary: resource.summary, body: resource.body,
+      publishedAt: resource.publishedAt || new Date().toISOString().slice(0, 10),
       createdAt: new Date().toISOString(),
     }, { merge: true })));
     res.json({ courses: sampleCourses.length, resources: sampleResources.length });
@@ -751,7 +895,10 @@ function createApp() {
     const file = bucket.file(`books/${id}.pdf`);
     await file.save(req.body, { resumable: false, contentType: 'application/pdf', metadata: { cacheControl: 'private, no-store' } });
     try {
-      await db.collection('books').doc(id).create({ course: courseId, title, pages, createdAt: new Date().toISOString() });
+      await db.collection('books').doc(id).create({
+        course: courseId, title, pages, subject: text(req.query.subject || 'General', 'Subject', 100),
+        chapter: text(req.query.chapter || 'Chapter 1', 'Chapter', 120), createdAt: new Date().toISOString(),
+      });
     } catch (error) {
       await file.delete({ ignoreNotFound: true });
       throw error;
@@ -809,9 +956,15 @@ function createApp() {
       const order = value(snapshot);
       if (!order) fail(404, 'Payment request not found.');
       if (order.paymentStatus !== 'pending') fail(409, 'Only pending requests can be rejected.');
+      const referralRef = order.creditsUsed ? db.collection('referrals').doc(order.uid) : null;
+      if (referralRef) {
+        const referral = value(await transaction.get(referralRef));
+        transaction.set(referralRef, { credits: Number(referral?.credits || 0) + order.creditsUsed }, { merge: true });
+      }
       transaction.update(orderRef, {
         payment: '',
         paymentStatus: 'rejected',
+        creditsUsed: 0,
         reviewedAt: new Date().toISOString(),
         reviewedBy: req.user.uid,
         reviewNote,
