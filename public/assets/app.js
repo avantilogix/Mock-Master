@@ -166,11 +166,7 @@ function showProfile(ctx) {
         el('p', {class: 'account-id'}, 'Firebase account ID: ', el('code', {}, session.me.uid || 'Unavailable')))),
       el('div', {class: 'profile-purchase section'},
         el('div', {}, el('strong', {}, String(session.me?.purchases?.length || 0)), el('span', {class: 'muted'}, 'Courses Unlocked')),
-        el('div', {}, el('strong', {}, 'Secure'), el('span', {class: 'muted'}, 'Protected Learning Access'))),
-      el('div', {class: 'actions section'}, link('Explore Courses', '#catalog', 'button'),
-        link('Share & Rate App', '#share-app', 'button secondary'),
-        link('Course Groups', '#groups', 'button secondary'),
-        link('Referrals', '#referrals', 'button secondary'), socialFooter(ctx), signOut, disable)));
+        el('div', {}, el('strong', {}, 'Secure'), el('span', {class: 'muted'}, 'Protected Learning Access'))));
   if (!session.me) {
     main.append(panel('Display Name', profileUnavailable()));
     return;
@@ -185,7 +181,24 @@ function showProfile(ctx) {
     session.me.name = typeof result?.name === 'string' ? result.name : name;
     say(feedback, 'Display name saved.');
   }, 'Saving name…');
-  main.append(panel('Display Name', el('div', {class: 'narrow'}, form)));
+  const profileAction = (iconName, title, description, href) => link('', href, 'profile-menu-row').append(
+    icon(iconName, 'line-icon profile-menu-icon'),
+    el('span', {}, el('strong', {}, title), el('small', {}, description)),
+    el('span', {class: 'profile-menu-arrow', 'aria-hidden': 'true'}, '→'));
+  main.append(
+    panel('Profile Details', el('div', {class: 'narrow'}, form)),
+    panel('Learning', el('div', {class: 'profile-menu'},
+      profileAction('missions', 'Explore Courses', 'Browse missions and available content', '#catalog'),
+      profileAction('courses', 'My Courses', 'Continue purchased missions', '#my-courses'),
+      profileAction('chat', 'Course Groups', 'Open purchaser-only text groups', '#groups'))),
+    panel('Community', el('div', {class: 'profile-menu'},
+      profileAction('gift', 'Referrals', 'Share your code and view earned credits', '#referrals'),
+      profileAction('share', 'Share & Rate App', 'Invite friends or review Mission Selection', '#share-app')),
+      el('div', {class: 'profile-social'}, el('span', {class: 'muted'}, 'Follow Mission Selection'),
+        socialFooter(ctx))),
+    panel('Account Actions', el('div', {class: 'account-actions'}, signOut),
+      el('div', {class: 'danger-zone'}, el('div', {}, el('strong', {}, 'Disable Account'),
+        el('p', {class: 'muted'}, 'You can contact support later to request reactivation.')), disable, feedback)));
 }
 
 function showSupport(ctx) {

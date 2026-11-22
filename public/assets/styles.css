@@ -158,6 +158,29 @@ fieldset { margin: 0; min-width: 0; border-radius: .7rem; }
 .material-link { display: flex; align-items: center; gap: .65rem; font-weight: 750; }
 .material-link::before { content: ""; width: .65rem; height: .65rem; border-radius: 50%; background: var(--sun); box-shadow: 0 0 0 4px #fff5dc; }
 .profile-summary { display: grid; grid-template-columns: auto 1fr; gap: 1rem; align-items: center; }
+.profile-menu { display: grid; }
+.profile-menu-row { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: .8rem; min-height: 4.25rem; padding: .7rem .1rem; border-bottom: 1px solid var(--line); color: var(--ink); text-decoration: none; }
+.profile-menu-row:last-child { border-bottom: 0; }
+.profile-menu-row > span { display: grid; min-width: 0; gap: .15rem; }
+.profile-menu-row strong { color: var(--ink); }
+.profile-menu-row small { color: var(--muted); }
+.profile-menu-icon { width: 2.2rem; height: 2.2rem; padding: .35rem; border-radius: .7rem; color: var(--accent-dark); background: var(--accent-soft); }
+.profile-menu-row .profile-menu-arrow { display: block; color: var(--muted); font-size: 1.15rem; }
+.profile-social { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--line); }
+.profile-social > span { display: block; margin-bottom: .55rem; }
+.account-actions { display: grid; }
+.account-actions button { width: 100%; }
+.danger-zone { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 1rem; margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--line); }
+.danger-zone p { margin: .15rem 0 0; }
+.danger-zone .danger { justify-self: end; }
+@media (max-width: 700px) {
+  .profile-menu-row { min-height: 4.5rem; padding-inline: .25rem; }
+  .profile-menu-row small { font-size: .78rem; line-height: 1.35; }
+  .danger-zone { grid-template-columns: 1fr; }
+  .danger-zone .danger { justify-self: stretch; }
+  .profile-social .social-links { display: grid; grid-template-columns: repeat(3, 1fr); }
+  .profile-social .social-links a { text-align: center; }
+}
 .account-id { margin: .2rem 0 0; color: var(--muted); font-size: .78rem; }
 .account-id code { display: inline-block; max-width: 100%; color: var(--accent-dark); overflow-wrap: anywhere; }
 .avatar { display: grid; place-items: center; width: 4rem; height: 4rem; border-radius: 1.3rem; background: var(--navy); color: white; font-size: 1.5rem; font-weight: 850; }
