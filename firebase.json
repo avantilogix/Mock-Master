@@ -24,7 +24,9 @@
     "public": "public",
     "ignore": [
       "firebase.json",
-      "**/.*",
+      "**/.env*",
+      ".firebase/**",
+      ".git/**",
       "node_modules/**"
     ],
     "headers": [

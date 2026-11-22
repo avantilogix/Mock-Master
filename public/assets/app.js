@@ -106,14 +106,14 @@ async function initializeProfile(current) {
 
 function renderNav(parsed) {
   const catalogActive = ['catalog', 'course', 'test', 'book', 'test-series', 'book-store', 'materials'].includes(parsed.page);
-  const navLink = (label, glyph, href, active) => el('a', {href, 'aria-current': active ? 'page' : null},
-    el('span', {class: 'nav-indicator'}, icon(glyph, 'line-icon')), el('span', {class: 'nav-label'}, label));
-  nav.replaceChildren(navLink('Home', 'home', '#home', parsed.page === 'home'),
-    navLink('Missions', 'missions', '#catalog', catalogActive),
-    navLink('My Courses', 'courses', '#my-courses', parsed.page === 'my-courses'),
-    navLink('Progress', 'progress', '#progress', parsed.page === 'progress'),
-    session ? navLink('Profile', 'profile', '#profile', parsed.page === 'profile') : navLink('Sign In', 'profile', '#signin', parsed.page === 'signin'));
-  if (session?.me?.admin) nav.append(navLink('Admin', 'admin', '#admin', parsed.page === 'admin'));
+  const navLink = (label, short, glyph, href, active) => el('a', {href, 'data-short': short, 'aria-label': label, 'aria-current': active ? 'page' : null},
+    el('span', {class: 'nav-indicator'}, icon(glyph, 'line-icon')), el('span', {class: 'nav-label', 'data-short': short}, label));
+  nav.replaceChildren(navLink('Home', 'Home', 'home', '#home', parsed.page === 'home'),
+    navLink('Missions', 'Store', 'missions', '#catalog', catalogActive),
+    navLink('My Courses', 'My', 'courses', '#my-courses', parsed.page === 'my-courses'),
+    navLink('Progress', 'Stats', 'progress', '#progress', parsed.page === 'progress'),
+    session ? navLink('Profile', 'Me', 'profile', '#profile', parsed.page === 'profile') : navLink('Sign In', 'Sign in', 'profile', '#signin', parsed.page === 'signin'));
+  if (session?.me?.admin) nav.append(navLink('Admin', 'Admin', 'admin', '#admin', parsed.page === 'admin'));
   nav.style.setProperty('--nav-count', nav.children.length);
 }
 

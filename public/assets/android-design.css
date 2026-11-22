@@ -266,10 +266,20 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px
 
 @media (max-width: 360px) {
   :root { --gutter: .75rem; }
+  #nav a { gap: .12rem; min-height: 3.6rem; padding-inline: 0; }
+  #nav .nav-label { font-size: 0; line-height: 1; }
+  #nav .nav-label::after { content: attr(data-short); font-size: .55rem; }
   .shortcut strong { font-size: .9rem; }
   .stat-tile { flex-wrap: wrap; gap: .15rem .45rem; }
   .auth-card-title { align-items: flex-start; }
   .progress-tile span { font-size: .75rem; }
+}
+
+@media (max-width: 420px) {
+  #nav a .nav-label { max-width: 100%; white-space: nowrap; letter-spacing: -.025em; }
+  #nav a { font-size: .64rem; }
+  .site-header .brand { min-width: 0; }
+  .site-header .brand > span { min-width: 0; }
 }
 
 @media (max-width: 700px) and (hover: none) and (pointer: coarse) {
