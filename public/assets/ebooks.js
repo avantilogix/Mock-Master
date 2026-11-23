@@ -136,8 +136,21 @@ export function showEbook(main, ctx, bookId, action) {
 async function buttonDownload(ctx, book, control, feedback) {
   await run(control, feedback, async () => {
     const blob = await api(`/ebooks/${idPart(book.id)}/download`, {ctx, auth: true, blob: true});
+    const filename = `${book.title.replace(/[^\\w .-]+/g, '_')}-protected.pdf`;
+    if (window.MissionSelectionDownloads?.savePdf) {
+      const bytes = new Uint8Array(await blob.arrayBuffer());
+      let binary = '';
+      for (let index = 0; index < bytes.length; index += 0x8000) {
+        binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000));
+      }
+      if (!window.MissionSelectionDownloads.savePdf(filename, btoa(binary))) {
+        throw new Error('The protected PDF could not be saved. Check device storage permission.');
+      }
+      say(feedback, 'Protected PDF saved to Downloads.');
+      return;
+    }
     const url = URL.createObjectURL(blob);
-    const anchor = el('a', {href: url, download: `${book.title}-protected.pdf`});
+    const anchor = el('a', {href: url, download: filename});
     document.body.append(anchor); anchor.click(); anchor.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
     say(feedback, 'Protected PDF downloaded.');
