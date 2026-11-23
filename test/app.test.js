@@ -102,7 +102,7 @@ test('admin approval grants only the confirmed student access to their course, t
   assert.equal(created.status, 201);
   const { id } = await created.json();
   const path = `/courses/${id}`;
-  assert.deepEqual(await (await request('/courses')).json(), [{ id, ...course }]);
+  assert.deepEqual(await (await request('/courses')).json(), [{ id, ...course, downloadsEnabled: 0 }]);
   const createdTest = await request(`/admin${path}/tests`, 'admin', 'POST', { title: 'Practice test', questions });
   assert.equal(createdTest.status, 201);
   const testPath = `/tests/${(await createdTest.json()).id}`;
@@ -205,6 +205,11 @@ test('admin approval grants only the confirmed student access to their course, t
     assert.equal(page.headers.get('cache-control'), 'no-store');
     assert.equal(page.headers.get('content-type'), 'image/png');
     assert.equal(Buffer.from(await page.arrayBuffer()).subarray(1, 4).toString(), 'PNG');
+    const downloadPath = `${pagePath}/download`;
+    assert.equal((await request(downloadPath, 'buyer')).status, 403);
+    assert.equal((await request(`/admin/published/courses/${id}`, 'admin', 'PUT',
+      {...course, downloadsEnabled: true})).status, 204);
+    assert.equal((await request(downloadPath, 'buyer')).headers.get('content-type'), 'image/png');
   }
   assert.equal((await request(`/admin/payments/${requestId}/reject`, 'admin', 'POST',
     {note: 'Payment reversed'})).status, 204);
@@ -258,7 +263,12 @@ test('chapter videos upload for admins and stream only through signed links for 
   assert.equal(file.status, 200);
   assert.equal(file.headers.get('content-type'), 'video/mp4');
   assert.deepEqual(Buffer.from(await file.arrayBuffer()), mp4);
-  const download = await fetch(`${origin}${url}&download=1`);
+  assert.equal((await request(`/admin/published/courses/${id}`, 'admin', 'PUT',
+    JSON.stringify({title: 'Video Course', description: 'Secure videos', price: 14900, downloadsEnabled: true}),
+    'application/json')).status, 204);
+  const downloadLink = await request(`/videos/${videoId}/link?download=1`, 'buyer');
+  const downloadUrl = (await downloadLink.json()).url;
+  const download = await fetch(`${origin}${downloadUrl}`);
   assert.match(download.headers.get('content-disposition'), /attachment; filename="Algebra Lesson\.mp4"/);
   assert.equal((await fetch(origin + url, { headers: { Range: 'bytes=0-3' } })).status, 206);
 
@@ -477,4 +487,46 @@ test('live leaderboard is private, rank ordered, and locked until expiry', async
   assert.equal(board.rows[0].isCurrentUser, true);
   assert.equal(board.rows[1].name, 'B.');
   assert.equal(JSON.stringify(board).includes('+919000000062'), false);
+});
+
+test('live question paper downloads unlock after one attempt without consuming attempts', async t => {
+  const db = openDatabase(':memory:');
+  const users = new Map([['student', {uid: 'student', phone: '+919000000071'}],
+    ['admin', {uid: 'admin', phone: '+919000000072'}]]);
+  const server = createApp({db, verifyToken: async token => users.get(token), adminUids: ['admin']})
+    .listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  t.after(() => new Promise(resolve => server.close(() => {db.close(); resolve();})));
+  const base = `http://127.0.0.1:${server.address().port}/api`;
+  const request = (path, user, method = 'GET', body) => fetch(base + path, {
+    method,
+    headers: {Authorization: ['Bearer', user].join(' '), ...(body === undefined ? {} : {'Content-Type':'application/json'})},
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  db.prepare('INSERT OR IGNORE INTO students (uid,phone) VALUES (?,?)').run('student', users.get('student').phone);
+  const createdCourse = await request('/admin/courses', 'admin', 'POST',
+    {title: 'Live Download', description: 'Test', price: 10000});
+  const {id: courseId} = await createdCourse.json();
+  db.prepare('INSERT INTO orders (id,uid,course,amount,payment) VALUES (?,?,?,?,?)')
+    .run('download-order', 'student', courseId, 10000, 'paid');
+  const question = [{prompt: 'Capital of India?', options: ['Delhi', 'Mumbai'], answer: 0, section: 'General'}];
+  const createdTest = await request(`/admin/courses/${courseId}/tests`, 'admin', 'POST',
+    {title: 'Live Final', questions: question, live: true, startsAt: '2026-01-01T09:00',
+      expiresAt: '2099-01-01T09:00', durationMinutes: 30, attemptsLimit: 3,
+      marksPerQuestion: 1, negativeMark: 0, questionPaperDownload: true});
+  assert.equal(createdTest.status, 201);
+  const {id: testId} = await createdTest.json();
+  assert.equal((await request(`/tests/${testId}/question-paper.pdf`, 'student')).status, 403);
+  assert.equal((await request(`/tests/${testId}/start`, 'student', 'POST')).status, 201);
+  assert.equal((await request(`/tests/${testId}/submit`, 'student', 'POST', {answers:[0]})).status, 200);
+  const before = db.prepare('SELECT COUNT(*) AS count FROM attempts WHERE uid=? AND test=?').get('student', testId).count;
+  const paper = await request(`/tests/${testId}/question-paper.pdf`, 'student');
+  assert.equal(paper.status, 200);
+  assert.equal(paper.headers.get('content-type'), 'application/pdf');
+  assert.equal(Buffer.from(await paper.arrayBuffer()).subarray(0, 4).toString(), '%PDF');
+  const after = db.prepare('SELECT COUNT(*) AS count FROM attempts WHERE uid=? AND test=?').get('student', testId).count;
+  assert.equal(after, before);
+  assert.equal((await request(`/admin/published/tests/${testId}`, 'admin', 'PUT',
+    {title: 'Live Final', questions: question, questionPaperDownload: false})).status, 204);
+  assert.equal((await request(`/tests/${testId}/question-paper.pdf`, 'student')).status, 403);
 });

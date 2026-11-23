@@ -62,6 +62,53 @@ async function protectedPdf(source, pages, phone) {
   return Buffer.from(await output.save());
 }
 
+async function questionPaperPdf(test, phone) {
+    const pdf = await PDFDocument.create();
+    const regular = await pdf.embedFont(StandardFonts.Helvetica);
+    const bold = await pdf.embedFont(StandardFonts.HelveticaBold);
+    let page = pdf.addPage([595, 842]);
+    let y = 792;
+    const wrap = (value, font, size, maxWidth) => {
+      const lines = [];
+      let current = '';
+      for (const word of String(value || '').split(/\s+/)) {
+        const next = current ? `${current} ${word}` : word;
+        if (current && font.widthOfTextAtSize(next, size) > maxWidth) {
+          lines.push(current); current = word;
+        } else current = next;
+      }
+      if (current) lines.push(current);
+      return lines;
+    };
+    const ensure = amount => { if (y - amount < 55) { page = pdf.addPage([595, 842]); y = 792; } };
+    page.drawText('MISSION SELECTION', {x: 42, y, size: 11, font: bold}); y -= 28;
+    for (const line of wrap(test.title, bold, 19, 511)) {
+      page.drawText(line, {x: 42, y, size: 19, font: bold}); y -= 24;
+    }
+    page.drawText(`Duration: ${test.durationMinutes || 90} minutes   Marks: ${test.marksPerQuestion || 1}`,
+      {x: 42, y, size: 10, font: regular}); y -= 18;
+    page.drawText(`Negative marking: ${test.negativeMark || 0}   Candidate: ${phone}`,
+      {x: 42, y, size: 10, font: regular}); y -= 28;
+    test.questions.forEach((question, index) => {
+      ensure(55);
+      page.drawText(`Q${index + 1}. [${question.section || 'General'}]`, {x: 42, y, size: 10, font: bold}); y -= 17;
+      for (const line of wrap(question.prompt, regular, 11, 501)) {
+        ensure(18); page.drawText(line, {x: 52, y, size: 11, font: regular}); y -= 16;
+      }
+      question.options.forEach((option, optionIndex) => {
+        for (const line of wrap(`${String.fromCharCode(65 + optionIndex)}. ${option}`, regular, 10, 485)) {
+          ensure(15); page.drawText(line, {x: 66, y, size: 10, font: regular}); y -= 14;
+        }
+      });
+      y -= 9;
+    });
+    for (const current of pdf.getPages()) {
+      current.drawText(`Licensed to ${phone}`, {x: 210, y: 28, size: 9, font: regular, opacity: .55});
+      current.drawText('Mission Selection - Protected Question Paper', {x: 42, y: 812, size: 8, font: regular, opacity: .25});
+    }
+    return Buffer.from(await pdf.save());
+}
+
 function idFor(...parts) {
   return createHash('sha256').update(parts.join('\0')).digest('base64url');
 }
@@ -84,6 +131,7 @@ function publicCourse(item) {
     title: item.title,
     description: item.description,
     price: item.price,
+    downloadsEnabled: Boolean(item.downloadsEnabled),
     images: item.images || [],
     expiresOn: item.expiresOn || '',
     expired: (courseCutoff(item.expiresOn) ?? Infinity) <= Date.now(),
@@ -431,11 +479,17 @@ function createApp() {
     res.status(201).json({ id, amount, status: 'pending' });
   });
   api.get('/courses/:id', async (req, res) => {
-    const { id } = await course(req.params.id);
+    const selected = await course(req.params.id);
+    const { id } = selected;
     await requirePurchase(req.user, id);
-    const tests = (await db.collection('tests').where('course', '==', id).get()).docs.map(value).sort(byNewest).reverse()
-      .map(item => ({ id: item.id, title: item.title, live: Boolean(item.live),
-        startsAt: item.startsAt || '', expiresAt: item.expiresAt || '', durationMinutes: item.durationMinutes || 0 }));
+    const rawTests = (await db.collection('tests').where('course', '==', id).get()).docs.map(value).sort(byNewest).reverse();
+    const completed = (await db.collection('attempts').where('uid', '==', req.user.uid)
+      .where('course', '==', id).get()).docs.map(value);
+    const completedTests = new Set(completed.map(attempt => attempt.test));
+    const tests = rawTests.map(item => ({ id: item.id, title: item.title, live: Boolean(item.live),
+      startsAt: item.startsAt || '', expiresAt: item.expiresAt || '', durationMinutes: item.durationMinutes || 0,
+      questionPaperDownload: Boolean(item.questionPaperDownload),
+      completedAttempt: completedTests.has(item.id) }));
     const books = (await db.collection('books').where('course', '==', id).get()).docs.map(value)
       .sort((a, b) => `${a.subject || ''}${a.chapter || ''}`.localeCompare(`${b.subject || ''}${b.chapter || ''}`))
       .map(item => ({ id: item.id, title: item.title, pages: item.pages,
@@ -497,6 +551,7 @@ function createApp() {
     const item = snapshot.docs.map(value)[0];
     const referral = value(await db.collection('referrals').doc(req.user.uid).get());
     res.json({
+      downloadsEnabled: Boolean(selected.downloadsEnabled),
       amount: price,
       credits: referral?.credits || 0,
       payment: { ...await paymentDetails(), qr: `/api/courses/${id}/payment-qr` },
@@ -675,6 +730,7 @@ function createApp() {
       limited,
       marksPerQuestion: item.marksPerQuestion || 1,
       negativeMark: item.negativeMark || 0,
+      questionPaperDownload: Boolean(item.questionPaperDownload), completedAttempt: attempts > 0,
       sections,
       questions: item.questions.map(({ prompt, options, section }) => ({
         prompt, options, section: section || 'General',
@@ -774,6 +830,7 @@ function createApp() {
       elapsedSeconds: Math.min(elapsed, maxSeconds),
       sectionScores,
       timedOut,
+      questionPaperDownload: Boolean(item.live && item.questionPaperDownload),
     };
     await createWithId('attempts', {
       uid: req.user.uid,
@@ -790,6 +847,17 @@ function createApp() {
     });
     await active.docs[0].ref.update({ active: false });
     res.json(result);
+  });
+  api.get('/tests/:id/question-paper.pdf', async (req, res) => {
+    const item = await test(req.params.id);
+    await requirePurchase(req.user, item.course);
+    if (!item.live) fail(404, 'Question paper download is available for live tests only.');
+    if (!item.questionPaperDownload) fail(403, 'Question paper download is disabled by the admin.');
+    const attempt = await db.collection('attempts').where('uid', '==', req.user.uid)
+      .where('test', '==', item.id).limit(1).get();
+    if (attempt.empty) fail(403, 'Complete your first test attempt before downloading the question paper.');
+    const pdf = await questionPaperPdf(item, req.user.phone);
+    res.type('pdf').attachment(`${item.title.replace(/[^a-z0-9 ._-]+/gi, '_')}-question-paper.pdf`).send(pdf);
   });
   api.get('/tests/:id/leaderboard', async (req, res) => {
     const item = await test(req.params.id);
@@ -917,6 +985,8 @@ function createApp() {
     const book = value(await db.collection('books').doc(req.params.id).get());
     if (!book) fail(404, 'Book not found.');
     await requirePurchase(req.user, book.course);
+    const selectedCourse = value(await db.collection('courses').doc(book.course).get());
+    if (!selectedCourse?.downloadsEnabled) fail(403, 'Downloads are disabled for this course.');
     const page = Number(req.params.page);
     if (!Number.isSafeInteger(page) || page < 1 || page > book.pages) fail(404, 'Page not found.');
     let pdf;
@@ -1234,7 +1304,7 @@ function createApp() {
     const { id: courseId } = await course(req.params.id);
     const {
       title, questions, live, startsAt, expiresAt, durationMinutes, attemptsLimit,
-      marksPerQuestion, negativeMark,
+      marksPerQuestion, negativeMark, questionPaperDownload = false,
     } = req.body ?? {};
     let scheduled = '';
     let expiration = '';
@@ -1265,6 +1335,7 @@ function createApp() {
       fail(422, 'Negative mark must be from 0–100.');
     }
     const validQuestions = validateQuestions(questions);
+    if (typeof questionPaperDownload !== 'boolean') fail(422, 'Choose a valid question paper download option.');
     const id = await createWithId('tests', {
       course: courseId,
       title: text(title, 'Title', 120),
@@ -1276,6 +1347,7 @@ function createApp() {
       attemptsLimit: attempts,
       marksPerQuestion: marks,
       negativeMark: negative,
+      questionPaperDownload: Boolean(live) && questionPaperDownload,
       sections: [...new Set(validQuestions.map(question => question.section))],
     });
     res.status(201).json({ id });

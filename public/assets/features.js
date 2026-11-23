@@ -261,7 +261,8 @@ export function showDownloads(main, ctx, action) {
   loadInto(loader, ctx, async () => {
     const courses = await api('/courses', {ctx});
     const me = await api('/me', {ctx, auth: true});
-    const owned = courses.filter(course => !course.expired && me.purchases.some(id => String(id) === String(course.id)));
+    const owned = courses.filter(course => !course.expired && course.downloadsEnabled &&
+      me.purchases.some(id => String(id) === String(course.id)));
     const rows = [];
     const videoRows = [];
     for (const course of owned) {

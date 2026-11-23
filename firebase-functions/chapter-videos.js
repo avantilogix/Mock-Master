@@ -14,6 +14,10 @@ export function registerVideoRoutes(api, { db, bucket, value, text, course, requ
     if (!item) fail(404, 'Chapter video not found.');
     const cutoff = await requirePurchase(req.user, item.course);
     const download = req.query.download === '1';
+    if (download) {
+      const selectedCourse = value(await db.collection('courses').doc(item.course).get());
+      if (!selectedCourse?.downloadsEnabled) fail(403, 'Downloads are disabled for this course.');
+    }
     const filename = item.title.replace(/[^\w .-]+/g, '_').trim() || 'chapter-video';
     const [url] = await bucket.file(pathFor(item.id)).getSignedUrl({
       version: 'v4', action: 'read', expires: Math.min(Date.now() + 60 * 60_000, cutoff ?? Infinity),

@@ -51,6 +51,69 @@ async function protectedPdf(source, pages, phone) {
   return Buffer.from(await output.save());
 }
 
+async function questionPaperPdf(test, phone) {
+    const pdf = await PDFDocument.create();
+    const regular = await pdf.embedFont(StandardFonts.Helvetica);
+    const bold = await pdf.embedFont(StandardFonts.HelveticaBold);
+    const width = 595;
+    const height = 842;
+    let page = pdf.addPage([width, height]);
+    let y = 792;
+    const addPage = () => {
+      page = pdf.addPage([width, height]);
+      y = 792;
+    };
+    const ensure = needed => { if (y - needed < 55) addPage(); };
+    const wrap = (value, font, size, maxWidth) => {
+      const words = String(value || '').split(/\s+/);
+      const lines = [];
+      let line = '';
+      for (const word of words) {
+        const candidate = line ? `${line} ${word}` : word;
+        if (font.widthOfTextAtSize(candidate, size) > maxWidth && line) {
+          lines.push(line);
+          line = word;
+        } else line = candidate;
+      }
+      if (line) lines.push(line);
+      return lines;
+    };
+    page.drawText('MISSION SELECTION', {x: 42, y, size: 11, font: bold});
+    y -= 28;
+    for (const line of wrap(test.title, bold, 19, width - 84)) {
+      page.drawText(line, {x: 42, y, size: 19, font: bold});
+      y -= 24;
+    }
+    page.drawText(`Duration: ${test.durationMinutes || test.duration_minutes || 90} minutes   Marks: ${(test.marksPerQuestion || test.marks_per_question || 1)}`,
+      {x: 42, y, size: 10, font: regular});
+    y -= 18;
+    page.drawText(`Negative marking: ${(test.negativeMark || test.negative_mark || 0)}   Candidate: ${phone}`,
+      {x: 42, y, size: 10, font: regular});
+    y -= 28;
+    const questions = Array.isArray(test.questions) ? test.questions : JSON.parse(test.questions);
+    questions.forEach((question, index) => {
+      ensure(55);
+      const heading = `Q${index + 1}. [${question.section || 'General'}]`;
+      page.drawText(heading, {x: 42, y, size: 10, font: bold}); y -= 17;
+      for (const line of wrap(question.prompt, regular, 11, width - 94)) {
+        ensure(18);
+        page.drawText(line, {x: 52, y, size: 11, font: regular}); y -= 16;
+      }
+      question.options.forEach((option, optionIndex) => {
+        for (const line of wrap(`${String.fromCharCode(65 + optionIndex)}. ${option}`, regular, 10, width - 110)) {
+          ensure(15);
+          page.drawText(line, {x: 66, y, size: 10, font: regular}); y -= 14;
+        }
+      });
+      y -= 9;
+    });
+    for (const current of pdf.getPages()) {
+      current.drawText(`Licensed to ${phone}`, {x: 210, y: 28, size: 9, font: regular, opacity: .55});
+      current.drawText('Mission Selection - Protected Question Paper', {x: 42, y: 812, size: 8, font: regular, opacity: .25});
+    }
+    return Buffer.from(await pdf.save());
+}
+
 export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, adminUids = [], adminPhones = [],
   trustLocalProxy = false,
   videoDir = join(tmpdir(), 'mock-master-videos'), dummyLogin = false }) {
@@ -157,7 +220,8 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     const rows = all('SELECT key, value FROM settings WHERE key IN (?, ?, ?)', 'youtube', 'instagram', 'telegram');
     res.json(Object.fromEntries(rows.map(row => [row.key, row.value])));
   });
-  api.get('/courses', (_req, res) => res.json(all('SELECT id, title, description, price FROM courses ORDER BY rowid DESC')));
+  api.get('/courses', (_req, res) => res.json(all(`SELECT id, title, description, price,
+    downloads_enabled AS downloadsEnabled FROM courses ORDER BY rowid DESC`)));
   api.get('/ebooks', (_req, res) => res.json(all(
     'SELECT id, title, description, price, pages, created_at AS createdAt FROM ebooks ORDER BY rowid DESC')));
   api.get('/courses/:id/payment-qr', async (req, res) => {
@@ -205,7 +269,11 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     if (!video) fail(404, 'Video not found.');
     if (one('SELECT 1 FROM students WHERE uid=? AND disabled', uid)) fail(403, 'This account is disabled. Contact support to request reactivation.');
     if (!admins.has(uid) && !owns(uid, video.course)) fail(403, 'Purchase this course to unlock it.');
-    if (req.query.download === '1') res.attachment(`${video.title.replace(/[^\w .-]+/g, '_')}.${videoTypes[video.type] || 'mp4'}`);
+    if (req.query.download === '1') {
+      const selectedCourse = one('SELECT downloads_enabled FROM courses WHERE id=?', video.course);
+      if (!selectedCourse?.downloads_enabled) fail(403, 'Downloads are disabled for this course.');
+      res.attachment(`${video.title.replace(/[^\w .-]+/g, '_')}.${videoTypes[video.type] || 'mp4'}`);
+    }
     res.sendFile(videoPath(video.id), { headers: { 'Content-Type': video.type } });
   });
   api.use(authLimit, login);
@@ -275,11 +343,14 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     res.status(201).json({ id, amount: quantity * book.price, status: 'pending' });
   });
   api.get('/courses/:id', (req, res) => {
-    const { id } = course(req.params.id);
+    const { id, downloads_enabled: downloadsEnabled } = course(req.params.id);
     requirePurchase(req, id);
     res.json({
-      tests: all(`SELECT id, title, live, starts_at AS startsAt, expires_at AS expiresAt,
-        duration_minutes AS durationMinutes FROM tests WHERE course=? ORDER BY rowid`, id),
+      downloadsEnabled: Boolean(downloadsEnabled),
+      tests: all(`SELECT t.id, t.title, t.live, t.starts_at AS startsAt, t.expires_at AS expiresAt,
+        t.duration_minutes AS durationMinutes, t.question_paper_download AS questionPaperDownload,
+        EXISTS(SELECT 1 FROM attempts a WHERE a.test=t.id AND a.uid=?) AS completedAttempt
+        FROM tests t WHERE t.course=? ORDER BY t.rowid`, req.user.uid, id),
       books: all('SELECT id, title, pages, subject, chapter FROM books WHERE course=? ORDER BY subject, chapter, rowid', id),
       videos: all('SELECT id, title, subject, chapter, type, size FROM chapter_videos WHERE course=? ORDER BY subject, chapter, rowid', id),
       messages: all(`SELECT COALESCE(NULLIF(s.name, ''), 'Student') AS name, m.text
@@ -420,6 +491,7 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
       title: row.title, live: Boolean(row.live), startsAt: row.starts_at, expiresAt: row.expires_at,
       durationMinutes: row.duration_minutes || 90, attempts, attemptsLimit: row.live ? (row.attempts_limit || 2) : 0,
       limited: Boolean(limited), marksPerQuestion: row.marks_per_question || 1, negativeMark: row.negative_mark || 0, sections,
+      questionPaperDownload: Boolean(row.question_paper_download), completedAttempt: attempts > 0,
       questions: JSON.parse(row.questions).map(({ prompt, options, section }) => ({ prompt, options, section: section || 'General' })),
     });
   });
@@ -486,12 +558,23 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     }, {}));
     const result = { score, total, correct, wrong, unanswered: questions.length - correct - wrong,
       maxMarks: total, negative: penalty, elapsedSeconds: Math.min(elapsed, maxSeconds),
-      sectionScores, timedOut };
+      sectionScores, timedOut, questionPaperDownload: Boolean(row.live && row.question_paper_download) };
     run('INSERT INTO attempts (id, uid, course, test, title, score, total, created_at, answers, max_marks, negative, elapsed_seconds, section_scores) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       randomUUID(), req.user.uid, row.course, row.id, row.title, score, questions.length, new Date().toISOString(),
       JSON.stringify(answers), total, wrong * penalty, elapsed, JSON.stringify(sectionScores));
     run('UPDATE exam_sessions SET active=0 WHERE id=?', session.id);
     res.json(result);
+  });
+  api.get('/tests/:id/question-paper.pdf', async (req, res) => {
+    const row = test(req.params.id);
+    requirePurchase(req, row.course);
+    if (!row.live) fail(404, 'Question paper download is available for live tests only.');
+    if (!row.question_paper_download) fail(403, 'Question paper download is disabled by the admin.');
+    if (!one('SELECT 1 FROM attempts WHERE uid=? AND test=?', req.user.uid, row.id)) {
+      fail(403, 'Complete your first test attempt before downloading the question paper.');
+    }
+    const pdf = await questionPaperPdf({...row, questions: JSON.parse(row.questions)}, req.user.phone);
+    res.type('pdf').attachment(`${row.title.replace(/[^a-z0-9 ._-]+/gi, '_')}-question-paper.pdf`).send(pdf);
   });
   api.get('/tests/:id/leaderboard', (req, res) => {
     const row = test(req.params.id);
@@ -592,7 +675,8 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
       req.params.kind));
   });
   api.get('/books/:id/pages/:page', async (req, res) => {
-    const book = one('SELECT course, pages FROM books WHERE id=?', req.params.id);
+    const book = one(`SELECT b.course, b.pages, c.downloads_enabled FROM books b
+      JOIN courses c ON c.id=b.course WHERE b.id=?`, req.params.id);
     if (!book) fail(404, 'Book not found.');
     requirePurchase(req, book.course);
     const page = Number(req.params.page);
@@ -601,9 +685,11 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     res.type('png').send(png);
   });
   api.get('/books/:id/pages/:page/download', async (req, res) => {
-    const book = one('SELECT id, course, title, pages, pdf FROM books WHERE id=?', req.params.id);
+    const book = one(`SELECT b.id, b.course, b.title, b.pages, b.pdf, c.downloads_enabled
+      FROM books b JOIN courses c ON c.id=b.course WHERE b.id=?`, req.params.id);
     if (!book) fail(404, 'Book not found.');
     requirePurchase(req, book.course);
+    if (!book.downloads_enabled) fail(403, 'Downloads are disabled for this course.');
     const page = Number(req.params.page);
     if (!Number.isSafeInteger(page) || page < 1 || page > book.pages) fail(404, 'Page not found.');
     const png = await processDocument(() => renderPage(Buffer.from(book.pdf), page, req.user.phone));
@@ -613,8 +699,13 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     const video = one('SELECT id, course, title, type FROM chapter_videos WHERE id=?', req.params.id);
     if (!video) fail(404, 'Video not found.');
     requirePurchase(req, video.course);
+    if (req.query.download === '1' &&
+        !one('SELECT downloads_enabled FROM courses WHERE id=?', video.course)?.downloads_enabled) {
+      fail(403, 'Downloads are disabled for this course.');
+    }
     const expires = String(Math.floor(Date.now() / 1000) + VIDEO_LINK_SECONDS);
     const query = new URLSearchParams({ uid: req.user.uid, expires, signature: videoSignature(video.id, req.user.uid, expires) });
+    if (req.query.download === '1') query.set('download', '1');
     res.json({ url: `/api/videos/${encodeURIComponent(video.id)}/file?${query}`, title: video.title, type: video.type });
   });
 
@@ -824,7 +915,7 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
   api.post('/admin/courses/:id/tests', (req, res) => {
     const { id: courseId } = course(req.params.id);
     const id = randomUUID();
-    const { title, questions, live, startsAt, expiresAt, durationMinutes,
+    const { title, questions, live, startsAt, expiresAt, durationMinutes, questionPaperDownload = false,
       attemptsLimit = 2, marksPerQuestion = 1, negativeMark = 0 } = req.body ?? {};
     let scheduled = '';
     let duration = 0;
@@ -847,11 +938,13 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     }
     const parsedQuestions = validateQuestions(questions);
     const sections = [...new Set(parsedQuestions.map(question => question.section || 'General'))];
+    if (typeof questionPaperDownload !== 'boolean') fail(422, 'Choose a valid question paper download option.');
     run(`INSERT INTO tests (id, course, title, questions, created_at, live, starts_at, duration_minutes,
-      expires_at, attempts_limit, marks_per_question, negative_mark, sections)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, id, courseId, text(title, 'Title', 120),
+      expires_at, attempts_limit, marks_per_question, negative_mark, sections, question_paper_download)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, id, courseId, text(title, 'Title', 120),
     JSON.stringify(parsedQuestions), new Date().toISOString(), live ? 1 : 0, scheduled, live ? duration : durationMinutes || 90,
-    expires, live ? attemptsLimit : 0, marksPerQuestion, negativeMark, JSON.stringify(sections));
+    expires, live ? attemptsLimit : 0, marksPerQuestion, negativeMark, JSON.stringify(sections),
+    live && questionPaperDownload ? 1 : 0);
     res.status(201).json({ id });
   });
   api.post('/admin/import', raw, async (req, res) => {
@@ -974,11 +1067,13 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
   };
   api.get('/admin/published', (_req, res) => {
     const tests = all(`SELECT t.id, t.course, c.title AS courseTitle, t.title, t.questions, t.created_at AS createdAt,
-      (SELECT COUNT(*) FROM attempts a WHERE a.test=t.id) AS attempts
+      (SELECT COUNT(*) FROM attempts a WHERE a.test=t.id) AS attempts, t.live,
+      t.question_paper_download AS questionPaperDownload
       FROM tests t JOIN courses c ON c.id=t.course ORDER BY t.created_at DESC, t.rowid DESC`)
       .map(test => ({ ...test, questions: JSON.parse(test.questions) }));
     res.json({
-      courses: all(`SELECT c.id, c.title, c.description, c.price, c.created_at AS createdAt,
+      courses: all(`SELECT c.id, c.title, c.description, c.price, c.downloads_enabled AS downloadsEnabled,
+        c.created_at AS createdAt,
         (SELECT COUNT(*) FROM orders o WHERE o.course=c.id) AS enrollments,
         (SELECT COUNT(*) FROM tests t WHERE t.course=c.id) AS tests,
         (SELECT COUNT(*) FROM books b WHERE b.course=c.id) + (SELECT COUNT(*) FROM chapter_videos v WHERE v.course=c.id) AS materials,
@@ -1007,13 +1102,18 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
   const editors = {
     courses(id, body) {
       found('courses', id, 'Course');
-      run('UPDATE courses SET title=?, description=?, price=? WHERE id=?', text(body.title, 'Title', 120),
-        text(body.description, 'Description', 2000), priceInput(body.price), id);
+      if (body.downloadsEnabled !== undefined && typeof body.downloadsEnabled !== 'boolean') {
+        fail(422, 'Choose whether course downloads are allowed.');
+      }
+      run('UPDATE courses SET title=?, description=?, price=?, downloads_enabled=? WHERE id=?', text(body.title, 'Title', 120),
+        text(body.description, 'Description', 2000), priceInput(body.price), body.downloadsEnabled === true ? 1 : 0, id);
     },
     tests(id, body) {
       found('tests', id, 'Test');
-      run('UPDATE tests SET title=?, questions=? WHERE id=?', text(body.title, 'Title', 120),
-        JSON.stringify(validateQuestions(body.questions)), id);
+      const row = found('tests', id, 'Test');
+      if (typeof body.questionPaperDownload !== 'boolean') fail(422, 'Choose a valid question paper download option.');
+      run('UPDATE tests SET title=?, questions=?, question_paper_download=? WHERE id=?', text(body.title, 'Title', 120),
+        JSON.stringify(validateQuestions(body.questions)), row.live && body.questionPaperDownload ? 1 : 0, id);
     },
     books(id, body) {
       found('books', id, 'Study book');

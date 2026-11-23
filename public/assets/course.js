@@ -196,10 +196,26 @@ export function showContentLibrary(main, ctx, me, kind, action) {
            el('div', {class: 'actions'},
              item.live && Date.parse(item.expiresAt) <= Date.now() ?
                link('Leaderboard', `#leaderboard/${idPart(course.id)}/${idPart(item.id)}`, 'button secondary') : null,
+             item.live && item.questionPaperDownload && item.completedAttempt ?
+               questionPaperButton(ctx, item) : null,
              link('Start Test', `#test/${idPart(course.id)}/${idPart(item.id)}`, 'button secondary'))))));
     }));
     content.replaceChildren(...folders);
   });
+}
+
+function questionPaperButton(ctx, test) {
+  const control = button('Download Question Paper', 'secondary');
+  const feedback = status();
+  control.addEventListener('click', () => run(control, feedback, async () => {
+    const blob = await api(`/tests/${idPart(test.id)}/question-paper.pdf`, {ctx, auth: true, blob: true});
+    const url = URL.createObjectURL(blob);
+    const anchor = el('a', {href: url, download: `${test.title.replace(/[^\w .-]+/g, '_')}-question-paper.pdf`});
+    document.body.append(anchor); anchor.click(); anchor.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    say(feedback, 'Question paper downloaded.');
+  }, 'Preparing question paper…'));
+  return el('span', {class: 'test-download-action'}, control, feedback);
 }
 
 export function showCatalog(main, ctx, me) {

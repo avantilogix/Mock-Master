@@ -39,15 +39,22 @@ function types({rupeeInput, toPaise, questionData, priceHint, courses}) {
     courses: {
       label: 'Courses', noun: 'course', empty: 'No courses created yet. Use Create a Course above.',
       details: item => [rupees(item.price), plural(item.tests, 'test'), plural(item.materials, 'study item'),
-        plural(item.enrollments, 'enrolment'), ...(item.expiresOn ? [`Expiry: ${formatDate(item.expiresOn, false)} (IST)`] : [])],
+        plural(item.enrollments, 'enrolment'), item.downloadsEnabled ? 'Downloads enabled' : 'View only',
+        ...(item.expiresOn ? [`Expiry: ${formatDate(item.expiresOn, false)} (IST)`] : [])],
       text: item => item.description,
       edit(item) {
         const title = input(item.title, 120);
+        const download = el('input', {type: 'checkbox'});
+        download.checked = Boolean(item.questionPaperDownload);
         const description = area(item.description, 2000);
         const amount = price(item.price);
+        const downloads = el('input', {type: 'checkbox'});
+        downloads.checked = Boolean(item.downloadsEnabled);
         return {
-          fields: [field('Course Title', title), field('Description', description), field('Price (₹)', amount, priceHint)],
-          values: () => ({title: textValue(title, 'Title'), description: textValue(description, 'Description'), price: toPaise(amount)}),
+          fields: [field('Course Title', title), field('Description', description), field('Price (₹)', amount, priceHint),
+            el('label', {class: 'choice'}, downloads, 'Allow students to download course PDFs and chapter videos')],
+          values: () => ({title: textValue(title, 'Title'), description: textValue(description, 'Description'),
+            price: toPaise(amount), downloadsEnabled: downloads.checked}),
         };
       },
       remove: item => item.enrollments ?
@@ -68,8 +75,10 @@ function types({rupeeInput, toPaise, questionData, priceHint, courses}) {
         questions.spellcheck = false;
         return {
           fields: [field('Test Title', title), field('Questions (JSON)', questions,
-            'Each question needs a prompt, at least two options, and a zero-based answer.')],
-          values: () => ({title: textValue(title, 'Test title'), questions: questionData(questions.value)}),
+            'Each question needs a prompt, at least two options, and a zero-based answer.'),
+          item.live ? el('label', {class: 'choice'}, download, 'Enable Question Paper Download after first completed attempt') : null],
+          values: () => ({title: textValue(title, 'Test title'), questions: questionData(questions.value),
+            questionPaperDownload: item.live && download.checked}),
         };
       },
       remove: item => item.attempts ? {blocked: 'This test has student results and cannot be deleted.'} :

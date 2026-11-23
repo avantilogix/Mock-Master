@@ -1,10 +1,10 @@
-import {showAdmin} from './admin.js?v=mock-live-readmore-final';
-import {showCatalog, showContentLibrary, showCourse, showDashboard, showMyCourses} from './course.js?v=leaderboard-live-final';
+import {showAdmin} from './admin.js?v=question-paper-download';
+import {showCatalog, showContentLibrary, showCourse, showDashboard, showMyCourses} from './course.js?v=question-paper-download';
 import {api, firebaseAuth} from './services.js?v=ebook-store-final';
 import {showSignIn} from './signin.js';
-import {showBook, showLeaderboard, showTest, showVideo} from './study.js?v=leaderboard-live-final';
+import {showBook, showLeaderboard, showTest, showVideo} from './study.js?v=question-paper-download');
 import {showLearningContent, showNotifications, showProgress} from './reports.js?v=manage-20261122';
-import {showDownloads, showReferrals, showTimetable, socialFooter} from './features.js?v=expiry-covers-1';
+import {showDownloads, showReferrals, showTimetable, socialFooter} from './features.js?v=course-download-controls';
 import {showCourseGroups, showShareRate, showVideos} from './engagement.js?v=expiry-covers-1';
 import {showEbook, showEbookStore} from './ebooks.js?v=ist-payment-fixes-final';
 import {bindForm, button, el, field, heading, icon, link, panel, run, say, status, textValue} from './ui.js';

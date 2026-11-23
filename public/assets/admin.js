@@ -465,11 +465,13 @@ export function showAdmin(main, ctx) {
   const expiresAt = el('input', {type: 'datetime-local'});
   const durationMinutes = el('input', {type: 'number', min: '10', max: '300', step: '5', value: '60'});
   const attemptsLimit = el('input', {type: 'number', min: '1', max: '10', step: '1', value: '2'});
+  const questionPaperDownload = el('input', {type: 'checkbox'});
   const marksPerQuestion = el('input', {type: 'number', min: '0.25', max: '10', step: '0.25', value: '1'});
   const negativeMark = el('input', {type: 'number', min: '0', max: '5', step: '0.25', value: '0'});
   const liveFields = el('div', {class: 'live-test-fields', hidden: ''},
     field('Live Start Date and Time (IST)', startsAt), field('Attempts Allowed Until Expiry', attemptsLimit),
-    field('Live Window Expiry Date and Time (IST)', expiresAt));
+    field('Live Window Expiry Date and Time (IST)', expiresAt),
+    el('label', {class: 'choice'}, questionPaperDownload, 'Enable Question Paper Download after first completed attempt'));
   const updateTestType = () => {
     const isLive = testType.value === 'live';
     liveFields.hidden = !isLive;
@@ -493,6 +495,7 @@ export function showAdmin(main, ctx) {
       expiresAt: testType.value === 'live' ? expiresAt.value : undefined,
       durationMinutes: durationMinutes.valueAsNumber,
       attemptsLimit: testType.value === 'live' ? attemptsLimit.valueAsNumber : 0,
+      questionPaperDownload: testType.value === 'live' && questionPaperDownload.checked,
       marksPerQuestion: marksPerQuestion.valueAsNumber, negativeMark: negativeMark.valueAsNumber,
     }});
     testForm.reset();

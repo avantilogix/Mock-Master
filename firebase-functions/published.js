@@ -14,9 +14,19 @@ export function registerPublishedRoutes(api, { db, bucket, value, text, byNewest
     chapter: text(body.chapter, 'Chapter', 120),
   });
   const editors = {
-    courses: body => ({ title: text(body.title, 'Title', 120), description: text(body.description, 'Description', 2000),
-      price: price(body.price), ...(body.expiresOn !== undefined ? { expiresOn: expiryInput(body.expiresOn) } : {}) }),
-    tests: body => ({ title: text(body.title, 'Title', 120), questions: validateQuestions(body.questions) }),
+    courses: body => {
+      if (body.downloadsEnabled !== undefined && typeof body.downloadsEnabled !== 'boolean') {
+        fail(422, 'Choose whether course downloads are allowed.');
+      }
+      return { title: text(body.title, 'Title', 120), description: text(body.description, 'Description', 2000),
+        price: price(body.price), downloadsEnabled: body.downloadsEnabled === true,
+        ...(body.expiresOn !== undefined ? { expiresOn: expiryInput(body.expiresOn) } : {}) };
+    },
+    tests: body => {
+      if (typeof body.questionPaperDownload !== 'boolean') fail(422, 'Choose a valid question paper download option.');
+      return { title: text(body.title, 'Title', 120), questions: validateQuestions(body.questions),
+        questionPaperDownload: body.questionPaperDownload };
+    },
     books: chapterFields,
     chapterVideos: chapterFields,
     videos: body => ({ title: text(body.title, 'Title', 120), description: text(body.description, 'Description', 1000),
@@ -87,7 +97,9 @@ export function registerPublishedRoutes(api, { db, bucket, value, text, byNewest
       patch.images = await media.validate(req.body.images);
     }
     await db.runTransaction(async tx => {
-      if (!(await tx.get(ref)).exists) fail(404, 'Published item not found.');
+      const existing = value(await tx.get(ref));
+      if (!existing) fail(404, 'Published item not found.');
+      if (type === 'tests' && !existing.live) patch.questionPaperDownload = false;
       if (type === 'videos' && patch.course && !(await tx.get(collection('courses').doc(patch.course))).exists) {
         fail(404, 'Course not found.');
       }
