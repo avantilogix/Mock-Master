@@ -10,7 +10,7 @@ import { openDatabase } from '../server/database.js';
 import { importQuestions, pageCount, renderPage } from '../server/documents.js';
 
 const source = '1. What is 2 + 2?\nA. 3\nB. 4\nAnswer: B';
-const questions = [{ prompt: 'What is 2 + 2?', options: ['3', '4'], answer: 1 }];
+const questions = [{ prompt: 'What is 2 + 2?', options: ['3', '4'], answer: 1, section: 'General' }];
 const has = command => {
   try { execFileSync('which', [command]); return true; } catch { return false; }
 };
@@ -147,8 +147,13 @@ test('admin approval grants only the confirmed student access to their course, t
   assert.equal((await request(path, 'buyer')).status, 200);
   assert.equal((await request(testPath, 'other')).status, 403);
   assert.deepEqual((await (await request(testPath, 'buyer')).json()).questions,
-    [{ prompt: questions[0].prompt, options: questions[0].options }]);
-  assert.deepEqual(await (await request(`${testPath}/submit`, 'buyer', 'POST', { answers: [1] })).json(), { score: 1, total: 1 });
+    [{ prompt: questions[0].prompt, options: questions[0].options, section: 'General' }]);
+  assert.equal((await request(`${testPath}/start`, 'buyer', 'POST')).status, 201);
+  const result = await (await request(`${testPath}/submit`, 'buyer', 'POST', { answers: [1] })).json();
+  assert.equal(result.score, 1);
+  assert.equal(result.total, 1);
+  assert.equal(result.correct, 1);
+  assert.equal(result.unanswered, 0);
   const progress = await (await request('/progress', 'buyer')).json();
   assert.deepEqual(progress.summary, { attempts: 1, questions: 1, correct: 1, accuracy: 100, best: 100, courses: 1 });
   assert.equal(progress.attempts[0].course, id);
@@ -188,7 +193,7 @@ test('admin approval grants only the confirmed student access to their course, t
   assert.equal((await request(`${path}/messages`, 'buyer', 'POST', { text: 'Hello' })).status, 204);
   assert.equal((await request(`${path}/reviews`, 'buyer', 'PUT', { rating: 5, text: 'Helpful' })).status, 204);
   assert.deepEqual(await (await request(`${path}/reviews`)).json(), [{ name: 'Student', rating: 5, text: 'Helpful' }]);
-  assert.equal((await request('/me', 'buyer', 'PUT', { name: 'A Student' })).status, 204);
+  assert.equal((await request('/me', 'buyer', 'PUT', { name: 'A Student' })).status, 200);
   assert.deepEqual(await (await request(`${path}/reviews`)).json(), [{ name: 'A Student', rating: 5, text: 'Helpful' }]);
   assert.equal((await request('/support', 'buyer', 'POST', { text: 'Question about my course' })).status, 204);
   assert.equal((await request('/admin/support', 'other')).status, 403);
@@ -303,7 +308,7 @@ test('admins list published content with dates, edit it, and delete it safely', 
   await once(server, 'listening');
   const course = { title: 'Reasoning', description: 'Daily practice', price: 50000 };
   const { body: { id } } = await request('/admin/courses', 'admin', 'POST', course);
-  const questions = [{ prompt: '2 + 2?', options: ['3', '4'], answer: 1 }];
+  const questions = [{ prompt: '2 + 2?', options: ['3', '4'], answer: 1, section: 'General' }];
   const { body: { id: testId } } = await request(`/admin/courses/${id}/tests`, 'admin', 'POST', { title: 'Mock 1', questions });
 
   assert.equal((await request('/admin/published', 'student')).status, 403);

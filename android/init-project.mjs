@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { ConsoleLog, TwaGenerator, TwaManifest } from '@bubblewrap/core';
 
@@ -14,8 +14,8 @@ manifest.startUrl = '/';
 manifest.name = 'Mission Selection';
 manifest.launcherName = 'Mission';
 manifest.packageId = 'com.avantilogix.missionselection';
-manifest.appVersionCode = 2;
-manifest.appVersionName = '2';
+manifest.appVersionCode = 4;
+manifest.appVersionName = '4';
 manifest.display = 'standalone';
 manifest.orientation = 'default';
 manifest.minSdkVersion = 24;
@@ -25,7 +25,11 @@ manifest.generatorApp = 'bubblewrap-cli';
 const manifestPath = resolve(target, 'twa-manifest.json');
 await manifest.saveToFile(manifestPath);
 await new TwaGenerator().createTwaProject(target, manifest, new ConsoleLog('Generating Android project'));
-const { readFile } = await import('node:fs/promises');
+const launcher = resolve(target, 'app/src/main/java/com/avantilogix/missionselection/LauncherActivity.java');
+const source = await readFile(launcher, 'utf8');
+await writeFile(launcher, source
+  .replace('import android.os.Bundle;', 'import android.os.Bundle;\nimport android.view.WindowManager;')
+  .replace('super.onCreate(savedInstanceState);', `super.onCreate(savedInstanceState);\n        getWindow().setFlags(WindowManager.LayoutParams.FLAG_SECURE,\n                WindowManager.LayoutParams.FLAG_SECURE);`));
 const checksum = createHash('sha1').update(await readFile(manifestPath)).digest('hex');
 await writeFile(resolve(target, 'manifest-checksum.txt'), checksum);
 console.log(`Generated Mission Selection Android project for ${manifest.packageId}.`);

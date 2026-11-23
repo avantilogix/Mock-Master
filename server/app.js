@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { rateLimit } from 'express-rate-limit';
 import QRCode from 'qrcode';
+import { PDFDocument, StandardFonts } from 'pdf-lib';
 import { fail, importQuestions, mobile, pageCount, renderPage, validateQuestions } from './documents.js';
 import { paymentReference, upiDetails, upiPaymentUri } from './manual-payments.js';
 
@@ -184,12 +185,17 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
   api.use(authLimit, login);
   api.get('/me', (req, res) => {
     const { uid, phone, admin } = req.user;
-    const { name } = one('SELECT name FROM students WHERE uid=?', uid);
-    res.json({ uid, name, phone, admin, purchases: all('SELECT course FROM orders WHERE uid=? AND payment IS NOT NULL', uid).map(p => p.course) });
+    const { name, exam_preference: examPreference } = one('SELECT name, exam_preference FROM students WHERE uid=?', uid);
+    res.json({ uid, name, phone, admin, examPreference,
+      purchases: all('SELECT course FROM orders WHERE uid=? AND payment IS NOT NULL', uid).map(p => p.course) });
   });
   api.put('/me', (req, res) => {
-    run('UPDATE students SET name=? WHERE uid=?', text(req.body?.name, 'Name', 100), req.user.uid);
-    res.sendStatus(204);
+    const current = one('SELECT name, exam_preference FROM students WHERE uid=?', req.user.uid);
+    const name = req.body?.name === undefined ? current.name : text(req.body.name, 'Name', 100);
+    const examPreference = req.body?.examPreference === undefined ? current.exam_preference :
+      text(req.body.examPreference, 'Target exam', 100);
+    run('UPDATE students SET name=?, exam_preference=? WHERE uid=?', name, examPreference, req.user.uid);
+    res.json({name, examPreference});
   });
   api.post('/me/disable', (req, res) => {
     run('UPDATE students SET disabled=1 WHERE uid=?', req.user.uid);
@@ -246,7 +252,7 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     const { id } = course(req.params.id);
     requirePurchase(req, id);
     res.json({
-      tests: all('SELECT id, title FROM tests WHERE course=? ORDER BY rowid', id),
+      tests: all('SELECT id, title, live, starts_at AS startsAt, duration_minutes AS durationMinutes FROM tests WHERE course=? ORDER BY rowid', id),
       books: all('SELECT id, title, pages, subject, chapter FROM books WHERE course=? ORDER BY subject, chapter, rowid', id),
       videos: all('SELECT id, title, subject, chapter, type, size FROM chapter_videos WHERE course=? ORDER BY subject, chapter, rowid', id),
       messages: all(`SELECT COALESCE(NULLIF(s.name, ''), 'Student') AS name, m.text
@@ -323,7 +329,51 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
   api.get('/tests/:id', (req, res) => {
     const row = test(req.params.id);
     requirePurchase(req, row.course);
-    res.json({ title: row.title, questions: JSON.parse(row.questions).map(({ prompt, options }) => ({ prompt, options })) });
+    const attempts = one('SELECT COUNT(*) AS count FROM attempts WHERE uid=? AND test=?', req.user.uid, row.id)?.count || 0;
+    const now = Date.now();
+    const starts = Date.parse(row.starts_at);
+    const expires = Date.parse(row.expires_at);
+    if (row.live && Number.isFinite(starts) && now < starts) fail(423, `This live test opens on ${new Date(starts).toLocaleString('en-IN')}.`);
+    const limited = row.live && (!Number.isFinite(expires) || now <= expires);
+    if (limited && attempts >= (row.attempts_limit || 2)) fail(409,
+      `You have used ${row.attempts_limit || 2} attempts. Unlimited attempts open after the live window ends.`);
+    const sections = [...new Set(JSON.parse(row.questions).map(question => question.section || 'General'))];
+    res.json({
+      title: row.title, live: Boolean(row.live), startsAt: row.starts_at, expiresAt: row.expires_at,
+      durationMinutes: row.duration_minutes || 90, attempts, attemptsLimit: row.attempts_limit || 2,
+      limited, marksPerQuestion: row.marks_per_question || 1, negativeMark: row.negative_mark || 0, sections,
+      questions: JSON.parse(row.questions).map(({ prompt, options, section }) => ({ prompt, options, section: section || 'General' })),
+    });
+  });
+  api.post('/tests/:id/start', (req, res) => {
+    const row = test(req.params.id);
+    requirePurchase(req, row.course);
+    const attempts = one('SELECT COUNT(*) AS count FROM attempts WHERE uid=? AND test=?', req.user.uid, row.id)?.count || 0;
+    const nowMs = Date.now();
+    const starts = Date.parse(row.starts_at);
+    const expires = Date.parse(row.expires_at);
+    if (row.live && Number.isFinite(starts) && nowMs < starts) fail(423, 'This live test has not opened yet.');
+    const limited = row.live && (!Number.isFinite(expires) || nowMs <= expires);
+    if (limited && attempts >= (row.attempts_limit || 2)) fail(409,
+      `You have used ${row.attempts_limit || 2} attempts. Unlimited attempts open after the live window ends.`);
+    const now = new Date().toISOString();
+    const active = one('SELECT id, started_at FROM exam_sessions WHERE uid=? AND test=? AND active=1',
+      req.user.uid, row.id);
+    if (active) {
+      const saved = one('SELECT answers, marked FROM exam_sessions WHERE id=?', active.id);
+      return res.json({id: active.id, startedAt: active.started_at,
+        answers: JSON.parse(saved.answers || '[]'), marked: JSON.parse(saved.marked || '[]')});
+    }
+    const id = randomUUID();
+    run('INSERT INTO exam_sessions (id, uid, test, started_at) VALUES (?, ?, ?, ?)', id, req.user.uid, row.id, now);
+    res.status(201).json({ id, startedAt: now });
+  });
+  api.put('/tests/:id/progress', (req, res) => {
+    const session = one('SELECT id FROM exam_sessions WHERE uid=? AND test=? AND active=1', req.user.uid, req.params.id);
+    if (!session) fail(409, 'Start the test before saving progress.');
+    run('UPDATE exam_sessions SET answers=?, marked=? WHERE id=?', JSON.stringify(req.body?.answers || []),
+      JSON.stringify(req.body?.marked || []), session.id);
+    res.sendStatus(204);
   });
   api.post('/tests/:id/submit', (req, res) => {
     const row = test(req.params.id);
@@ -334,10 +384,34 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
         answers.some((v, i) => v !== null && (!Number.isInteger(v) || v < 0 || v >= questions[i].options.length))) {
       fail(422, 'Provide one valid answer or null per question.');
     }
-    const score = questions.filter((q, i) => answers[i] === q.answer).length;
-    const result = { score, total: questions.length };
-    run('INSERT INTO attempts VALUES (?, ?, ?, ?, ?, ?, ?, ?)', randomUUID(), req.user.uid, row.course,
-      row.id, row.title, score, questions.length, new Date().toISOString());
+    const session = one('SELECT * FROM exam_sessions WHERE uid=? AND test=? AND active=1', req.user.uid, row.id);
+    if (!session) fail(409, 'Start the test before submitting.');
+    const maxSeconds = (row.duration_minutes || 90) * 60;
+    const elapsed = Math.max(0, Math.floor((Date.now() - Date.parse(session.started_at)) / 1000));
+    const timedOut = elapsed > maxSeconds;
+    const marks = row.marks_per_question || 1;
+    const penalty = row.negative_mark || 0;
+    const correct = questions.filter((q, i) => answers[i] === q.answer).length;
+    const wrong = questions.filter((q, i) => answers[i] !== null && answers[i] !== q.answer).length;
+    const score = Math.max(0, correct * marks - wrong * penalty);
+    const total = questions.length * marks;
+    const sectionScores = Object.values(questions.reduce((groups, question, index) => {
+      const name = question.section || 'General';
+      const current = groups[name] ||= {section: name, correct: 0, wrong: 0, unanswered: 0, score: 0, total: 0};
+      current.total += marks;
+      if (answers[index] === null) current.unanswered++;
+      else if (answers[index] === question.answer) { current.correct++; current.score += marks; }
+      else { current.wrong++; current.score -= penalty; }
+      current.score = Math.max(0, current.score);
+      return groups;
+    }, {}));
+    const result = { score, total, correct, wrong, unanswered: questions.length - correct - wrong,
+      maxMarks: total, negative: penalty, elapsedSeconds: Math.min(elapsed, maxSeconds),
+      sectionScores, timedOut };
+    run('INSERT INTO attempts (id, uid, course, test, title, score, total, created_at, answers, max_marks, negative, elapsed_seconds, section_scores) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      randomUUID(), req.user.uid, row.course, row.id, row.title, score, questions.length, new Date().toISOString(),
+      JSON.stringify(answers), total, wrong * penalty, elapsed, JSON.stringify(sectionScores));
+    run('UPDATE exam_sessions SET active=0 WHERE id=?', session.id);
     res.json(result);
   });
   api.get('/progress', (req, res) => {
@@ -373,9 +447,9 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     const orders = all(`SELECT o.id, o.course, c.title, o.payment_status AS status, o.review_note AS reviewNote,
       o.submitted_at AS date FROM orders o JOIN courses c ON c.id=o.course WHERE o.uid=?
       ORDER BY o.submitted_at DESC LIMIT 50`, req.user.uid);
-    res.json(orders.map(order => ({
+    const paymentNotices = orders.map(order => ({
       id: `payment-${order.id}`,
-      title: order.status === 'approved' ? `${order.title} is unlocked` :
+      title: order.status === 'approved' ? `${order.title || 'Course'} is unlocked` :
         order.status === 'rejected' ? `${order.title} payment needs attention` :
         `${order.title} payment is under review`,
       body: order.status === 'rejected' ? order.reviewNote : order.status === 'approved' ?
@@ -383,7 +457,20 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
       href: `#course/${order.course}`,
       date: order.date,
       unread: order.status === 'pending',
-    })));
+    }));
+    const testNotices = all(`SELECT t.id, t.title, t.starts_at AS startsAt, t.expires_at AS expiresAt, t.course
+      FROM tests t JOIN orders o ON o.course=t.course
+      WHERE t.live=1 AND o.uid=? AND o.payment IS NOT NULL
+        AND (t.expires_at='' OR datetime(t.expires_at)>datetime('now','localtime'))
+      ORDER BY t.starts_at LIMIT 20`, req.user.uid).map(test => ({
+      id: `live-test-${test.id}`,
+      title: `Live mock test: ${test.title}`,
+      body: `Scheduled ${new Date(test.startsAt).toLocaleString('en-IN')}.`,
+      href: `#course/${test.course}`,
+      date: test.startsAt,
+      unread: Date.parse(test.startsAt) > Date.now(),
+    }));
+    res.json([...testNotices, ...paymentNotices].sort((a, b) => String(b.date).localeCompare(String(a.date))));
   });
   api.get('/content/:kind', (req, res) => {
     if (!['current-affairs', 'pyqs', 'syllabus', 'free-tests'].includes(req.params.kind)) fail(404, 'Content not found.');
@@ -468,6 +555,49 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
   });
 
   api.use('/admin', admin);
+  api.get('/admin/analytics', (_req, res) => {
+    const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    res.json({
+      students: one('SELECT COUNT(*) AS count FROM students').count,
+      courses: one('SELECT COUNT(*) AS count FROM courses').count,
+      purchases: one("SELECT COUNT(*) AS count FROM orders WHERE payment IS NOT NULL AND payment!=''").count,
+      revenue: one("SELECT COALESCE(SUM(amount),0) AS amount FROM orders WHERE payment IS NOT NULL AND payment!=''").amount,
+      attempts24h: one('SELECT COUNT(*) AS count FROM attempts WHERE created_at>=?', since).count,
+      attempts: one('SELECT COUNT(*) AS count FROM attempts').count,
+      liveTests: all(`SELECT t.id, t.title, t.starts_at AS startsAt, t.expires_at AS expiresAt,
+        COUNT(DISTINCT a.uid) AS students, COUNT(a.id) AS attempts, COALESCE(ROUND(AVG(a.score * 100.0 / NULLIF(a.max_marks,0)),1),0) AS average
+        FROM tests t LEFT JOIN attempts a ON a.test=t.id WHERE t.live=1
+        GROUP BY t.id ORDER BY t.starts_at DESC LIMIT 100`),
+    });
+  });
+  api.get('/admin/tests/:id/results', (req, res) => {
+    const row = test(req.params.id);
+    res.json({
+      test: {id: row.id, title: row.title, live: Boolean(row.live), startsAt: row.starts_at, expiresAt: row.expires_at,
+        durationMinutes: row.duration_minutes, attemptsLimit: row.attempts_limit},
+      results: all(`SELECT a.id, a.uid, s.name, s.phone, a.score, a.total, a.max_marks AS maxMarks,
+        a.elapsed_seconds AS elapsedSeconds, a.section_scores AS sectionScores, a.created_at AS createdAt
+        FROM attempts a JOIN students s ON s.uid=a.uid WHERE a.test=? ORDER BY a.created_at DESC`, row.id)
+        .map(result => ({...result, sectionScores: JSON.parse(result.sectionScores || '[]')})),
+    });
+  });
+  api.get('/admin/tests/:id/results.pdf', async (req, res) => {
+    const row = test(req.params.id);
+    const results = all(`SELECT a.score, a.max_marks AS maxMarks, a.created_at AS createdAt,
+      s.name, s.phone FROM attempts a JOIN students s ON s.uid=a.uid WHERE a.test=? ORDER BY a.created_at DESC`, row.id);
+    const pdf = await PDFDocument.create();
+    const font = await pdf.embedFont(StandardFonts.Helvetica);
+    let page = pdf.addPage([842, 595]);
+    let y = 545;
+    page.drawText(`Mission Selection — ${row.title}`, {x: 40, y, size: 18, font}); y -= 38;
+    for (const result of results) {
+      if (y < 45) { page = pdf.addPage([842, 595]); y = 545; }
+      page.drawText(`${result.name || 'Student'}  ${result.phone}  ${result.score}/${result.maxMarks || 0}  ${result.createdAt}`,
+        {x: 40, y, size: 11, font});
+      y -= 20;
+    }
+    res.type('pdf').attachment(`${row.title}-results.pdf`).send(Buffer.from(await pdf.save()));
+  });
   api.post('/admin/videos', (req, res) => {
     const raw = req.body?.url || '';
     const input = String(raw);
@@ -580,9 +710,35 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
   api.post('/admin/courses/:id/tests', (req, res) => {
     const { id: courseId } = course(req.params.id);
     const id = randomUUID();
-    const { title, questions } = req.body ?? {};
-    run('INSERT INTO tests (id, course, title, questions, created_at) VALUES (?, ?, ?, ?, ?)', id, courseId,
-      text(title, 'Title', 120), JSON.stringify(validateQuestions(questions)), new Date().toISOString());
+    const { title, questions, live, startsAt, expiresAt, durationMinutes,
+      attemptsLimit = 2, marksPerQuestion = 1, negativeMark = 0 } = req.body ?? {};
+    let scheduled = '';
+    let duration = 0;
+    if (live) {
+      const start = new Date(startsAt);
+      duration = durationMinutes;
+      if (Number.isNaN(start.getTime()) || !Number.isInteger(duration) || duration < 10 || duration > 300) {
+        fail(422, 'A live test needs a valid start time and a duration from 10–300 minutes.');
+      }
+      scheduled = start.toISOString();
+    }
+    const expiryDate = new Date(expiresAt);
+    const expires = live && !Number.isNaN(expiryDate.getTime()) ? expiryDate.toISOString() : '';
+    if (live && (Number.isNaN(Date.parse(expires)) || Date.parse(expires) <= Date.parse(scheduled) ||
+        !Number.isInteger(attemptsLimit) || attemptsLimit < 1 || attemptsLimit > 10)) {
+      fail(422, 'Live expiry must be after the start time, with 1–10 attempts allowed.');
+    }
+    if (!Number.isFinite(marksPerQuestion) || marksPerQuestion <= 0 || marksPerQuestion > 10 ||
+        !Number.isFinite(negativeMark) || negativeMark < 0 || negativeMark > marksPerQuestion) {
+      fail(422, 'Enter valid marks per question and negative marking.');
+    }
+    const parsedQuestions = validateQuestions(questions);
+    const sections = [...new Set(parsedQuestions.map(question => question.section || 'General'))];
+    run(`INSERT INTO tests (id, course, title, questions, created_at, live, starts_at, duration_minutes,
+      expires_at, attempts_limit, marks_per_question, negative_mark, sections)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, id, courseId, text(title, 'Title', 120),
+    JSON.stringify(parsedQuestions), new Date().toISOString(), live ? 1 : 0, scheduled, live ? duration : durationMinutes || 90,
+    expires, live ? attemptsLimit : 0, marksPerQuestion, negativeMark, JSON.stringify(sections));
     res.status(201).json({ id });
   });
   api.post('/admin/import', raw, async (req, res) => {

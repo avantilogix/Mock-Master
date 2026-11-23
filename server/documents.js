@@ -134,10 +134,8 @@ export async function renderPage(pdf, page, phone) {
   const image = sharp(png, { limitInputPixels: MAX_PAGE_PIXELS + 100_000 });
   const { width, height } = await image.metadata();
   const labels = [];
-  for (let y = 55; y < height + 140; y += 145) {
-    for (let x = 25; x < width; x += 245) {
-      labels.push(`<text x="${x}" y="${y}" transform="rotate(-23 ${x} ${y})">${phone}</text>`);
-    }
+  for (const [x, y] of [[width * .18, height * .22], [width * .55, height * .53], [width * .28, height * .84]]) {
+    labels.push(`<text x="${x}" y="${y}" transform="rotate(-23 ${x} ${y})">${phone}</text>`);
   }
   const watermark = Buffer.from(`<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg"><g font-family="sans-serif" font-size="24" fill="#12204d" fill-opacity="0.35" stroke="white" stroke-width="1" paint-order="stroke">${labels.join('')}</g></svg>`);
   return image.composite([{ input: watermark }]).png().toBuffer();
@@ -151,7 +149,10 @@ export function validateQuestions(questions) {
         !Number.isInteger(q.answer) || q.answer < 0 || q.answer >= q.options.length)) {
     fail(422, 'Provide 1–200 questions, each with 2–6 options and a valid answer index.');
   }
-  return questions.map(({ prompt, options, answer }) => ({ prompt: prompt.trim(), options: options.map(o => o.trim()), answer }));
+  return questions.map(({ prompt, options, answer, section }) => ({
+    prompt: prompt.trim(), options: options.map(o => o.trim()), answer,
+    section: typeof section === 'string' && section.trim() ? section.trim().slice(0, 100) : 'General',
+  }));
 }
 
 export function parseQuestions(text) {

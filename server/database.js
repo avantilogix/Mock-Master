@@ -83,6 +83,11 @@ export function openDatabase(path) {
       starts_at TEXT NOT NULL, duration INTEGER NOT NULL, description TEXT NOT NULL,
       created_at TEXT NOT NULL, updated_at TEXT NOT NULL
     ) STRICT;
+    CREATE TABLE IF NOT EXISTS exam_sessions (
+      id TEXT PRIMARY KEY, uid TEXT NOT NULL REFERENCES students, test TEXT NOT NULL REFERENCES tests,
+      started_at TEXT NOT NULL, answers TEXT NOT NULL DEFAULT '[]', marked TEXT NOT NULL DEFAULT '[]',
+      active INTEGER NOT NULL DEFAULT 1, UNIQUE (uid, test, id)
+    ) STRICT;
     CREATE INDEX IF NOT EXISTS student_schedules_uid ON student_schedules (uid);
   `);
   // Rows created before this column existed keep '' and are shown as "Date not recorded".
@@ -100,6 +105,22 @@ export function openDatabase(path) {
   const bookColumns = new Set(db.prepare('PRAGMA table_info(books)').all().map(column => column.name));
   if (!bookColumns.has('subject')) db.exec("ALTER TABLE books ADD COLUMN subject TEXT NOT NULL DEFAULT 'General'");
   if (!bookColumns.has('chapter')) db.exec("ALTER TABLE books ADD COLUMN chapter TEXT NOT NULL DEFAULT 'Chapter 1'");
+  const testColumns = new Set(db.prepare('PRAGMA table_info(tests)').all().map(column => column.name));
+  if (!testColumns.has('live')) db.exec('ALTER TABLE tests ADD COLUMN live INTEGER NOT NULL DEFAULT 0');
+  if (!testColumns.has('starts_at')) db.exec("ALTER TABLE tests ADD COLUMN starts_at TEXT NOT NULL DEFAULT ''");
+  if (!testColumns.has('duration_minutes')) db.exec('ALTER TABLE tests ADD COLUMN duration_minutes INTEGER NOT NULL DEFAULT 0');
+  if (!testColumns.has('expires_at')) db.exec("ALTER TABLE tests ADD COLUMN expires_at TEXT NOT NULL DEFAULT ''");
+  if (!testColumns.has('attempts_limit')) db.exec('ALTER TABLE tests ADD COLUMN attempts_limit INTEGER NOT NULL DEFAULT 2');
+  if (!testColumns.has('marks_per_question')) db.exec('ALTER TABLE tests ADD COLUMN marks_per_question REAL NOT NULL DEFAULT 1');
+  if (!testColumns.has('negative_mark')) db.exec('ALTER TABLE tests ADD COLUMN negative_mark REAL NOT NULL DEFAULT 0');
+  if (!testColumns.has('sections')) db.exec("ALTER TABLE tests ADD COLUMN sections TEXT NOT NULL DEFAULT '[]'");
+  const attemptColumns = new Set(db.prepare('PRAGMA table_info(attempts)').all().map(column => column.name));
+  if (!attemptColumns.has('answers')) db.exec("ALTER TABLE attempts ADD COLUMN answers TEXT NOT NULL DEFAULT '[]'");
+  if (!attemptColumns.has('max_marks')) db.exec('ALTER TABLE attempts ADD COLUMN max_marks REAL NOT NULL DEFAULT 0');
+  if (!attemptColumns.has('negative')) db.exec('ALTER TABLE attempts ADD COLUMN negative REAL NOT NULL DEFAULT 0');
+  if (!attemptColumns.has('elapsed_seconds')) db.exec('ALTER TABLE attempts ADD COLUMN elapsed_seconds INTEGER NOT NULL DEFAULT 0');
+  if (!attemptColumns.has('section_scores')) db.exec("ALTER TABLE attempts ADD COLUMN section_scores TEXT NOT NULL DEFAULT '[]'");
+  if (!studentColumns.has('exam_preference')) db.exec("ALTER TABLE students ADD COLUMN exam_preference TEXT NOT NULL DEFAULT ''");
   const additions = [
     ['payment_status', "TEXT NOT NULL DEFAULT 'pending'"],
     ['transaction_ref', 'TEXT NOT NULL DEFAULT \'\''],

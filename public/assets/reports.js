@@ -85,10 +85,12 @@ export function showNotifications(main, ctx, action) {
     const rows = await api('/notifications', {ctx, auth: true});
     list.replaceChildren(entries(rows, 'You are all caught up. New course updates will appear here.', item => {
       const card = link('', item.href || '#home', 'notification-card');
-      card.append(
-        item.unread ? el('span', {class: 'notification-dot', 'aria-label': 'New'}) : null,
-        el('div', {}, el('strong', {}, item.title?.replace(/^null\s*/, '') || 'Course Update'), el('p', {class: 'muted'}, item.body || ''),
-          el('small', {class: 'muted'}, item.date ? new Date(item.date).toLocaleString('en-IN') : '')));
+      const indicator = item.unread ? el('span', {class: 'notification-dot', 'aria-label': 'New'}) : null;
+      const content = el('div', {}, el('strong', {}, item.title?.replace(/\bnull\b/gi, '').trim() || 'Course Update'),
+        el('p', {class: 'muted'}, String(item.body || '').replace(/\bnull\b/gi, '').trim()),
+        el('small', {class: 'muted'}, item.date ? new Date(item.date).toLocaleString('en-IN') : ''));
+      if (indicator) card.append(indicator);
+      card.append(content);
       return card;
     }));
   });

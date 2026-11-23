@@ -27,7 +27,9 @@ function courseCard(course, index, me) {
   const cover = coverGallery(course) || el('div', {class: `card-cover alt-${index % 3}`},
     el('span', {}, owned ? 'Your Learning Space' : 'Mock Tests + E-Books'));
   const body = el('div', {class: 'card-body'}, owned ? el('span', {class: 'badge'}, 'Purchased') : null,
-    el('h3', {}, course.title), expiryLabel(course), el('p', {class: 'description'}, course.description), el('div', {class: 'spacer'}),
+    el('h3', {}, course.title), expiryLabel(course), el('p', {class: 'description tile-description'}, course.description),
+    el('div', {class: 'spacer'}),
+    link('Read more', `#course/${idPart(course.id)}`, 'text-link tile-read-more'),
     el('div', {class: 'card-footer'}, course.expired ? el('span', {class: 'muted'}, 'Access closed') :
       owned ? el('span', {class: 'muted'}, 'Continue Learning') : el('p', {class: 'price'}, priceText(course.price)),
       el('a', {class: 'button', href: `#course/${idPart(course.id)}`,
@@ -60,7 +62,6 @@ export function showDashboard(main, ctx, me) {
         shortcut('news', 'Syllabus', 'View topics and learning plan', '#syllabus', 'purple'),
         shortcut('calendar', 'Timetable', 'Plan your study week', '#timetable', 'blue'),
         shortcut('gift', 'Refer & Earn', 'Share your personal code', '#referrals', 'yellow'),
-        shortcut('courses', 'Physical Books', 'Order printed study books', '#physical-books', 'orange'),
         shortcut('download', 'Downloads', 'Save approved content', '#downloads', 'purple'),
         shortcut('play', 'YouTube Videos', 'Watch focused lessons', '#videos', 'rose'),
         shortcut('chat', 'Course Groups', 'Discuss with purchasers', '#groups', 'blue'),
@@ -172,9 +173,10 @@ export function showContentLibrary(main, ctx, me, kind, action) {
         el('span', {class: 'folder-icon', 'aria-hidden': 'true'}, config.icon),
         el('div', {class: 'library-folder-content'},
           el('h2', {}, course.title),
-          entries(material[config.item], config.empty, item => el('a',
-            {class: 'material-link', href: `#test/${idPart(course.id)}/${idPart(item.id)}`},
-            item.title))));
+          entries(material[config.item], config.empty, item => el('div', {class: 'test-series-row'},
+           el('div', {}, el('strong', {}, item.title), item.live ? el('span', {class: 'badge live-badge'},
+             `Live · ${new Date(item.startsAt).toLocaleString('en-IN')} · ${item.durationMinutes} min`) : null),
+           link('Start Test', `#test/${idPart(course.id)}/${idPart(item.id)}`, 'button secondary')))));
     }));
     content.replaceChildren(...folders);
   });
@@ -185,7 +187,7 @@ export function showCatalog(main, ctx, me) {
   main.append(el('section', {class: 'hero'},
     el('div', {class: 'hero-copy'}, el('p', {class: 'eyebrow'}, 'Your Preparation Partner'),
       ...heading('Choose Your Mission. Own Your Result.', 'Build exam-day confidence with focused mock tests, secure study books, and a learning community built around your goal.'),
-      el('div', {class: 'hero-actions'}, link('Explore Missions', '#available-courses', 'button'),
+      el('div', {class: 'hero-actions'}, link('Explore Missions', '#catalog', 'button'),
         link(me ? 'View Your Profile' : 'Sign In with Mobile', me ? '#profile' : '#signin', 'button secondary')),
       el('div', {class: 'hero-proof'}, el('span', {}, 'Mobile OTP Access'), el('span', {}, 'Protected Content'), el('span', {}, 'Verified UPI Payments'))),
     el('div', {class: 'hero-art', 'aria-hidden': 'true'}, el('strong', {}, 'Stay Mission Ready'), el('div', {class: 'progress-ring'}, '01'), el('small', {}, 'Pick a mission. Start practising.'))),
@@ -308,8 +310,12 @@ function showMaterials(access, ctx, path, id) {
         say(feedback, 'Message posted. Reopen this course to refresh the discussion.', true);
       }
     }, 'Posting message…');
-    access.replaceChildren(panel('Practice Tests', entries(tests, 'No practice tests have been published for this course yet.', test =>
-      link(test.title, `#test/${idPart(id)}/${idPart(test.id)}`, 'material-link'))),
+    access.replaceChildren(panel('Practice & Live Tests', entries(tests, 'No practice tests have been published for this course yet.', test =>
+      el('div', {class: 'test-series-row'},
+        el('div', {}, link(test.title, `#test/${idPart(id)}/${idPart(test.id)}`, 'material-link'),
+          test.live ? el('span', {class: 'badge live-badge'},
+            `Live · ${new Date(test.startsAt).toLocaleString('en-IN')} · ${test.durationMinutes} min`) : null),
+        link('Start', `#test/${idPart(id)}/${idPart(test.id)}`, 'button secondary')))),
     panel('Study Materials by Chapter', chapterFolders(chapterGroups(books, videos), id)),
     panel('Course Discussion', messageList, form));
   });

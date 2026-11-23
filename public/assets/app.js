@@ -4,7 +4,7 @@ import {api, firebaseAuth} from './services.js?v=expiry-covers-1';
 import {showSignIn} from './signin.js';
 import {showBook, showTest, showVideo} from './study.js?v=expiry-covers-1';
 import {showLearningContent, showNotifications, showProgress} from './reports.js?v=manage-20261122';
-import {showDownloads, showPhysicalStore, showReferrals, showTimetable, socialFooter} from './features.js?v=expiry-covers-1';
+import {showDownloads, showReferrals, showTimetable, socialFooter} from './features.js?v=expiry-covers-1';
 import {showCourseGroups, showShareRate, showVideos} from './engagement.js?v=expiry-covers-1';
 import {bindForm, button, el, field, heading, icon, link, panel, run, say, status, textValue} from './ui.js';
 
@@ -14,8 +14,8 @@ const notice = document.querySelector('#notice');
 const routes = new Map([
   ['home', 0], ['catalog', 0], ['my-courses', 0], ['test-series', 0], ['book-store', 0], ['materials', 0],
   ['free-tests', 0], ['current-affairs', 0], ['pyqs', 0], ['syllabus', 0], ['progress', 0], ['notifications', 0],
-  ['timetable', 0], ['referrals', 0], ['physical-books', 0], ['downloads', 0],
-  ['videos', 0], ['groups', 0], ['share-app', 0],
+  ['timetable', 0], ['referrals', 0], ['downloads', 0],
+  ['videos', 0], ['groups', 0], ['share-app', 0], ['about', 0],
   ['course', 1], ['test', 2], ['book', 2], ['video', 2], ['signin', 0],
   ['profile', 0], ['support', 0], ['admin', 0]
 ]);
@@ -92,6 +92,11 @@ async function refreshProfile(current) {
 async function initializeProfile(current) {
   try {
     await refreshProfile(current);
+    const examPreference = localStorage.getItem('missionExam');
+    if (examPreference && current.me?.examPreference !== examPreference) {
+      const result = await api('/me', {ctx: current, auth: true, method: 'PUT', json: {examPreference}});
+      if (current.current()) current.me.examPreference = result?.examPreference || examPreference;
+    }
   } catch (error) {
     if (current.current()) current.error = error.message;
   } finally {
@@ -159,46 +164,91 @@ function showProfile(ctx) {
     await api('/me/disable', {ctx, auth: true, method: 'POST'});
     await firebase.sdk.signOut(firebase.auth);
   }, 'Disabling account…'));
-  main.append(...heading('Your Learning Space', 'Manage your profile and keep your preparation moving forward.'),
-    panel('Account', el('div', {class: 'profile-summary'},
-      el('div', {class: 'avatar', 'aria-hidden': 'true'}, name.slice(0, 1).toUpperCase()),
-      el('div', {}, el('h3', {}, name), el('p', {class: 'muted'}, `Mobile: ${phone || 'Unavailable'}`),
-        el('p', {class: 'account-id'}, 'Firebase account ID: ', el('code', {}, session.me.uid || 'Unavailable')))),
-      el('div', {class: 'profile-purchase section'},
-        el('div', {}, el('strong', {}, String(session.me?.purchases?.length || 0)), el('span', {class: 'muted'}, 'Courses Unlocked')),
-        el('div', {}, el('strong', {}, 'Secure'), el('span', {class: 'muted'}, 'Protected Learning Access'))));
+  const account = panel('Account');
+  const accountSummary = el('div', {class: 'profile-summary'});
+  const accountEditor = el('div', {class: 'profile-editor', hidden: ''});
+  account.append(accountSummary, accountEditor,
+    el('div', {class: 'profile-purchase section'},
+      el('div', {}, el('strong', {}, String(session.me?.purchases?.length || 0)), el('span', {class: 'muted'}, 'Courses Unlocked')),
+      el('div', {}, el('strong', {}, 'Secure'), el('span', {class: 'muted'}, 'Protected Learning Access'))));
+  main.append(...heading('Your Learning Space', 'Manage your profile and keep your preparation moving forward.'), account);
   if (!session.me) {
     main.append(panel('Display Name', profileUnavailable()));
     return;
   }
   const input = el('input', {required: '', autocomplete: 'name', maxlength: '100'});
   input.value = session.me.name || '';
-  const save = button('Save Name', null, 'submit');
-  const form = el('form', {}, field('Display Name', input), save, feedback);
+  const exam = el('select', {required: ''},
+    el('option', {value: ''}, 'Choose your target exam'),
+    ['UPSC Civil Services', 'SSC CGL', 'Railway Exams', 'Banking Exams', 'State PSC', 'Police / Defence', 'Other Government Exams']
+      .map(value => el('option', {value}, value)));
+  exam.value = session.me.examPreference || '';
+  const save = button('Save Profile', null, 'submit');
+  const cancel = button('Cancel', 'secondary');
+  const form = el('form', {}, field('Display Name', input), field('Target Exam', exam),
+    el('div', {class: 'actions'}, save, cancel), feedback);
+  const showSavedName = () => {
+    const edit = button('', 'icon-button secondary');
+    edit.setAttribute('aria-label', 'Edit profile');
+    edit.title = 'Edit profile';
+    edit.append(icon('edit', 'line-icon'));
+    edit.addEventListener('click', () => {
+      accountEditor.hidden = false;
+      edit.hidden = true;
+      input.focus();
+    });
+    accountSummary.replaceChildren(
+      el('div', {class: 'profile-avatar'}, 
+        el('div', {class: 'avatar', 'aria-hidden': 'true'}, (session.me.name || 'S').slice(0, 1).toUpperCase()), edit),
+      el('div', {class: 'profile-identity'}, el('div', {class: 'profile-name-row'},
+        el('h3', {}, session.me.name || 'Student')),
+        el('p', {class: 'muted'}, `Mobile: ${phone || 'Unavailable'}`),
+        el('p', {class: 'profile-exam'}, session.me.examPreference || 'Choose your target exam')));
+  };
+  cancel.addEventListener('click', () => {
+    input.value = session.me.name || '';
+    exam.value = session.me.examPreference || '';
+    accountEditor.hidden = true;
+    accountSummary.querySelector('.icon-button')?.removeAttribute('hidden');
+  });
   bindForm(form, save, feedback, async () => {
     const name = textValue(input, 'Display name');
-    const result = await api('/me', {ctx, auth: true, method: 'PUT', json: {name}});
+    const result = await api('/me', {ctx, auth: true, method: 'PUT',
+      json: {name, examPreference: exam.value}});
     session.me.name = typeof result?.name === 'string' ? result.name : name;
-    say(feedback, 'Display name saved.');
+    session.me.examPreference = typeof result?.examPreference === 'string' ? result.examPreference : exam.value;
+    localStorage.setItem('missionExam', session.me.examPreference);
+    say(feedback, 'Profile saved.');
+    showSavedName();
+    accountEditor.hidden = true;
   }, 'Saving name…');
   const profileAction = (iconName, title, description, href) => link('', href, 'profile-menu-row').append(
     icon(iconName, 'line-icon profile-menu-icon'),
     el('span', {}, el('strong', {}, title), el('small', {}, description)),
     el('span', {class: 'profile-menu-arrow', 'aria-hidden': 'true'}, '→'));
   main.append(
-    panel('Profile Details', el('div', {class: 'narrow'}, form)),
-    panel('Learning', el('div', {class: 'profile-menu'},
+    panel('My Learning', el('div', {class: 'profile-menu'},
       profileAction('missions', 'Explore Courses', 'Browse missions and available content', '#catalog'),
       profileAction('courses', 'My Courses', 'Continue purchased missions', '#my-courses'),
-      profileAction('chat', 'Course Groups', 'Open purchaser-only text groups', '#groups'))),
+      profileAction('chat', 'Course Groups', 'Open purchaser-only text groups', '#groups'),
+      profileAction('progress', 'Progress Reports', 'Review scores, accuracy, and test attempts', '#progress'))),
     panel('Community', el('div', {class: 'profile-menu'},
       profileAction('gift', 'Referrals', 'Share your code and view earned credits', '#referrals'),
       profileAction('share', 'Share & Rate App', 'Invite friends or review Mission Selection', '#share-app')),
       el('div', {class: 'profile-social'}, el('span', {class: 'muted'}, 'Follow Mission Selection'),
         socialFooter(ctx))),
+    panel('About Mission Selection',
+      el('div', {class: 'profile-about'}, el('span', {class: 'about-mini-mark', 'aria-hidden': 'true'}, 'MS'),
+        el('div', {}, el('h3', {}, 'Choose. Prepare. Achieve.'),
+          el('p', {class: 'muted'},
+            'A focused preparation app for mock tests, chapter-wise materials, current affairs, videos, progress reports, and protected course communities.'),
+          link('Read Full Story', '#about', 'profile-about-link')))),
     panel('Account Actions', el('div', {class: 'account-actions'}, signOut),
       el('div', {class: 'danger-zone'}, el('div', {}, el('strong', {}, 'Disable Account'),
         el('p', {class: 'muted'}, 'You can contact support later to request reactivation.')), disable, feedback)));
+  accountEditor.replaceChildren(form);
+  showSavedName();
+  accountEditor.hidden = true;
 }
 
 function showSupport(ctx) {
@@ -250,11 +300,27 @@ function render(focus = false) {
     case 'notifications': showNotifications(main, ctx, {signInLink}); break;
     case 'timetable': showTimetable(main, ctx, {signInLink, personalTimetable: firebase?.personalTimetable}); break;
     case 'referrals': showReferrals(main, ctx, {signInLink}); break;
-    case 'physical-books': showPhysicalStore(main, ctx, {signInLink}); break;
     case 'downloads': showDownloads(main, ctx, {signInLink}); break;
     case 'videos': showVideos(main); break;
     case 'groups': showCourseGroups(main, ctx, current?.me, {signInLink}); break;
     case 'share-app': showShareRate(main); break;
+    case 'about':
+      main.append(...heading('About Mission Selection', 'Choose. Prepare. Achieve.'),
+        el('section', {class: 'about-hero'},
+          el('div', {class: 'about-mark', 'aria-hidden': 'true'}, 'MS'),
+          el('h2', {}, 'Focused preparation. One trusted learning space.'),
+          el('p', {class: 'lead'},
+            'Mission Selection brings mock tests, chapter-wise study materials, current affairs, videos, progress reports, and purchaser-only course groups into one mobile-first preparation app.')),
+        panel('How Mission Selection Helps', el('ul', {class: 'about-list'},
+          el('li', {}, el('strong', {}, 'Prepare with purpose'), ' — choose a mission and practise with structured tests and study material.'),
+          el('li', {}, el('strong', {}, 'Track real progress'), ' — review scores, accuracy, attempts, and mission performance.'),
+          el('li', {}, el('strong', {}, 'Stay current'), ' — browse year/month-wise current affairs, PYQs, syllabus, and a study timetable.'),
+          el('li', {}, el('strong', {}, 'Learn together'), ' — use private discussion groups available only to purchased-course members.'))),
+        panel('Secure Access', el('p', {},
+          'Course access is unlocked only after admin review of the UPI or QR payment proof. Digital books are rendered page by page with the verified mobile number watermarked on the image; original PDF files are never shared directly.')),
+        panel('Student Support', el('p', {},
+          'Learners can manage their profile, submit support requests, view notifications, and access protected downloads from their account.')));
+      break;
     case 'free-tests':
     case 'current-affairs':
     case 'pyqs':
@@ -272,7 +338,11 @@ function render(focus = false) {
       break;
     case 'signin':
       if (current) {
-        const next = nextAfterSignIn(parsed);
+        if (current.pending) {
+          main.append(...heading('Signing You In'), el('p', {class: 'muted'}, 'Preparing your account…'));
+          break;
+        }
+        const next = current.me?.admin ? '#admin' : nextAfterSignIn(parsed);
         main.append(...heading('You’re Signed In'), link('Continue', next, 'button'));
         location.replace(next);
       } else {
@@ -293,7 +363,7 @@ function render(focus = false) {
         refresh.addEventListener('click', () => run(refresh, feedback, async () => {
           await refreshProfile(current);
           if (current.me?.admin) location.hash = '#admin';
-          else say(feedback, `Admin access is not assigned to Firebase account ID ${current.me?.uid || 'unknown'}.`, true);
+          else say(feedback, 'Admin access is not assigned to this account. Contact support.', true);
         }, 'Checking account…'));
         main.append(...heading('Admin Access Required', 'The server must verify your Firebase account before the Admin tab appears.'),
           el('div', {class: 'actions'}, refresh, link('Back to Missions', '#catalog', 'button')), feedback);

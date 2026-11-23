@@ -8,6 +8,7 @@ import { getStorage } from 'firebase-admin/storage';
 import { defineString } from 'firebase-functions/params';
 import { onRequest } from 'firebase-functions/v2/https';
 import QRCode from 'qrcode';
+import { PDFDocument, StandardFonts } from 'pdf-lib';
 import { fail, importQuestions, mobile, pageCount, renderPage, validateQuestions } from './documents.js';
 import { paymentReference, upiDetails, upiPaymentUri } from './manual-payments.js';
 import { sampleBookPdf, sampleCourses, sampleResources } from './sample-data.js';
@@ -267,14 +268,20 @@ function createApp() {
       name: student?.name || '',
       phone,
       admin: isAdmin,
+      examPreference: student?.examPreference || '',
       purchases: orders.filter(order => typeof order.payment === 'string' && order.payment.length > 0).map(order => order.course),
     });
   });
   api.put('/me', async (req, res) => {
-    await db.collection('students').doc(req.user.uid).set({
-      name: text(req.body?.name, 'Name', 100),
-    }, { merge: true });
-    res.sendStatus(204);
+    const ref = db.collection('students').doc(req.user.uid);
+    const student = value(await ref.get()) || {};
+    const updates = {
+      name: req.body?.name === undefined ? student.name || '' : text(req.body.name, 'Name', 100),
+      examPreference: req.body?.examPreference === undefined ? student.examPreference || '' :
+        text(req.body.examPreference, 'Target exam', 100),
+    };
+    await ref.set(updates, { merge: true });
+    res.json(updates);
   });
   api.post('/me/disable', async (req, res) => {
     await db.collection('students').doc(req.user.uid).set({ disabled: true }, { merge: true });
@@ -397,7 +404,8 @@ function createApp() {
     const { id } = await course(req.params.id);
     await requirePurchase(req.user, id);
     const tests = (await db.collection('tests').where('course', '==', id).get()).docs.map(value).sort(byNewest).reverse()
-      .map(item => ({ id: item.id, title: item.title }));
+      .map(item => ({ id: item.id, title: item.title, live: Boolean(item.live),
+        startsAt: item.startsAt || '', durationMinutes: item.durationMinutes || 0 }));
     const books = (await db.collection('books').where('course', '==', id).get()).docs.map(value)
       .sort((a, b) => `${a.subject || ''}${a.chapter || ''}`.localeCompare(`${b.subject || ''}${b.chapter || ''}`))
       .map(item => ({ id: item.id, title: item.title, pages: item.pages,
@@ -544,7 +552,77 @@ function createApp() {
   api.get('/tests/:id', async (req, res) => {
     const item = await test(req.params.id);
     await requirePurchase(req.user, item.course);
-    res.json({ title: item.title, questions: item.questions.map(({ prompt, options }) => ({ prompt, options })) });
+    const attempts = (await db.collection('attempts').where('uid', '==', req.user.uid)
+      .where('test', '==', item.id).get()).size;
+    const now = Date.now();
+    const starts = Date.parse(item.startsAt);
+    const expires = Date.parse(item.expiresAt);
+    if (item.live && Number.isFinite(starts) && now < starts) {
+      fail(423, `This live test opens on ${new Date(starts).toLocaleString('en-IN')}.`);
+    }
+    const limited = Boolean(item.live) && (!Number.isFinite(expires) || now <= expires);
+    const attemptsLimit = item.attemptsLimit || 2;
+    if (limited && attempts >= attemptsLimit) {
+      fail(409, `You have used ${attemptsLimit} attempts. Unlimited attempts open after the live window ends.`);
+    }
+    const sections = [...new Set(item.questions.map(question => question.section || 'General'))];
+    res.json({
+      title: item.title,
+      live: Boolean(item.live),
+      startsAt: item.startsAt || '',
+      expiresAt: item.expiresAt || '',
+      durationMinutes: item.durationMinutes || 90,
+      attempts,
+      attemptsLimit,
+      limited,
+      marksPerQuestion: item.marksPerQuestion || 1,
+      negativeMark: item.negativeMark || 0,
+      sections,
+      questions: item.questions.map(({ prompt, options, section }) => ({
+        prompt, options, section: section || 'General',
+      })),
+    });
+  });
+  api.post('/tests/:id/start', async (req, res) => {
+    const item = await test(req.params.id);
+    await requirePurchase(req.user, item.course);
+    const attempts = (await db.collection('attempts').where('uid', '==', req.user.uid)
+      .where('test', '==', item.id).get()).size;
+    const nowMs = Date.now();
+    const starts = Date.parse(item.startsAt);
+    const expires = Date.parse(item.expiresAt);
+    if (item.live && Number.isFinite(starts) && nowMs < starts) {
+      fail(423, 'This live test has not opened yet.');
+    }
+    const limited = Boolean(item.live) && (!Number.isFinite(expires) || nowMs <= expires);
+    const attemptsLimit = item.attemptsLimit || 2;
+    if (limited && attempts >= attemptsLimit) {
+      fail(409, `You have used ${attemptsLimit} attempts. Unlimited attempts open after the live window ends.`);
+    }
+    const active = await db.collection('examSessions').where('uid', '==', req.user.uid)
+      .where('test', '==', item.id).where('active', '==', true).limit(1).get();
+    if (!active.empty) {
+      const session = value(active.docs[0]);
+      return res.json({ id: session.id, startedAt: session.startedAt,
+        answers: Array.isArray(session.answers) ? session.answers : [],
+        marked: Array.isArray(session.marked) ? session.marked : [] });
+    }
+    const id = randomUUID();
+    const startedAt = new Date().toISOString();
+    await db.collection('examSessions').doc(id).create({
+      uid: req.user.uid, test: item.id, startedAt, answers: [], marked: [], active: true,
+    });
+    res.status(201).json({ id, startedAt });
+  });
+  api.put('/tests/:id/progress', async (req, res) => {
+    const active = await db.collection('examSessions').where('uid', '==', req.user.uid)
+      .where('test', '==', req.params.id).where('active', '==', true).limit(1).get();
+    if (active.empty) fail(409, 'Start the test before saving progress.');
+    await active.docs[0].ref.update({
+      answers: req.body?.answers || [],
+      marked: req.body?.marked || [],
+    });
+    res.sendStatus(204);
   });
   api.post('/tests/:id/submit', async (req, res) => {
     const item = await test(req.params.id);
@@ -556,12 +634,64 @@ function createApp() {
           (!Number.isInteger(answer) || answer < 0 || answer >= questions[index].options.length))) {
       fail(422, 'Provide one valid answer or null per question.');
     }
-    const score = questions.filter((question, index) => answers[index] === question.answer).length;
-    const total = questions.length;
+    const active = await db.collection('examSessions').where('uid', '==', req.user.uid)
+      .where('test', '==', item.id).where('active', '==', true).limit(1).get();
+    if (active.empty) fail(409, 'Start the test before submitting.');
+    const session = value(active.docs[0]);
+    const maxSeconds = (item.durationMinutes || 90) * 60;
+    const elapsed = Math.max(0, Math.floor((Date.now() - Date.parse(session.startedAt)) / 1000));
+    const timedOut = elapsed > maxSeconds;
+    const marks = item.marksPerQuestion || 1;
+    const penalty = item.negativeMark || 0;
+    const correct = questions.filter((question, index) => answers[index] === question.answer).length;
+    const wrong = questions.filter((question, index) =>
+      answers[index] !== null && answers[index] !== question.answer).length;
+    const score = Math.max(0, correct * marks - wrong * penalty);
+    const total = questions.length * marks;
+    const sectionScores = Object.values(questions.reduce((groups, question, index) => {
+      const name = question.section || 'General';
+      const current = groups[name] ||= {
+        section: name, correct: 0, wrong: 0, unanswered: 0, score: 0, total: 0,
+      };
+      current.total += marks;
+      if (answers[index] === null) current.unanswered++;
+      else if (answers[index] === question.answer) {
+        current.correct++;
+        current.score += marks;
+      } else {
+        current.wrong++;
+        current.score -= penalty;
+      }
+      current.score = Math.max(0, current.score);
+      return groups;
+    }, {}));
+    const result = {
+      score,
+      total,
+      correct,
+      wrong,
+      unanswered: questions.length - correct - wrong,
+      maxMarks: total,
+      negative: penalty,
+      elapsedSeconds: Math.min(elapsed, maxSeconds),
+      sectionScores,
+      timedOut,
+    };
     await createWithId('attempts', {
-      uid: req.user.uid, course: item.course, test: item.id, title: item.title, score, total,
+      uid: req.user.uid,
+      course: item.course,
+      test: item.id,
+      title: item.title,
+      score,
+      total: questions.length,
+      answers,
+      maxMarks: total,
+      negative: wrong * penalty,
+      elapsedSeconds: elapsed,
+      sectionScores,
     });
-    res.json({ score, total });
+    await active.docs[0].ref.update({ active: false });
+    res.json(result);
   });
   api.get('/progress', async (req, res) => {
     const attempts = (await db.collection('attempts').where('uid', '==', req.user.uid).get()).docs
@@ -595,21 +725,35 @@ function createApp() {
   api.get('/notifications', async (req, res) => {
     const orders = (await db.collection('orders').where('uid', '==', req.user.uid).get()).docs.map(value)
       .sort(byNewest).slice(0, 50);
-    res.json(await Promise.all(orders.map(async order => {
+    const paymentNotices = await Promise.all(orders.map(async order => {
       const selected = value(await db.collection('courses').doc(order.course).get());
       const title = typeof selected?.title === 'string' && selected.title.trim() ? selected.title : 'Course';
       return {
         id: `payment-${order.id}`,
-        title: order.paymentStatus === 'approved' ? `${title} is unlocked` :
-          order.paymentStatus === 'rejected' ? `${title} payment needs attention` :
-          `${title} payment is under review`,
+        title: order.paymentStatus === 'approved' ? `${title === 'null' ? 'Course' : title} is unlocked` :
+          order.paymentStatus === 'rejected' ? `${title === 'null' ? 'Course' : title} payment needs attention` :
+          `${title === 'null' ? 'Course' : title} payment is under review`,
         body: order.paymentStatus === 'rejected' ? order.reviewNote : order.paymentStatus === 'approved' ?
           'Your mission, tests and books are ready.' : 'The admin is verifying your UPI transaction.',
         href: `#course/${order.course}`,
         date: order.submittedAt,
         unread: order.paymentStatus === 'pending',
       };
-    })));
+    }));
+    const owned = new Set(orders.filter(order =>
+      typeof order.payment === 'string' && order.payment.length > 0).map(order => order.course));
+    const liveTests = (await db.collection('tests').where('live', '==', true).get()).docs.map(value)
+      .filter(test => owned.has(test.course) && (!test.expiresAt || Date.parse(test.expiresAt) > Date.now()))
+      .sort((a, b) => String(a.startsAt).localeCompare(String(b.startsAt))).slice(0, 20)
+      .map(test => ({
+        id: `live-test-${test.id}`,
+        title: `Live mock test: ${test.title}`,
+        body: `Scheduled ${new Date(test.startsAt).toLocaleString('en-IN')}.`,
+        href: `#course/${test.course}`,
+        date: test.startsAt,
+        unread: Date.parse(test.startsAt) > Date.now(),
+      }));
+    res.json([...liveTests, ...paymentNotices].sort((a, b) => String(b.date).localeCompare(String(a.date))));
   });
   api.get('/content/:kind', async (req, res) => {
     if (!['current-affairs', 'pyqs', 'syllabus', 'free-tests'].includes(req.params.kind)) fail(404, 'Content not found.');
@@ -662,6 +806,55 @@ function createApp() {
   });
 
   api.use('/admin', admin);
+  api.get('/admin/analytics', async (_req, res) => {
+    const [students, courses, orders, attempts, liveTests] = await Promise.all([
+      queryCollection('students'), queryCollection('courses'), queryCollection('orders'),
+      queryCollection('attempts'), db.collection('tests').where('live', '==', true).get(),
+    ]);
+    const approved = orders.filter(order => typeof order.payment === 'string' && order.payment.length > 0);
+    const since = Date.now() - 86_400_000;
+    const liveRows = await Promise.all(liveTests.docs.map(value).map(async row => {
+      const results = attempts.filter(attempt => attempt.test === row.id);
+      const average = results.length ? Math.round(results.reduce((sum, result) =>
+        sum + (Number(result.score || 0) / Number(result.maxMarks || 1) * 100), 0) / results.length * 10) / 10 : 0;
+      return {id: row.id, title: row.title, startsAt: row.startsAt, expiresAt: row.expiresAt,
+        students: new Set(results.map(result => result.uid)).size, attempts: results.length, average};
+    }));
+    res.json({
+      students: students.length, courses: courses.length, purchases: approved.length,
+      revenue: approved.reduce((sum, order) => sum + Number(order.amount || 0), 0),
+      attempts24h: attempts.filter(item => Date.parse(item.createdAt) >= since).length,
+      attempts: attempts.length, liveTests: liveRows,
+    });
+  });
+  api.get('/admin/tests/:id/results', async (req, res) => {
+    const selected = await test(req.params.id);
+    const snapshots = await db.collection('attempts').where('test', '==', selected.id).get();
+    const results = await Promise.all(snapshots.docs.map(value).map(async result => {
+      const student = value(await db.collection('students').doc(result.uid).get());
+      return {...result, name: student?.name || 'Student', phone: student?.phone || ''};
+    }));
+    res.json({test: {id: selected.id, title: selected.title, live: Boolean(selected.live),
+      startsAt: selected.startsAt, expiresAt: selected.expiresAt, durationMinutes: selected.durationMinutes,
+      attemptsLimit: selected.attemptsLimit}, results: results.sort(byNewest)});
+  });
+  api.get('/admin/tests/:id/results.pdf', async (req, res) => {
+    const selected = await test(req.params.id);
+    const snapshots = await db.collection('attempts').where('test', '==', selected.id).get();
+    const pdf = await PDFDocument.create();
+    const font = await pdf.embedFont(StandardFonts.Helvetica);
+    let page = pdf.addPage([842, 595]);
+    let y = 545;
+    page.drawText(`Mission Selection — ${selected.title}`, {x: 40, y, size: 18, font}); y -= 38;
+    for (const snapshot of snapshots.docs.map(value).sort(byNewest)) {
+      const student = value(await db.collection('students').doc(snapshot.uid).get());
+      if (y < 45) { page = pdf.addPage([842, 595]); y = 545; }
+      page.drawText(`${student?.name || 'Student'}  ${student?.phone || ''}  ${snapshot.score}/${snapshot.maxMarks || snapshot.total || 0}  ${snapshot.createdAt}`,
+        {x: 40, y, size: 11, font});
+      y -= 20;
+    }
+    res.type('pdf').attachment(`${selected.title}-results.pdf`).send(Buffer.from(await pdf.save()));
+  });
   media.adminRoutes();
   registerVideoRoutes(api, { db, bucket, value, text, course, requirePurchase });
   registerPublishedRoutes(api, { db, bucket, value, text, byNewest, queryCollection, media });
@@ -905,11 +1098,54 @@ function createApp() {
   });
   api.post('/admin/courses/:id/tests', async (req, res) => {
     const { id: courseId } = await course(req.params.id);
-    const { title, questions } = req.body ?? {};
+    const {
+      title, questions, live, startsAt, expiresAt, durationMinutes, attemptsLimit,
+      marksPerQuestion, negativeMark,
+    } = req.body ?? {};
+    let scheduled = '';
+    let expiration = '';
+    let duration = 0;
+    if (live) {
+      const start = new Date(startsAt);
+      duration = durationMinutes;
+      if (Number.isNaN(start.getTime()) || !Number.isInteger(duration) || duration < 10 || duration > 300) {
+        fail(422, 'A live test needs a valid start time and a duration from 10–300 minutes.');
+      }
+      scheduled = start.toISOString();
+    }
+    if (expiresAt !== undefined && expiresAt !== '') {
+      const expires = new Date(expiresAt);
+      if (Number.isNaN(expires.getTime())) fail(422, 'Provide a valid test expiry time.');
+      expiration = expires.toISOString();
+    }
+    if (live && (!expiration || Date.parse(expiration) <= Date.parse(scheduled))) {
+      fail(422, 'A live test expiry must be after its start time.');
+    }
+    const attempts = attemptsLimit === undefined ? 2 : attemptsLimit;
+    const marks = marksPerQuestion === undefined ? 1 : marksPerQuestion;
+    const negative = negativeMark === undefined ? 0 : negativeMark;
+    if (!Number.isInteger(attempts) || attempts < 1 || attempts > 100) {
+      fail(422, 'Attempt limit must be a whole number from 1–100.');
+    }
+    if (typeof marks !== 'number' || !Number.isFinite(marks) || marks <= 0 || marks > 100) {
+      fail(422, 'Marks per question must be greater than zero and at most 100.');
+    }
+    if (typeof negative !== 'number' || !Number.isFinite(negative) || negative < 0 || negative > 100) {
+      fail(422, 'Negative mark must be from 0–100.');
+    }
+    const validQuestions = validateQuestions(questions);
     const id = await createWithId('tests', {
       course: courseId,
       title: text(title, 'Title', 120),
-      questions: validateQuestions(questions),
+      questions: validQuestions,
+      live: Boolean(live),
+      startsAt: scheduled,
+      expiresAt: expiration,
+      durationMinutes: duration,
+      attemptsLimit: attempts,
+      marksPerQuestion: marks,
+      negativeMark: negative,
+      sections: [...new Set(validQuestions.map(question => question.section))],
     });
     res.status(201).json({ id });
   });

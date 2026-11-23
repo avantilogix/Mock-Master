@@ -1,7 +1,7 @@
 import {api} from './services.js';
 import {contentKinds} from './reports.js?v=manage-20261122';
 import {coverPicker} from './publishing-media.js';
-import {bindForm, button, confirmDelete, el, field, formatDate, idPart, loadInto, rule, say, status, textValue} from './ui.js';
+import {bindForm, button, confirmDelete, el, field, formatDate, idPart, loadInto, rule, run, say, status, textValue} from './ui.js';
 
 const rupees = paise => new Intl.NumberFormat('en-IN', {style: 'currency', currency: 'INR'}).format(paise / 100);
 const plural = (count, word) => `${count} ${word}${count === 1 ? '' : 's'}`;
@@ -203,6 +203,8 @@ export function publishedManager({ctx, onChange, ...helpers}) {
   function select(key) {
     active = key;
     openEditor = null;
+    tabs.hidden = true;
+    node.querySelector('.manage-toolbar').hidden = true;
     render();
   }
   const fillCourses = () => {
@@ -254,6 +256,31 @@ export function publishedManager({ctx, onChange, ...helpers}) {
         el('ul', {class: 'manage-details'}, type.details(item).map(detail => el('li', {}, detail))),
         type.text?.(item) ? el('p', {class: 'manage-text muted'}, type.text(item)) : null),
       el('div', {class: 'actions manage-actions'}, edit, remove), rowFeedback);
+    if (active === 'tests') {
+      const results = button('View Results', 'secondary');
+      const pdf = button('Export PDF', 'secondary');
+      results.addEventListener('click', () => run(results, rowFeedback, async () => {
+        const result = await api(`/admin/tests/${idPart(item.id)}/results`, {ctx, auth: true});
+        const summary = el('div', {class: 'result-table'}, el('h4', {}, `${result.results.length} submissions`),
+          ...result.results.map(row => el('div', {class: 'result-table-row'},
+            el('strong', {}, row.name || 'Student'), el('span', {}, row.phone || ''),
+            el('span', {}, `${row.score}/${row.maxMarks}`), el('small', {}, row.createdAt))));
+        article.querySelector('.result-table')?.remove();
+        article.append(summary);
+      }, 'Loading results…'));
+      pdf.addEventListener('click', () => run(pdf, rowFeedback, async () => {
+        const token = await ctx.user.getIdToken();
+        const response = await fetch(`/api/admin/tests/${idPart(item.id)}/results.pdf`,
+          {headers: {Authorization: ['Bearer', token].join(' ')}});
+        if (!response.ok) throw new Error(`Could not export results (${response.status}).`);
+        const url = URL.createObjectURL(await response.blob());
+        const anchor = el('a', {href: url, download: `${item.title}-results.pdf`});
+        document.body.append(anchor); anchor.click(); anchor.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        say(rowFeedback, 'Result PDF downloaded.');
+      }, 'Preparing PDF…'));
+      article.querySelector('.manage-actions').append(results, pdf);
+    }
     edit.addEventListener('click', () => {
       openEditor = openEditor === item.id ? null : item.id;
       render();
@@ -304,7 +331,7 @@ export function publishedManager({ctx, onChange, ...helpers}) {
   const node = el('div', {class: 'manager'}, tabs,
     el('div', {class: 'manage-toolbar'}, search, courseFilter, refreshButton), count, feedback, body);
   load();
-  return {node, reload: () => reload().catch(error => {
+  return {node, select, reload: () => reload().catch(error => {
     if (error.name !== 'AbortError') say(feedback, `Could not refresh published content: ${error.message}`, true);
   })};
 }

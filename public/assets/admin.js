@@ -44,18 +44,33 @@ function questionData(source) {
   try { data = JSON.parse(source); } catch { throw new Error('Questions must be valid JSON. Check commas, quotes, and brackets.'); }
   if (!Array.isArray(data) || !data.length) throw new Error('Add at least one question in a JSON array.');
   return data.map((item, index) => {
-    const {prompt, options, answer} = item || {};
+    const {prompt, options, answer, section} = item || {};
     if (typeof prompt !== 'string' || !prompt.trim() || !Array.isArray(options) || options.length < 2 ||
         options.some(value => typeof value !== 'string' || !value.trim()) ||
         !Number.isInteger(answer) || answer < 0 || answer >= options.length) {
       throw new Error(`Question ${index + 1} needs a prompt, at least two options, and a valid zero-based answer.`);
     }
-    return {prompt: prompt.trim(), options: options.map(value => value.trim()), answer};
+    return {prompt: prompt.trim(), options: options.map(value => value.trim()), answer,
+      section: typeof section === 'string' && section.trim() ? section.trim() : 'General'};
   });
 }
 
 export function showAdmin(main, ctx) {
   main.append(...heading('Admin Workspace', 'Approve course payments, publish learning material, and support students from your phone.'));
+  const analytics = el('div', {class: 'admin-analytics'});
+  main.append(analytics);
+  loadInto(analytics, ctx, async () => {
+    const result = await api('/admin/analytics', {ctx, auth: true});
+    analytics.replaceChildren(...[
+      ['Students', result.students],
+      ['Courses', result.courses],
+      ['Purchases', result.purchases],
+      ['Revenue', `₹${(result.revenue / 100).toLocaleString('en-IN')}`],
+      ['Tests / 24h', result.attempts24h],
+      ['All Attempts', result.attempts],
+    ].map(([label, value]) => el('article', {class: 'admin-stat'},
+      el('span', {}, label), el('strong', {}, String(value)))));
+  });
   const get = path => api(path, {ctx, auth: true});
   let manager;
   const publishes = /^\/admin\/(videos|physical-books|content\/|courses|seed-samples|timetable)/;
@@ -393,14 +408,39 @@ export function showAdmin(main, ctx) {
     try { questionData(value); return ''; } catch (error) { return error.message; }
   });
   const publish = button('Publish Test', null, 'submit');
+  const live = el('input', {type: 'checkbox'});
+  const startsAt = el('input', {type: 'datetime-local'});
+  const expiresAt = el('input', {type: 'datetime-local'});
+  const durationMinutes = el('input', {type: 'number', min: '10', max: '300', step: '5', value: '60'});
+  const attemptsLimit = el('input', {type: 'number', min: '1', max: '10', step: '1', value: '2'});
+  const marksPerQuestion = el('input', {type: 'number', min: '0.25', max: '10', step: '0.25', value: '1'});
+  const negativeMark = el('input', {type: 'number', min: '0', max: '5', step: '0.25', value: '0'});
+  const liveFields = el('div', {class: 'live-test-fields', hidden: ''},
+    field('Live Start Date and Time', startsAt), field('Attempts Allowed Until Expiry', attemptsLimit),
+    field('Live Window Expiry Date and Time', expiresAt), field('Duration (minutes)', durationMinutes),
+    field('Marks Per Correct Answer', marksPerQuestion), field('Negative Mark Per Wrong Answer', negativeMark));
+  live.addEventListener('change', () => {
+    liveFields.hidden = !live.checked;
+    startsAt.required = expiresAt.required = durationMinutes.required = attemptsLimit.required = live.checked;
+  });
   const testStatus = status();
   const testForm = el('form', {}, testField, field('Test Title', testTitle),
+    el('label', {class: 'choice'}, live, 'Publish as a live scheduled mock test'), liveFields,
     field('Questions (JSON)', editor, 'Enter an array of objects with prompt, options, and answer. The first option is answer 0.'),
     publish, testStatus);
   bindForm(testForm, publish, testStatus, async () => {
     const questions = questionData(editor.value);
-    await post(`/admin/courses/${idPart(testCourse.value)}/tests`, {json: {title: textValue(testTitle, 'Test title'), questions}});
+    await post(`/admin/courses/${idPart(testCourse.value)}/tests`, {json: {
+      title: textValue(testTitle, 'Test title'), questions, live: live.checked,
+      startsAt: live.checked ? new Date(startsAt.value).toISOString() : undefined,
+      expiresAt: live.checked ? new Date(expiresAt.value).toISOString() : undefined,
+      durationMinutes: live.checked ? durationMinutes.valueAsNumber : 90,
+      attemptsLimit: live.checked ? attemptsLimit.valueAsNumber : 0,
+      marksPerQuestion: marksPerQuestion.valueAsNumber, negativeMark: negativeMark.valueAsNumber,
+    }});
     testForm.reset();
+    liveFields.hidden = true;
+    startsAt.required = expiresAt.required = durationMinutes.required = attemptsLimit.required = false;
     say(testStatus, 'Test published.');
   }, 'Publishing test…');
   main.append(panel('Publish a Test', el('h3', {}, 'Import Questions (optional)'), importForm,
@@ -547,15 +587,92 @@ export function showAdmin(main, ctx) {
       el('strong', {}, item.phone), el('p', {class: 'entry-text'}, item.text)
     ]));
   });
-  const jump = el('nav', {class: 'admin-jump', 'aria-label': 'Jump to an admin section'},
-    [...main.querySelectorAll(':scope > section.panel > h2')].map(title => {
-      const chip = button(title.textContent, 'chip');
-      chip.addEventListener('click', () => {
-        title.tabIndex = -1;
-        title.closest('section').scrollIntoView({behavior: 'smooth', block: 'start'});
-        title.focus({preventScroll: true});
+  const panels = [...main.querySelectorAll(':scope > section.panel')];
+  const sectionTitle = section => section.querySelector(':scope > h2')?.textContent || '';
+  const findPanel = title => panels.find(section => sectionTitle(section) === title);
+  const workspace = el('div', {class: 'admin-workspace'});
+  const menu = el('div', {class: 'admin-area-grid'});
+  const openList = ({label, managerType, list, add, addLabel}) => {
+    const toolbar = el('div', {class: 'admin-section-toolbar'},
+      el('button', {type: 'button', class: 'admin-back-button'}, '← All Areas'),
+      el('h2', {}, label), el('div', {class: 'admin-section-actions'}));
+    const actions = toolbar.querySelector('.admin-section-actions');
+    toolbar.querySelector('.admin-back-button').addEventListener('click', showOverview);
+    const search = el('input', {type: 'search', class: 'admin-list-filter', placeholder: 'Filter list…', hidden: ''});
+    search.addEventListener('input', () => {
+      const term = search.value.trim().toLowerCase();
+      workspace.querySelectorAll('.manage-item, .payment-request, .student-control, .timetable-card, .entries > li').forEach(row => {
+        row.hidden = Boolean(term) && !row.textContent.toLowerCase().includes(term);
       });
-      return chip;
+    });
+    const filter = button('Filter', 'icon-button secondary');
+    filter.setAttribute('aria-label', `Filter ${label}`);
+    filter.title = 'Filter';
+    filter.textContent = '⌕';
+    filter.addEventListener('click', () => {
+      search.hidden = !search.hidden;
+      if (!search.hidden) search.focus();
+    });
+    actions.append(search, filter);
+    if (add) {
+      const plus = button('+', 'icon-button admin-add');
+      plus.setAttribute('aria-label', addLabel || `Add ${label.toLowerCase()}`);
+      plus.title = addLabel || 'Add item';
+      plus.addEventListener('click', () => {
+        add.hidden = false;
+        add.classList.add('admin-open-form');
+        workspace.replaceChildren(toolbar, list, add);
+        add.scrollIntoView({behavior: 'smooth', block: 'start'});
+      });
+      actions.append(plus);
+    }
+    if (managerType) manager.select(managerType);
+    workspace.replaceChildren(toolbar, list);
+    if (add) add.hidden = true;
+  };
+  const areas = [
+    {label: 'Courses', description: 'Course list, price, expiry, and access', icon: '▦',
+      open: () => openList({label: 'Courses', managerType: 'courses', list: manager.node, add: findPanel('Create a Course'), addLabel: 'Add Course'})},
+    {label: 'Mock Tests', description: 'Regular, timed, and live mock tests', icon: '✓',
+      open: () => openList({label: 'Mock Tests', managerType: 'tests', list: manager.node, add: findPanel('Publish a Test'), addLabel: 'Add Mock Test'})},
+    {label: 'Study Materials', description: 'Chapter PDFs and uploaded videos', icon: '▤',
+      open: () => openList({label: 'Study Materials', managerType: 'books', list: manager.node, add: findPanel('Upload a Study Book or Video'), addLabel: 'Add Study Material'})},
+    {label: 'YouTube Videos', description: 'Published learning video library', icon: '▶',
+      open: () => openList({label: 'YouTube Videos', managerType: 'videos', list: manager.node, add: findPanel('YouTube Videos'), addLabel: 'Add YouTube Video'})},
+    {label: 'Learning Resources', description: 'Current affairs, PYQs, syllabus, and free tests', icon: '☷',
+      open: () => openList({label: 'Learning Resources', managerType: 'resources', list: manager.node, add: findPanel('Publish Learning Resources'), addLabel: 'Add Resource'})},
+    {label: 'Course Payments', description: 'Approve or reject course payment requests', icon: '₹',
+      open: () => openList({label: 'Course Payments', list: findPanel('Payment Approvals')})},
+    {label: 'Physical Books', description: 'Inventory and published book list', icon: '▤',
+      open: () => openList({label: 'Physical Books', managerType: 'physicalBooks', list: manager.node, add: findPanel('Physical Books'), addLabel: 'Add Physical Book'})},
+    {label: 'Book Orders', description: 'Physical-book fulfillment and tracking', icon: '▣',
+      open: () => openList({label: 'Book Orders', list: findPanel('Physical Book Orders')})},
+    {label: 'Timetable', description: 'Published student timetable', icon: '▦',
+      open: () => openList({label: 'Timetable', managerType: 'schedules', list: manager.node, add: findPanel('Student Timetable'), addLabel: 'Add Timetable Session'})},
+    {label: 'Students', description: 'Accounts, activation, and disabling', icon: '●',
+      open: () => openList({label: 'Students', list: findPanel('Student Accounts')})},
+    {label: 'Support', description: 'Student help requests', icon: '?',
+      open: () => openList({label: 'Support', list: findPanel('Support Inbox')})},
+    {label: 'Payment Settings', description: 'UPI ID, QR image, and methods', icon: '⚙',
+      open: () => openList({label: 'Payment Settings', list: findPanel('Payment Information')})},
+    {label: 'Social Links', description: 'YouTube, Instagram, and Telegram', icon: '↗',
+      open: () => openList({label: 'Social Links', list: findPanel('Social Media Links')})},
+  ];
+  const showOverview = () => {
+    menu.replaceChildren(...areas.map(area => {
+      const card = el('button', {type: 'button', class: 'admin-area-card'},
+        el('span', {class: 'admin-area-icon', 'aria-hidden': 'true'}, area.icon),
+        el('strong', {}, area.label), el('small', {}, area.description), el('span', {class: 'admin-area-arrow'}, '→'));
+      card.addEventListener('click', area.open);
+      return card;
     }));
-  main.querySelector(':scope > .lead')?.after(jump);
+    workspace.replaceChildren(menu);
+  };
+  for (const section of panels) {
+    section.hidden = true;
+    section.classList.add('admin-page');
+  }
+  analytics.after(workspace);
+  for (const panelNode of panels) panelNode.remove();
+  showOverview();
 }

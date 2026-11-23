@@ -58,6 +58,12 @@ export function showSignIn(main, ctx, firebase, startAuth, initState) {
     const digits = phone.value.replace(/\D/g, '').slice(0, 10);
     phone.value = digits.length > 5 ? `${digits.slice(0, 5)} ${digits.slice(5)}` : digits;
   });
+  const exam = el('select', {required: ''},
+    el('option', {value: ''}, 'Choose Your Target Exam'),
+    ['UPSC Civil Services', 'SSC CGL', 'Railway Exams', 'Banking Exams', 'State PSC', 'Police / Defence', 'Other Government Exams']
+      .map(value => el('option', {value}, value)));
+  exam.value = localStorage.getItem('missionExam') || '';
+  exam.addEventListener('change', () => localStorage.setItem('missionExam', exam.value));
   const captcha = el('div', {id: 'captcha'});
   let verifier;
   const clearVerifier = () => {
@@ -72,7 +78,9 @@ export function showSignIn(main, ctx, firebase, startAuth, initState) {
     const submit = button('Send OTP', null, 'submit');
     const phoneControl = el('div', {class: 'phone-control'},
       el('span', {class: 'country-prefix', 'aria-hidden': 'true'}, '+91'), phone);
-    const form = el('form', {}, field('Mobile Number', phoneControl, 'Enter your 10-digit Indian mobile number. Standard SMS rates may apply.'),
+    const form = el('form', {}, field('Exam You Are Preparing For', exam,
+      'We use this to prioritize relevant courses and content.'),
+      field('Mobile Number', phoneControl, 'Enter your 10-digit Indian mobile number. Standard SMS rates may apply.'),
       captcha, submit, feedback);
     if (auth.dummy) form.prepend(el('p', {class: 'dummy-login-note'},
       'Local dummy sign-in: enter any mobile number and use OTP 123456. Use 99999 99999 to sign in as admin.'));

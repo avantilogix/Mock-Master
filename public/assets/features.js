@@ -1,12 +1,12 @@
 import {api} from './services.js';
 import {coverGallery} from './publishing-media.js';
 import {upiReference} from './course.js';
-import {bindForm, button, checkField, confirmDelete, el, entries, field, heading, idPart, loadInto, panel, rule, run, say, status, textValue} from './ui.js';
+import {bindForm, button, checkField, confirmDelete, el, entries, field, heading, icon, idPart, loadInto, panel, rule, run, say, status, textValue} from './ui.js';
 
 export const socialLinks = [
-  ['YouTube', 'https://www.youtube.com/'],
-  ['Instagram', 'https://www.instagram.com/'],
-  ['Telegram', 'https://t.me/'],
+  ['YouTube', 'youtube', '▶'],
+  ['Instagram', 'instagram', '◎'],
+  ['Telegram', 'telegram', '➤'],
 ];
 
 const weekDays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
@@ -149,10 +149,10 @@ export function showReferrals(main, ctx, action) {
       applyForm.reset();
       say(applyFeedback, 'Referral linked successfully.');
     }, 'Linking referral…');
-    content.replaceChildren(el('section', {class: 'referral-hero'},
+    content.replaceChildren(...[el('section', {class: 'referral-hero'},
       el('span', {class: 'referral-icon', 'aria-hidden': 'true'}, '↗'), el('h2', {}, 'Your Personal Code'), code,
       el('p', {class: 'muted'}, `Credits available: ₹${referral.credits || 0}`), copy),
-      referral.referred_by || referral.referredBy ? null : panel('Use a Friend’s Code', applyForm));
+      referral.referred_by || referral.referredBy ? null : panel('Use a Friend’s Code', applyForm)].filter(Boolean));
   });
 }
 
@@ -160,7 +160,8 @@ export function showPhysicalStore(main, ctx, action) {
   main.append(...heading('Physical Book Store', 'Order printed books with UPI payment proof and delivery tracking.'));
   const books = el('div', {class: 'grid'});
   const orders = el('div');
-  main.append(books, ctx.user ? panel('Your Physical Orders', orders) : null);
+  main.append(books);
+  if (ctx.user) main.append(panel('Your Physical Orders', orders));
   loadInto(books, ctx, async () => {
     const [rows, config] = await Promise.all([api('/physical-books', {ctx}), api('/config', {ctx})]);
     books.replaceChildren(...(rows.length ? rows.map(item => el('article', {class: 'panel physical-book'},
@@ -322,9 +323,10 @@ async function buttonDownload(ctx, bookId, pageInput, control, feedback) {
 export function socialFooter(ctx) {
   const target = el('div', {class: 'social-links', 'aria-label': 'Social media'});
   api('/social', {ctx}).then(values => {
-    const links = socialLinks.filter(([, fallback]) => fallback).filter(([label]) => values[label.toLowerCase()]);
-    target.replaceChildren(...links.map(([label]) => el('a',
-      {href: values[label.toLowerCase()], target: '_blank', rel: 'noopener noreferrer'}, label)));
+    const links = socialLinks.filter(([, key]) => values[key]);
+    target.replaceChildren(...links.map(([label, key, mark]) => el('a',
+      {href: values[key], target: '_blank', rel: 'noopener noreferrer', class: `social-icon ${key}`,
+        'aria-label': label, title: label}, icon(key, 'social-brand-icon'))));
   }).catch(() => {});
   return target;
 }
