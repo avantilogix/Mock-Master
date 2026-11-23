@@ -259,6 +259,11 @@ body { background: linear-gradient(180deg, #edf6ff 0, var(--bg) 17rem, var(--bg)
 .support-ticket + .support-ticket { margin-top: .65rem; }
 .support-phone { color: var(--accent-dark); font-weight: 800; text-decoration: none; }
 .support-ticket .entry-text { margin: 0; color: var(--ink); line-height: 1.55; white-space: pre-wrap; }
+.legal-list { display: grid; gap: .75rem; margin: 0; padding-left: 1.25rem; }
+.legal-list li { padding-left: .2rem; line-height: 1.65; }
+[data-page="privacy"] main, [data-page="terms"] main { max-width: 62rem; }
+[data-page="privacy"] main > .panel, [data-page="terms"] main > .panel { margin-bottom: .85rem; }
+[data-page="privacy"] main > .panel p, [data-page="terms"] main > .panel p { margin-bottom: 0; color: var(--muted); line-height: 1.7; }
 
 .exam-topbar, .exam-sidebar, .exam-question {
   border-color: var(--line);

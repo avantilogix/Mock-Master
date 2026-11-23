@@ -1,5 +1,5 @@
-import {showAdmin} from './admin.js?v=cards-support-exam-final';
-import {showCatalog, showContentLibrary, showCourse, showDashboard, showMyCourses} from './course.js?v=cards-support-exam-final';
+import {showAdmin} from './admin.js?v=mock-live-readmore-final';
+import {showCatalog, showContentLibrary, showCourse, showDashboard, showMyCourses} from './course.js?v=mock-live-readmore-final';
 import {api, firebaseAuth} from './services.js?v=ebook-store-final';
 import {showSignIn} from './signin.js';
 import {showBook, showTest, showVideo} from './study.js?v=cards-support-exam-final';
@@ -16,7 +16,7 @@ const routes = new Map([
   ['home', 0], ['catalog', 0], ['my-courses', 0], ['test-series', 0], ['book-store', 0], ['materials', 0],
   ['free-tests', 0], ['current-affairs', 0], ['pyqs', 0], ['syllabus', 0], ['progress', 0], ['notifications', 0],
   ['timetable', 0], ['referrals', 0], ['downloads', 0],
-  ['videos', 0], ['groups', 0], ['share-app', 0], ['about', 0],
+  ['videos', 0], ['groups', 0], ['share-app', 0], ['about', 0], ['privacy', 0], ['terms', 0],
   ['course', 1], ['test', 2], ['book', 2], ['ebook', 1], ['video', 2], ['signin', 0],
   ['profile', 0], ['support', 0], ['admin', 0]
 ]);
@@ -247,12 +247,67 @@ function showProfile(ctx) {
           el('p', {class: 'muted'},
             'A focused preparation app for mock tests, chapter-wise materials, current affairs, videos, progress reports, and protected course communities.'),
           link('Read Full Story', '#about', 'profile-about-link')))),
+    panel('Privacy & Legal', el('div', {class: 'profile-menu'},
+      profileAction('admin', 'Privacy Policy', 'How your account and learning data are used', '#privacy'),
+      profileAction('files', 'Terms & Conditions', 'Purchase, content, community, and account rules', '#terms'))),
     panel('Account Actions', el('div', {class: 'account-actions'}, signOut),
       el('div', {class: 'danger-zone'}, el('div', {}, el('strong', {}, 'Disable Account'),
         el('p', {class: 'muted'}, 'You can contact support later to request reactivation.')), disable, feedback)));
   accountEditor.replaceChildren(form);
   showSavedName();
   accountEditor.hidden = true;
+}
+
+function showLegalPage(type) {
+  if (type === 'privacy') {
+    main.append(
+      ...heading('Privacy Policy', 'Last updated: 23 November 2026'),
+      panel('Our Commitment', el('p', {}, 'Mission Selection respects your privacy and uses personal information only to operate, secure, and improve the learning service. This policy explains what we collect, why we collect it, and the choices available to you.')),
+      panel('Information We Collect', el('ul', {class: 'legal-list'},
+        el('li', {}, el('strong', {}, 'Account information: '), 'verified mobile number, Firebase account identifier, display name, and target exam.'),
+        el('li', {}, el('strong', {}, 'Learning information: '), 'course purchases, test attempts, scores, saved progress, timetable entries, and support requests.'),
+        el('li', {}, el('strong', {}, 'Payment information: '), 'UPI transaction reference, amount, payment note, and approval status. Mission Selection does not collect your UPI PIN, bank password, or complete bank-account credentials.'),
+        el('li', {}, el('strong', {}, 'Technical information: '), 'basic device, security, error, and service-log information required to keep the application reliable.'))),
+      panel('How Information Is Used', el('ul', {class: 'legal-list'},
+        el('li', {}, 'Verify your identity and restore purchases on the same mobile number.'),
+        el('li', {}, 'Provide courses, mock tests, protected books, videos, groups, downloads, notifications, and progress reports.'),
+        el('li', {}, 'Review payment proof, approve access, prevent misuse, and support refunds or disputes where applicable.'),
+        el('li', {}, 'Detect fraud, protect paid content, respond to support requests, and meet legal or security obligations.'))),
+      panel('Content Protection', el('p', {}, 'Protected PDF pages may display your verified mobile number or another account-linked mark. Original source files are not intentionally provided through the reader. Native Android versions may prevent screenshots and screen recording; browser and operating-system limitations can still affect protection.')),
+      panel('Sharing and Service Providers', el('p', {}, 'We use infrastructure providers including Firebase for authentication, hosting, databases, and storage. We do not sell personal information. Information may be shared with authorized administrators, payment verification staff, service providers under appropriate safeguards, or authorities when legally required.')),
+      panel('Retention and Security', el('p', {}, 'Information is retained while needed to provide the service, keep purchase records, resolve disputes, maintain security, and comply with applicable law. We use access controls, authenticated requests, protected storage, and restricted administration, but no internet service can guarantee absolute security.')),
+      panel('Your Choices', el('ul', {class: 'legal-list'},
+        el('li', {}, 'Update your display name and target exam from Profile.'),
+        el('li', {}, 'Request account deactivation from Profile or contact support.'),
+        el('li', {}, 'Request access, correction, or deletion of eligible personal information through Support. Some transaction and entitlement records may need to be retained.'),
+        el('li', {}, 'You may sign out or stop using the application, but previously approved purchases and legal records may remain subject to retention requirements.'))),
+      panel('Children and Policy Changes', el('p', {}, 'Mission Selection is not intended for children below the age that requires parent or guardian consent. Parents or guardians should supervise use. This policy may be updated when features or legal requirements change; the latest version and date will be shown here.')),
+      panel('Contact', el('p', {}, 'For privacy questions or requests, open the Support section and send a message from your signed-in account.'), link('Contact Support', '#support', 'button')));
+  } else {
+    main.append(
+      ...heading('Terms & Conditions', 'Last updated: 23 November 2026'),
+      panel('Acceptance and Eligibility', el('p', {}, 'By creating an account or using Mission Selection, you agree to these terms. You must provide a genuine, verified Indian mobile number and use the application lawfully. If you are a minor or require guardian consent, use the service under appropriate supervision.')),
+      panel('Account Responsibilities', el('ul', {class: 'legal-list'},
+        el('li', {}, 'Keep control of your mobile number, device, and one-time passwords.'),
+        el('li', {}, 'Do not share, sell, rent, transfer, or provide access to another person’s paid account.'),
+        el('li', {}, 'Provide accurate profile, payment, and support information.'),
+        el('li', {}, 'Mission Selection may restrict or disable accounts involved in abuse, fraud, security risks, or repeated violations.'))),
+      panel('Courses, E-Books, and Payments', el('ul', {class: 'legal-list'},
+        el('li', {}, 'Prices, content, availability, expiry dates, and access limits are shown in the application and may change before a new purchase.'),
+        el('li', {}, 'Access is granted only after the submitted payment proof is verified and approved by an administrator.'),
+        el('li', {}, 'A payment that is pending, rejected, reversed, disputed, or found to be inaccurate does not create an entitlement.'),
+        el('li', {}, 'Refund, cancellation, or correction requests must be sent through Support with the relevant transaction details. Eligibility depends on the purchase, access already provided, and applicable law.'))),
+      panel('Mock Tests and Results', el('p', {}, 'Tests may have start times, expiry dates, duration limits, attempt limits, marking schemes, negative marks, and sections. The server’s authoritative time and submission record determine access and results. Practice content is for preparation and does not guarantee exam results, selection, ranking, or outcomes.')),
+      panel('Protected Digital Content', el('ul', {class: 'legal-list'},
+        el('li', {}, 'You receive a personal, limited, non-transferable right to access purchased learning content for the stated access period.'),
+        el('li', {}, 'Do not copy, redistribute, publish, resell, reverse-engineer, remove watermarks, bypass access controls, or use automated extraction tools.'),
+        el('li', {}, 'An approved protected E-Book download is licensed only to your account and may still contain a mobile-number watermark.'),
+        el('li', {}, 'Content providers and authors retain their rights. Purchase grants access, not ownership of the underlying intellectual property.'))),
+      panel('Community and Support Conduct', el('p', {}, 'Course discussions, support requests, reviews, and other user submissions must be respectful and lawful. Do not post harassment, abusive material, spam, misleading information, personal data of others, confidential exam content, malware, or links intended to harm users. We may moderate or remove violating content.')),
+      panel('Availability and Changes', el('p', {}, 'Features, courses, schedules, tests, and content may be updated, corrected, paused, or removed. We aim for reliable service but do not warrant uninterrupted availability. Temporary maintenance, network issues, third-party outages, or security measures may affect access.')),
+      panel('Limitation and Governing Process', el('p', {}, 'To the extent permitted by applicable law, Mission Selection is not liable for indirect loss, device/network failures, user payment mistakes, or outcomes of competitive examinations. Nothing in these terms excludes rights or responsibilities that cannot lawfully be excluded. Disputes should first be raised through Support so they can be reviewed.')),
+      panel('Questions or Updates', el('p', {}, 'We may update these terms when the service changes. Continued use after an updated version becomes effective indicates acceptance of the revised terms.'), link('Contact Support', '#support', 'button')));
+  }
 }
 
 function showSupport(ctx) {
@@ -308,6 +363,8 @@ function render(focus = false) {
     case 'videos': showVideos(main); break;
     case 'groups': showCourseGroups(main, ctx, current?.me, {signInLink}); break;
     case 'share-app': showShareRate(main); break;
+    case 'privacy':
+    case 'terms': showLegalPage(parsed.page); break;
     case 'about':
       main.append(...heading('About Mission Selection', 'Choose. Prepare. Achieve.'),
         el('section', {class: 'about-hero'},

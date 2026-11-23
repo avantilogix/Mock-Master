@@ -26,14 +26,20 @@ function courseCard(course, index, me) {
   const owned = owns(me, course.id);
   const cover = coverGallery(course) || el('div', {class: `card-cover alt-${index % 3}`},
     el('span', {}, owned ? 'Your Learning Space' : 'Mock Tests + E-Books'));
+  const description = el('p', {class: 'description tile-description'}, course.description);
+  const readMore = link('Read more', `#course/${idPart(course.id)}`, 'text-link tile-read-more');
+  readMore.hidden = true;
   const body = el('div', {class: 'card-body'}, owned ? el('span', {class: 'badge'}, 'Purchased') : null,
-    el('h3', {}, course.title), expiryLabel(course), el('p', {class: 'description tile-description'}, course.description),
-    link('Read more', `#course/${idPart(course.id)}`, 'text-link tile-read-more'),
+    el('h3', {}, course.title), expiryLabel(course), description, readMore,
     el('div', {class: 'card-footer'}, course.expired ? el('span', {class: 'muted'}, 'Access closed') :
       owned ? el('span', {class: 'muted'}, 'Continue Learning') : el('p', {class: 'price'}, priceText(course.price)),
       el('a', {class: 'button', href: `#course/${idPart(course.id)}`,
         'aria-label': `${owned && !course.expired ? 'Open' : 'View'} course: ${course.title}`}, owned && !course.expired ? 'Open Course' : 'View Details')));
-  return el('article', {class: 'panel card'}, cover, body);
+  const card = el('article', {class: 'panel card'}, cover, body);
+  requestAnimationFrame(() => {
+    if (card.isConnected) readMore.hidden = description.scrollHeight <= description.clientHeight + 1;
+  });
+  return card;
 }
 
 export function showDashboard(main, ctx, me) {

@@ -1206,11 +1206,11 @@ function createApp() {
     let scheduled = '';
     let expiration = '';
     let duration = 0;
+    duration = durationMinutes === undefined ? 90 : durationMinutes;
+    if (!Number.isInteger(duration) || duration < 10 || duration > 300) {
+      fail(422, 'A test needs a duration from 10–300 minutes.');
+    }
     if (live) {
-      duration = durationMinutes;
-      if (!Number.isInteger(duration) || duration < 10 || duration > 300) {
-        fail(422, 'A live test needs a valid start time and a duration from 10–300 minutes.');
-      }
       scheduled = istIso(startsAt, 'Live start time');
     }
     if (expiresAt !== undefined && expiresAt !== '') {
@@ -1219,10 +1219,10 @@ function createApp() {
     if (live && (!expiration || Date.parse(expiration) <= Date.parse(scheduled))) {
       fail(422, 'A live test expiry must be after its start time.');
     }
-    const attempts = attemptsLimit === undefined ? 2 : attemptsLimit;
+    const attempts = live ? (attemptsLimit === undefined ? 2 : attemptsLimit) : 0;
     const marks = marksPerQuestion === undefined ? 1 : marksPerQuestion;
     const negative = negativeMark === undefined ? 0 : negativeMark;
-    if (!Number.isInteger(attempts) || attempts < 1 || attempts > 100) {
+    if (live && (!Number.isInteger(attempts) || attempts < 1 || attempts > 100)) {
       fail(422, 'Attempt limit must be a whole number from 1–100.');
     }
     if (typeof marks !== 'number' || !Number.isFinite(marks) || marks <= 0 || marks > 100) {

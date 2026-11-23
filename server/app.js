@@ -794,12 +794,12 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
       attemptsLimit = 2, marksPerQuestion = 1, negativeMark = 0 } = req.body ?? {};
     let scheduled = '';
     let duration = 0;
+    duration = durationMinutes === undefined ? 90 : durationMinutes;
+    if (!Number.isInteger(duration) || duration < 10 || duration > 300) {
+      fail(422, 'A test needs a duration from 10–300 minutes.');
+    }
     if (live) {
       const scheduledDate = istIso(startsAt, 'Live start time');
-      duration = durationMinutes;
-      if (!Number.isInteger(duration) || duration < 10 || duration > 300) {
-        fail(422, 'A live test needs a valid start time and a duration from 10–300 minutes.');
-      }
       scheduled = scheduledDate;
     }
     const expires = live ? istIso(expiresAt, 'Live expiry time') : '';

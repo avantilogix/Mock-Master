@@ -458,7 +458,9 @@ export function showAdmin(main, ctx) {
     try { questionData(value); return ''; } catch (error) { return error.message; }
   });
   const publish = button('Publish Test', null, 'submit');
-  const live = el('input', {type: 'checkbox'});
+  const testType = el('select', {required: ''},
+    el('option', {value: 'mock'}, 'Mock Test — Unlimited Attempts'),
+    el('option', {value: 'live'}, 'Live Test — Scheduled Window'));
   const startsAt = el('input', {type: 'datetime-local'});
   const expiresAt = el('input', {type: 'datetime-local'});
   const durationMinutes = el('input', {type: 'number', min: '10', max: '300', step: '5', value: '60'});
@@ -468,13 +470,16 @@ export function showAdmin(main, ctx) {
   const liveFields = el('div', {class: 'live-test-fields', hidden: ''},
     field('Live Start Date and Time (IST)', startsAt), field('Attempts Allowed Until Expiry', attemptsLimit),
     field('Live Window Expiry Date and Time (IST)', expiresAt));
-  live.addEventListener('change', () => {
-    liveFields.hidden = !live.checked;
-    startsAt.required = expiresAt.required = durationMinutes.required = attemptsLimit.required = live.checked;
-  });
+  const updateTestType = () => {
+    const isLive = testType.value === 'live';
+    liveFields.hidden = !isLive;
+    startsAt.required = expiresAt.required = attemptsLimit.required = isLive;
+  };
+  testType.addEventListener('change', updateTestType);
+  updateTestType();
   const testStatus = status();
   const testForm = el('form', {}, testField, field('Test Title', testTitle),
-    el('label', {class: 'choice'}, live, 'Publish as a live scheduled mock test'), liveFields,
+    field('Test Type', testType, 'Mock tests allow unlimited attempts. Attempt limits apply only to live tests.'), liveFields,
     field('Duration (minutes)', durationMinutes, 'Used for every attempt.'),
     field('Marks Per Correct Answer', marksPerQuestion),
     field('Negative Mark Per Wrong Answer', negativeMark),
@@ -483,14 +488,15 @@ export function showAdmin(main, ctx) {
   bindForm(testForm, publish, testStatus, async () => {
     const questions = questionData(editor.value);
     await post(`/admin/courses/${idPart(testCourse.value)}/tests`, {json: {
-      title: textValue(testTitle, 'Test title'), questions, live: live.checked,
-      startsAt: live.checked ? startsAt.value : undefined,
-      expiresAt: live.checked ? expiresAt.value : undefined,
+      title: textValue(testTitle, 'Test title'), questions, live: testType.value === 'live',
+      startsAt: testType.value === 'live' ? startsAt.value : undefined,
+      expiresAt: testType.value === 'live' ? expiresAt.value : undefined,
       durationMinutes: durationMinutes.valueAsNumber,
-      attemptsLimit: live.checked ? attemptsLimit.valueAsNumber : 0,
+      attemptsLimit: testType.value === 'live' ? attemptsLimit.valueAsNumber : 0,
       marksPerQuestion: marksPerQuestion.valueAsNumber, negativeMark: negativeMark.valueAsNumber,
     }});
     testForm.reset();
+    updateTestType();
     liveFields.hidden = true;
     startsAt.required = expiresAt.required = durationMinutes.required = attemptsLimit.required = false;
     say(testStatus, 'Test published.');
