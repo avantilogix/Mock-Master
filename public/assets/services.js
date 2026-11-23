@@ -1,6 +1,6 @@
 const firebaseBase = 'https://www.gstatic.com/firebasejs/11.10.0/';
 
-export async function api(path, {ctx, auth = false, method = 'GET', json, binary, image = false, imageUpload} = {}) {
+export async function api(path, {ctx, auth = false, method = 'GET', json, binary, image = false, blob = false, imageUpload} = {}) {
   const signal = ctx?.signal;
   const check = () => {
     if (ctx && !ctx.current()) throw new DOMException('Request cancelled', 'AbortError');
@@ -37,7 +37,7 @@ export async function api(path, {ctx, auth = false, method = 'GET', json, binary
   if (image && !/^image\//i.test(response.headers.get('Content-Type') || '')) {
     throw new Error('The server did not return a book image.');
   }
-  const body = image ? await response.blob() : (response.status === 204 ? null :
+  const body = image || blob ? await response.blob() : (response.status === 204 ? null :
     await response.text().then(text => text ? JSON.parse(text) : null));
   check();
   return body;

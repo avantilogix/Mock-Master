@@ -29,6 +29,19 @@ function looksLikeVideo(path, type) {
   return ['ftyp', 'moov', 'mdat', 'wide', 'free'].includes(header.toString('latin1', 4, 8));
 }
 
+async function protectedPdf(source, pages, phone) {
+  const output = await PDFDocument.create();
+  for (let page = 1; page <= pages; page++) {
+    const image = await output.embedPng(await renderPage(source, page, phone));
+    const target = output.addPage([595, 842]);
+    const scale = Math.min(595 / image.width, 842 / image.height);
+    const width = image.width * scale;
+    const height = image.height * scale;
+    target.drawImage(image, { x: (595 - width) / 2, y: (842 - height) / 2, width, height });
+  }
+  return Buffer.from(await output.save());
+}
+
 export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, adminUids = [], trustLocalProxy = false,
   videoDir = join(tmpdir(), 'mock-master-videos'), dummyLogin = false }) {
   const app = express();
@@ -134,6 +147,8 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     res.json(Object.fromEntries(rows.map(row => [row.key, row.value])));
   });
   api.get('/courses', (_req, res) => res.json(all('SELECT id, title, description, price FROM courses ORDER BY rowid DESC')));
+  api.get('/ebooks', (_req, res) => res.json(all(
+    'SELECT id, title, description, price, pages, created_at AS createdAt FROM ebooks ORDER BY rowid DESC')));
   api.get('/courses/:id/payment-qr', async (req, res) => {
     const row = course(req.params.id);
     const payment = runtimePayment();
@@ -319,6 +334,56 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
       reference || 'CREDITS', note, submittedAt, amountDue === 0 ? `credits:${orderId}` : null);
     res.status(201).json({ id: orderId, amount: amountDue, creditsUsed,
       status: amountDue === 0 ? 'approved' : 'pending', reference: reference || 'CREDITS', submittedAt });
+  });
+  api.get('/ebooks/:id/payment', (req, res) => {
+    const book = one('SELECT id, title, price FROM ebooks WHERE id=?', req.params.id);
+    if (!book) fail(404, 'E-book not found.');
+    const order = one(`SELECT id, amount, payment_status AS status, transaction_ref AS reference,
+      payment_note AS note, review_note AS reviewNote, submitted_at AS submittedAt
+      FROM ebook_orders WHERE uid=? AND ebook=?`, req.user.uid, book.id);
+    res.json({ amount: book.price, payment: { ...runtimePayment(), qr: '/api/payment-qr' }, order });
+  });
+  api.post('/ebooks/:id/payment', paymentLimit, (req, res) => {
+    const book = one('SELECT id, title, price FROM ebooks WHERE id=?', req.params.id);
+    if (!book) fail(404, 'E-book not found.');
+    const existing = one('SELECT id, payment_status FROM ebook_orders WHERE uid=? AND ebook=?', req.user.uid, book.id);
+    if (existing && ['pending', 'approved'].includes(existing.payment_status)) {
+      if (existing.payment_status === 'approved') fail(409, 'You already own this e-book.');
+      fail(409, 'A payment request is already waiting for admin review.');
+    }
+    if (!runtimePayment().configured) fail(503, 'Payment details are not configured.');
+    const reference = paymentReference(req.body?.reference);
+    if (!reference) fail(422, 'Enter a valid UPI transaction reference (4–80 characters).');
+    const note = typeof req.body?.note === 'string' ? req.body.note.trim().slice(0, 500) : '';
+    const id = existing?.id || randomUUID();
+    const submittedAt = new Date().toISOString();
+    run(`INSERT INTO ebook_orders (id, uid, ebook, amount, transaction_ref, payment_note, submitted_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(uid, ebook) DO UPDATE SET
+      amount=excluded.amount, transaction_ref=excluded.transaction_ref, payment_note=excluded.payment_note,
+      payment='', payment_status='pending', review_note='', submitted_at=excluded.submitted_at`,
+    id, req.user.uid, book.id, book.price, reference, note, submittedAt);
+    res.status(201).json({ id, amount: book.price, status: 'pending', reference, submittedAt });
+  });
+  api.get('/ebook-orders', (req, res) => res.json(all(
+    `SELECT id, ebook, amount, payment_status AS status, review_note AS reviewNote,
+      submitted_at AS submittedAt FROM ebook_orders WHERE uid=? ORDER BY submitted_at DESC`, req.user.uid)));
+  function ownedEbook(req, id) {
+    const book = one('SELECT * FROM ebooks WHERE id=?', id);
+    if (!book) fail(404, 'E-book not found.');
+    if (!req.user.admin && !one("SELECT 1 FROM ebook_orders WHERE uid=? AND ebook=? AND payment_status='approved' AND payment<>''",
+      req.user.uid, id)) fail(403, 'Purchase and wait for approval to unlock this e-book.');
+    return book;
+  }
+  api.get('/ebooks/:id/pages/:page', async (req, res) => {
+    const book = ownedEbook(req, req.params.id);
+    const page = Number(req.params.page);
+    if (!Number.isInteger(page) || page < 1 || page > book.pages) fail(404, 'Page not found.');
+    res.type('png').send(await processDocument(() => renderPage(Buffer.from(book.pdf), page, req.user.phone)));
+  });
+  api.get('/ebooks/:id/download', async (req, res) => {
+    const book = ownedEbook(req, req.params.id);
+    const pdf = await protectedPdf(Buffer.from(book.pdf), book.pages, req.user.phone);
+    res.attachment(`${book.title}-protected.pdf`).type('pdf').send(pdf);
   });
 
   function test(id) {
@@ -560,8 +625,10 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     res.json({
       students: one('SELECT COUNT(*) AS count FROM students').count,
       courses: one('SELECT COUNT(*) AS count FROM courses').count,
-      purchases: one("SELECT COUNT(*) AS count FROM orders WHERE payment IS NOT NULL AND payment!=''").count,
-      revenue: one("SELECT COALESCE(SUM(amount),0) AS amount FROM orders WHERE payment IS NOT NULL AND payment!=''").amount,
+      purchases: one("SELECT COUNT(*) AS count FROM orders WHERE payment IS NOT NULL AND payment!=''").count +
+        one("SELECT COUNT(*) AS count FROM ebook_orders WHERE payment<>''").count,
+      revenue: one("SELECT COALESCE(SUM(amount),0) AS amount FROM orders WHERE payment IS NOT NULL AND payment!=''").amount +
+        one("SELECT COALESCE(SUM(amount),0) AS amount FROM ebook_orders WHERE payment<>''").amount,
       attempts24h: one('SELECT COUNT(*) AS count FROM attempts WHERE created_at>=?', since).count,
       attempts: one('SELECT COUNT(*) AS count FROM attempts').count,
       liveTests: all(`SELECT t.id, t.title, t.starts_at AS startsAt, t.expires_at AS expiresAt,
@@ -756,6 +823,28 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
       id, courseId, title, pages, req.body, subject, chapter, new Date().toISOString());
     res.status(201).json({ id, pages });
   });
+  api.get('/admin/ebooks', (_req, res) => res.json(all(
+    `SELECT id, title, description, price, pages, created_at AS createdAt,
+      (SELECT COUNT(*) FROM ebook_orders o WHERE o.ebook=ebooks.id) AS orders
+      FROM ebooks ORDER BY rowid DESC`)));
+  api.post('/admin/ebooks', raw, async (req, res) => {
+    if (!Buffer.isBuffer(req.body)) fail(400, 'Upload a PDF.');
+    const pages = await processDocument(() => pageCount(req.body));
+    const id = randomUUID();
+    run('INSERT INTO ebooks (id, title, description, price, pages, pdf, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      id, text(req.query.title, 'E-book title', 120), text(req.query.description, 'Description', 2000),
+      priceInput(Number(req.query.price)), pages, req.body, new Date().toISOString());
+    res.status(201).json({ id, pages });
+  });
+  api.delete('/admin/ebooks/:id', (req, res) => {
+    const book = one('SELECT 1 FROM ebooks WHERE id=?', req.params.id);
+    if (!book) fail(404, 'E-book not found.');
+    if (one('SELECT 1 FROM ebook_orders WHERE ebook=?', req.params.id)) {
+      fail(409, 'This e-book has purchase requests and cannot be deleted.');
+    }
+    run('DELETE FROM ebooks WHERE id=?', req.params.id);
+    res.sendStatus(204);
+  });
   api.post('/admin/courses/:id/videos/upload', (req, res) => {
     course(req.params.id);
     res.json({ direct: true });
@@ -789,31 +878,46 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     res.status(201).json({ id, size });
   });
   api.get('/admin/payments', (req, res) => {
-    res.json(all(`SELECT o.id, o.amount, o.transaction_ref AS reference, o.payment_note AS note,
+    const courses = all(`SELECT o.id, o.amount, o.transaction_ref AS reference, o.payment_note AS note,
       o.payment_status AS status, o.submitted_at AS submittedAt, o.review_note AS reviewNote,
-      COALESCE(NULLIF(s.name, ''), 'Student') AS name, s.phone, c.title AS course
+      COALESCE(NULLIF(s.name, ''), 'Student') AS name, s.phone, c.title AS course, 'course' AS type
       FROM orders o JOIN students s ON s.uid=o.uid JOIN courses c ON c.id=o.course
-      ORDER BY CASE WHEN o.payment_status='pending' THEN 0 ELSE 1 END, o.submitted_at DESC LIMIT 200`));
+      ORDER BY CASE WHEN o.payment_status='pending' THEN 0 ELSE 1 END, o.submitted_at DESC LIMIT 200`);
+    const ebooks = all(`SELECT o.id, o.amount, o.transaction_ref AS reference, o.payment_note AS note,
+      o.payment_status AS status, o.submitted_at AS submittedAt, o.review_note AS reviewNote,
+      COALESCE(NULLIF(s.name, ''), 'Student') AS name, s.phone, b.title AS course, 'ebook' AS type
+      FROM ebook_orders o JOIN students s ON s.uid=o.uid JOIN ebooks b ON b.id=o.ebook
+      ORDER BY CASE WHEN o.payment_status='pending' THEN 0 ELSE 1 END, o.submitted_at DESC LIMIT 200`);
+    res.json([...courses, ...ebooks].sort((a, b) =>
+      Number(a.status !== 'pending') - Number(b.status !== 'pending') ||
+      String(b.submittedAt).localeCompare(String(a.submittedAt))).slice(0, 200));
   });
   api.post('/admin/payments/:id/approve', (req, res) => {
-    const order = one('SELECT id, payment_status FROM orders WHERE id=?', req.params.id);
+    const courseOrder = one('SELECT id, payment_status FROM orders WHERE id=?', req.params.id);
+    const ebookOrder = one('SELECT id, payment_status FROM ebook_orders WHERE id=?', req.params.id);
+    const order = courseOrder || ebookOrder;
     if (!order) fail(404, 'Payment request not found.');
     if (order.payment_status === 'approved') return res.sendStatus(204);
     if (order.payment_status !== 'pending') fail(409, 'Only pending requests can be approved.');
     const reviewedAt = new Date().toISOString();
-    run(`UPDATE orders SET payment=?, payment_status='approved', reviewed_at=?, reviewed_by=?, review_note=''
-      WHERE id=? AND payment_status='pending'`, `manual:${order.id}`, reviewedAt, req.user.uid, order.id);
+    run(`UPDATE ${courseOrder ? 'orders' : 'ebook_orders'} SET payment=?, payment_status='approved',
+      reviewed_at=?, reviewed_by=?, review_note='' WHERE id=? AND payment_status='pending'`,
+    `manual:${order.id}`, reviewedAt, req.user.uid, order.id);
     res.sendStatus(204);
   });
   api.post('/admin/payments/:id/reject', (req, res) => {
-    const order = one('SELECT id, uid, payment_status, credits_used FROM orders WHERE id=?', req.params.id);
+    const courseOrder = one('SELECT id, uid, payment_status, credits_used FROM orders WHERE id=?', req.params.id);
+    const ebookOrder = one(`SELECT id, uid, payment_status, 0 AS credits_used
+      FROM ebook_orders WHERE id=?`, req.params.id);
+    const order = courseOrder || ebookOrder;
     if (!order) fail(404, 'Payment request not found.');
     if (order.payment_status !== 'pending') fail(409, 'Only pending requests can be rejected.');
     const reviewNote = typeof req.body?.note === 'string' ? req.body.note.trim() : '';
     if (!reviewNote || reviewNote.length > 500) fail(422, 'Enter a rejection reason (maximum 500 characters).');
     if (order.credits_used) run('UPDATE referrals SET credits=credits+? WHERE uid=?',
       order.credits_used, order.uid);
-    run(`UPDATE orders SET payment_status='rejected', credits_used=0, reviewed_at=?, reviewed_by=?, review_note=?
+    run(`UPDATE ${courseOrder ? 'orders' : 'ebook_orders'} SET payment_status='rejected',
+      ${courseOrder ? 'credits_used=0, ' : ''}reviewed_at=?, reviewed_by=?, review_note=?
       WHERE id=? AND payment_status='pending'`, new Date().toISOString(), req.user.uid, reviewNote, order.id);
     res.sendStatus(204);
   });

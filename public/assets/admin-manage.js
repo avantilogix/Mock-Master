@@ -262,11 +262,18 @@ export function publishedManager({ctx, onChange, ...helpers}) {
       results.addEventListener('click', () => run(results, rowFeedback, async () => {
         const result = await api(`/admin/tests/${idPart(item.id)}/results`, {ctx, auth: true});
         const summary = el('div', {class: 'result-table'}, el('h4', {}, `${result.results.length} submissions`),
-          ...result.results.map(row => el('div', {class: 'result-table-row'},
-            el('strong', {}, row.name || 'Student'), el('span', {}, row.phone || ''),
-            el('span', {}, `${row.score}/${row.maxMarks}`), el('small', {}, row.createdAt))));
+          ...result.results.map(row => el('article', {class: 'result-table-row'},
+            el('div', {class: 'result-student'},
+              el('strong', {}, row.name || 'Student'),
+              el('span', {}, row.phone || 'Phone unavailable')),
+            el('div', {class: 'result-value'},
+              el('strong', {}, `${row.score}/${row.maxMarks || 0}`),
+              el('span', {}, 'marks')),
+            el('time', {class: 'result-date', datetime: row.createdAt || ''},
+              formatDate(row.createdAt)))));
         article.querySelector('.result-table')?.remove();
         article.append(summary);
+        say(rowFeedback, '');
       }, 'Loading results…'));
       pdf.addEventListener('click', () => run(pdf, rowFeedback, async () => {
         const token = await ctx.user.getIdToken();

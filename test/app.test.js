@@ -331,3 +331,43 @@ test('admins list published content with dates, edit it, and delete it safely', 
   const after = (await request('/admin/published', 'admin')).body;
   assert.deepEqual([after.courses.length, after.tests.length], [0, 0]);
 });
+
+test('standalone e-books unlock after admin payment approval and download as protected PDFs', async t => {
+  const db = openDatabase(':memory:');
+  const users = new Map([
+    ['buyer', { uid: 'buyer', phone: '+919000000031' }],
+    ['admin', { uid: 'admin', phone: '+919000000032' }],
+  ]);
+  const server = createApp({ db, verifyToken: async token => users.get(token), adminUids: ['admin'],
+    manualPayment: { upiId: 'mock@upi', payeeName: 'Mission Selection' } }).listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  t.after(() => new Promise(resolve => server.close(() => { db.close(); resolve(); })));
+  const base = `http://127.0.0.1:${server.address().port}/api`;
+  const request = (path, user, method = 'GET', body, headers = {}) => fetch(base + path, {
+    method,
+    headers: {
+      ...(user ? { Authorization: ['Bearer', user].join(' ') } : {}),
+      ...(Buffer.isBuffer(body) ? { 'Content-Type': 'application/octet-stream' } :
+        body === undefined ? {} : { 'Content-Type': 'application/json' }),
+      ...headers,
+    },
+    body: Buffer.isBuffer(body) ? body : body === undefined ? undefined : JSON.stringify(body),
+  });
+  const query = new URLSearchParams({ title: 'Complete Guide', description: 'Protected revision book', price: '9900' });
+  const upload = await request(`/admin/ebooks?${query}`, 'admin', 'POST', fixturePdf());
+  assert.equal(upload.status, 201);
+  const { id } = await upload.json();
+  assert.equal((await (await request('/ebooks')).json())[0].id, id);
+  assert.equal((await request(`/ebooks/${id}/pages/1`, 'buyer')).status, 403);
+  const payment = await request(`/ebooks/${id}/payment`, 'buyer', 'POST', { reference: 'UPI123456789' });
+  assert.equal(payment.status, 201);
+  const { id: orderId } = await payment.json();
+  const payments = await (await request('/admin/payments', 'admin')).json();
+  assert.equal(payments.find(item => item.id === orderId).type, 'ebook');
+  assert.equal((await request(`/admin/payments/${orderId}/approve`, 'admin', 'POST', {})).status, 204);
+  assert.equal((await request(`/ebooks/${id}/pages/1`, 'buyer')).headers.get('content-type'), 'image/png');
+  const download = await request(`/ebooks/${id}/download`, 'buyer');
+  assert.equal(download.status, 200);
+  assert.match(download.headers.get('content-disposition'), /protected\.pdf/);
+  assert.equal(Buffer.from(await download.arrayBuffer()).subarray(0, 4).toString(), '%PDF');
+});

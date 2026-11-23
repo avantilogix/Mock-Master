@@ -36,6 +36,19 @@ function text(value, label, max) {
   if (typeof value !== 'string' || !value.trim() || value.length > max) {
     fail(422, `${label} is required (maximum ${max} characters).`);
   }
+
+  async function protectedPdf(source, pages, phone) {
+    const output = await PDFDocument.create();
+    for (let page = 1; page <= pages; page++) {
+      const image = await output.embedPng(await renderPage(source, page, phone));
+      const target = output.addPage([595, 842]);
+      const scale = Math.min(595 / image.width, 842 / image.height);
+      const width = image.width * scale;
+      const height = image.height * scale;
+      target.drawImage(image, { x: (595 - width) / 2, y: (842 - height) / 2, width, height });
+    }
+    return Buffer.from(await output.save());
+  }
   return value.trim();
 }
 
@@ -199,6 +212,11 @@ function createApp() {
   });
   api.get('/courses', async (_req, res) => {
     res.json((await queryCollection('courses')).sort(byNewest).map(publicCourse));
+  });
+  api.get('/ebooks', async (_req, res) => {
+    res.json((await queryCollection('ebooks')).sort(byNewest).map(book =>
+      ({ id: book.id, title: book.title, description: book.description, price: book.price,
+        pages: book.pages, createdAt: book.createdAt })));
   });
   api.get('/courses/:id/payment-qr', async (req, res) => {
     const row = await course(req.params.id);
@@ -543,6 +561,74 @@ function createApp() {
     });
     res.status(201).json(result);
   });
+  api.get('/ebooks/:id/payment', async (req, res) => {
+    const book = value(await db.collection('ebooks').doc(req.params.id).get());
+    if (!book) fail(404, 'E-book not found.');
+    const orders = (await db.collection('ebookOrders').where('uid', '==', req.user.uid)
+      .where('ebook', '==', book.id).limit(1).get()).docs.map(value);
+    const item = orders[0];
+    res.json({
+      amount: book.price,
+      payment: { ...await paymentDetails(), qr: '/api/payment-qr' },
+      order: item ? { id: item.id, amount: item.amount, status: item.paymentStatus,
+        reference: item.transactionRef, note: item.paymentNote, reviewNote: item.reviewNote,
+        submittedAt: item.submittedAt } : null,
+    });
+  });
+  api.post('/ebooks/:id/payment', paymentLimit, async (req, res) => {
+    const book = value(await db.collection('ebooks').doc(req.params.id).get());
+    if (!book) fail(404, 'E-book not found.');
+    const details = await paymentDetails();
+    if (!details.configured) fail(503, 'Payment details are not configured.');
+    const reference = paymentReference(req.body?.reference);
+    if (!reference) fail(422, 'Enter a valid UPI transaction reference (4–80 characters).');
+    const orderId = idFor(req.user.uid, `ebook-${book.id}`);
+    const orderRef = db.collection('ebookOrders').doc(orderId);
+    const submittedAt = new Date().toISOString();
+    await db.runTransaction(async transaction => {
+      const existing = value(await transaction.get(orderRef));
+      if (existing?.paymentStatus === 'approved') fail(409, 'You already own this e-book.');
+      if (existing?.paymentStatus === 'pending') fail(409, 'A payment request is already waiting for admin review.');
+      transaction.set(orderRef, {
+        uid: req.user.uid, ebook: book.id, amount: book.price, transactionRef: reference,
+        paymentNote: typeof req.body?.note === 'string' ? req.body.note.trim().slice(0, 500) : '',
+        payment: '', paymentStatus: 'pending', reviewNote: '', submittedAt,
+        reviewedAt: '', reviewedBy: '', createdAt: existing?.createdAt || submittedAt,
+      });
+    });
+    res.status(201).json({ id: orderId, amount: book.price, status: 'pending', reference, submittedAt });
+  });
+  api.get('/ebook-orders', async (req, res) => {
+    const rows = (await db.collection('ebookOrders').where('uid', '==', req.user.uid).get()).docs
+      .map(value).sort(byNewest);
+    res.json(rows.map(order => ({ id: order.id, ebook: order.ebook, amount: order.amount,
+      status: order.paymentStatus, reviewNote: order.reviewNote, submittedAt: order.submittedAt })));
+  });
+  async function ownedEbook(req, id) {
+    const book = value(await db.collection('ebooks').doc(id).get());
+    if (!book) fail(404, 'E-book not found.');
+    if (!req.user.admin) {
+      const order = await db.collection('ebookOrders').where('uid', '==', req.user.uid)
+        .where('ebook', '==', id).where('paymentStatus', '==', 'approved').limit(1).get();
+      if (order.empty || !order.docs.map(value)[0].payment) {
+        fail(403, 'Purchase and wait for approval to unlock this e-book.');
+      }
+    }
+    return book;
+  }
+  api.get('/ebooks/:id/pages/:page', async (req, res) => {
+    const book = await ownedEbook(req, req.params.id);
+    const page = Number(req.params.page);
+    if (!Number.isInteger(page) || page < 1 || page > book.pages) fail(404, 'Page not found.');
+    const [pdf] = await bucket.file(`ebooks/${book.id}.pdf`).download();
+    res.type('png').send(await processDocument(() => renderPage(pdf, page, req.user.phone)));
+  });
+  api.get('/ebooks/:id/download', async (req, res) => {
+    const book = await ownedEbook(req, req.params.id);
+    const [source] = await bucket.file(`ebooks/${book.id}.pdf`).download();
+    const pdf = await protectedPdf(source, book.pages, req.user.phone);
+    res.attachment(`${book.title}-protected.pdf`).type('pdf').send(pdf);
+  });
 
   async function test(id) {
     const item = value(await db.collection('tests').doc(id).get());
@@ -807,8 +893,9 @@ function createApp() {
 
   api.use('/admin', admin);
   api.get('/admin/analytics', async (_req, res) => {
-    const [students, courses, orders, attempts, liveTests] = await Promise.all([
+    const [students, courses, orders, ebookOrders, attempts, liveTests] = await Promise.all([
       queryCollection('students'), queryCollection('courses'), queryCollection('orders'),
+      queryCollection('ebookOrders'),
       queryCollection('attempts'), db.collection('tests').where('live', '==', true).get(),
     ]);
     const approved = orders.filter(order => typeof order.payment === 'string' && order.payment.length > 0);
@@ -821,8 +908,10 @@ function createApp() {
         students: new Set(results.map(result => result.uid)).size, attempts: results.length, average};
     }));
     res.json({
-      students: students.length, courses: courses.length, purchases: approved.length,
-      revenue: approved.reduce((sum, order) => sum + Number(order.amount || 0), 0),
+      students: students.length, courses: courses.length,
+      purchases: approved.length + ebookOrders.filter(order => Boolean(order.payment)).length,
+      revenue: approved.reduce((sum, order) => sum + Number(order.amount || 0), 0) +
+        ebookOrders.filter(order => Boolean(order.payment)).reduce((sum, order) => sum + Number(order.amount || 0), 0),
       attempts24h: attempts.filter(item => Date.parse(item.createdAt) >= since).length,
       attempts: attempts.length, liveTests: liveRows,
     });
@@ -1172,12 +1261,50 @@ function createApp() {
     }
     res.status(201).json({ id, pages });
   });
+  api.get('/admin/ebooks', async (_req, res) => {
+    const [books, orders] = await Promise.all([queryCollection('ebooks'), queryCollection('ebookOrders')]);
+    res.json(books.sort(byNewest).map(book => ({
+      id: book.id, title: book.title, description: book.description, price: book.price,
+      pages: book.pages, createdAt: book.createdAt,
+      orders: orders.filter(order => order.ebook === book.id).length,
+    })));
+  });
+  api.post('/admin/ebooks', raw, async (req, res) => {
+    if (!Buffer.isBuffer(req.body)) fail(400, 'Upload a PDF.');
+    const price = Number(req.query.price);
+    if (!Number.isInteger(price) || price < 100 || price > 10_000_000) fail(422, 'Price must be ₹1–₹1,00,000.');
+    const id = randomUUID();
+    const pages = await processDocument(() => pageCount(req.body));
+    const file = bucket.file(`ebooks/${id}.pdf`);
+    await file.save(req.body, { resumable: false, contentType: 'application/pdf',
+      metadata: { cacheControl: 'private, no-store' } });
+    try {
+      await db.collection('ebooks').doc(id).create({
+        title: text(req.query.title, 'E-book title', 120),
+        description: text(req.query.description, 'Description', 2000),
+        price, pages, createdAt: new Date().toISOString(),
+      });
+    } catch (error) {
+      await file.delete({ ignoreNotFound: true });
+      throw error;
+    }
+    res.status(201).json({ id, pages });
+  });
+  api.delete('/admin/ebooks/:id', async (req, res) => {
+    const book = await db.collection('ebooks').doc(req.params.id).get();
+    if (!book.exists) fail(404, 'E-book not found.');
+    const orders = await db.collection('ebookOrders').where('ebook', '==', req.params.id).limit(1).get();
+    if (!orders.empty) fail(409, 'This e-book has purchase requests and cannot be deleted.');
+    await Promise.all([book.ref.delete(), bucket.file(`ebooks/${req.params.id}.pdf`).delete({ ignoreNotFound: true })]);
+    res.sendStatus(204);
+  });
   api.get('/admin/payments', async (_req, res) => {
-    const orders = (await queryCollection('orders')).sort((a, b) => {
+    const [courseOrders, ebookOrders] = await Promise.all([queryCollection('orders'), queryCollection('ebookOrders')]);
+    const orders = courseOrders.sort((a, b) => {
       const pending = Number(a.paymentStatus !== 'pending') - Number(b.paymentStatus !== 'pending');
       return pending || String(b.submittedAt || '').localeCompare(String(a.submittedAt || ''));
     }).slice(0, 200);
-    res.json(await Promise.all(orders.map(async order => {
+    const courseRows = await Promise.all(orders.map(async order => {
       const [student, selectedCourse] = await Promise.all([
         db.collection('students').doc(order.uid).get(),
         db.collection('courses').doc(order.course).get(),
@@ -1193,21 +1320,42 @@ function createApp() {
         name: value(student)?.name || 'Student',
         phone: value(student)?.phone,
         course: value(selectedCourse)?.title,
+        type: 'course',
       };
-    })));
+    }));
+    const ebookRows = await Promise.all(ebookOrders.map(async order => {
+      const [student, book] = await Promise.all([
+        db.collection('students').doc(order.uid).get(),
+        db.collection('ebooks').doc(order.ebook).get(),
+      ]);
+      return {id: order.id, amount: order.amount, reference: order.transactionRef, note: order.paymentNote,
+        status: order.paymentStatus, submittedAt: order.submittedAt, reviewNote: order.reviewNote,
+        name: value(student)?.name || 'Student', phone: value(student)?.phone,
+        course: value(book)?.title || 'E-book', type: 'ebook'};
+    }));
+    res.json([...courseRows, ...ebookRows].sort((a, b) =>
+      Number(a.status !== 'pending') - Number(b.status !== 'pending') ||
+      String(b.submittedAt).localeCompare(String(a.submittedAt))).slice(0, 200));
   });
   api.post('/admin/payments/:id/approve', async (req, res) => {
     const orderRef = db.collection('orders').doc(req.params.id);
+    const ebookRef = db.collection('ebookOrders').doc(req.params.id);
+    const ref = (await orderRef.get()).exists ? orderRef : ebookRef;
     await db.runTransaction(async transaction => {
-      const snapshot = await transaction.get(orderRef);
+      const snapshot = await transaction.get(ref);
       const order = value(snapshot);
       if (!order) fail(404, 'Payment request not found.');
       if (order.paymentStatus === 'approved') return;
       if (order.paymentStatus !== 'pending') fail(409, 'Only pending requests can be approved.');
-      const selected = value(await transaction.get(db.collection('courses').doc(order.course)));
-      if (!selected) fail(404, 'Course not found.');
-      requireActive(selected);
-      transaction.update(orderRef, {
+      if (ref.id === orderRef.id && ref.path === orderRef.path) {
+        const selected = value(await transaction.get(db.collection('courses').doc(order.course)));
+        if (!selected) fail(404, 'Course not found.');
+        requireActive(selected);
+      } else {
+        const selected = value(await transaction.get(db.collection('ebooks').doc(order.ebook)));
+        if (!selected) fail(404, 'E-book not found.');
+      }
+      transaction.update(ref, {
         payment: `manual:${order.id}`,
         paymentStatus: 'approved',
         reviewedAt: new Date().toISOString(),
@@ -1219,10 +1367,12 @@ function createApp() {
   });
   api.post('/admin/payments/:id/reject', async (req, res) => {
     const orderRef = db.collection('orders').doc(req.params.id);
+    const ebookRef = db.collection('ebookOrders').doc(req.params.id);
+    const ref = (await orderRef.get()).exists ? orderRef : ebookRef;
     const reviewNote = typeof req.body?.note === 'string' ? req.body.note.trim() : '';
     if (!reviewNote || reviewNote.length > 500) fail(422, 'Enter a rejection reason (maximum 500 characters).');
     await db.runTransaction(async transaction => {
-      const snapshot = await transaction.get(orderRef);
+      const snapshot = await transaction.get(ref);
       const order = value(snapshot);
       if (!order) fail(404, 'Payment request not found.');
       if (order.paymentStatus !== 'pending') fail(409, 'Only pending requests can be rejected.');
@@ -1231,7 +1381,7 @@ function createApp() {
         const referral = value(await transaction.get(referralRef));
         transaction.set(referralRef, { credits: Number(referral?.credits || 0) + order.creditsUsed }, { merge: true });
       }
-      transaction.update(orderRef, {
+      transaction.update(ref, {
         payment: '',
         paymentStatus: 'rejected',
         creditsUsed: 0,

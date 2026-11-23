@@ -23,6 +23,17 @@ export function openDatabase(path) {
       id TEXT PRIMARY KEY, course TEXT NOT NULL REFERENCES courses, title TEXT NOT NULL,
       pages INTEGER NOT NULL, pdf BLOB NOT NULL
     ) STRICT;
+    CREATE TABLE IF NOT EXISTS ebooks (
+      id TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT NOT NULL, price INTEGER NOT NULL,
+      pages INTEGER NOT NULL, pdf BLOB NOT NULL, created_at TEXT NOT NULL
+    ) STRICT;
+    CREATE TABLE IF NOT EXISTS ebook_orders (
+      id TEXT PRIMARY KEY, uid TEXT NOT NULL REFERENCES students, ebook TEXT NOT NULL REFERENCES ebooks,
+      amount INTEGER NOT NULL, transaction_ref TEXT NOT NULL DEFAULT '', payment_note TEXT NOT NULL DEFAULT '',
+      payment TEXT NOT NULL DEFAULT '', payment_status TEXT NOT NULL DEFAULT 'pending',
+      review_note TEXT NOT NULL DEFAULT '', submitted_at TEXT NOT NULL, reviewed_at TEXT NOT NULL DEFAULT '',
+      reviewed_by TEXT NOT NULL DEFAULT '', UNIQUE (uid, ebook)
+    ) STRICT;
     CREATE TABLE IF NOT EXISTS messages (
       id INTEGER PRIMARY KEY, course TEXT NOT NULL REFERENCES courses,
       uid TEXT NOT NULL REFERENCES students, text TEXT NOT NULL

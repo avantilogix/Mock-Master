@@ -1,5 +1,5 @@
 import {api} from './services.js';
-import {publishedManager, weekdays} from './admin-manage.js?v=expiry-covers-1';
+import {publishedManager, weekdays} from './admin-manage.js?v=admin-mobile-results-final';
 import {adminContentForm} from './reports.js';
 import {coverPicker} from './publishing-media.js';
 import {bindForm, button, el, entries, field, fieldError, heading, idPart, loadInto, panel, rule, run, say, status, textValue} from './ui.js';
@@ -86,6 +86,7 @@ export function showAdmin(main, ctx) {
   const content = el('div');
   const physicalBooks = el('div');
   const physicalOrders = el('div');
+  const ebooks = el('div');
   const students = el('div');
   const videoCoursePlaceholder = el('select', {required: ''});
   const videoTitle = el('input', {required: '', maxlength: '120'});
@@ -217,6 +218,7 @@ export function showAdmin(main, ctx) {
       return el('article', {class: 'payment-request'},
         el('div', {class: 'payment-request-head'}, el('div', {}, el('strong', {}, request.name),
           el('p', {class: 'muted'}, request.phone)), el('span', {class: `request-state ${request.status}`}, request.status)),
+        el('span', {class: 'badge'}, request.type === 'ebook' ? 'E-Book Payment' : 'Course Payment'),
         el('h3', {}, request.course), el('p', {class: 'price'}, new Intl.NumberFormat('en-IN',
           {style: 'currency', currency: 'INR'}).format(request.amount / 100)),
         el('dl', {class: 'payment-summary'}, el('dt', {}, 'UPI Reference'), el('dd', {}, request.reference),
@@ -228,6 +230,50 @@ export function showAdmin(main, ctx) {
     }) : [el('p', {class: 'empty'}, 'No payment requests yet.')]));
   });
   paymentRefresh.addEventListener('click', loadPayments);
+  const ebookTitle = el('input', {required: '', maxlength: '120'});
+  const ebookDescription = el('textarea', {rows: '3', required: '', maxlength: '2000'});
+  const ebookPrice = rupeeInput();
+  const ebookPdf = rule(el('input', {type: 'file', accept: pdfAccept, required: ''}), (_, control) =>
+    /\.pdf$/i.test(control.files[0]?.name || '') ? '' : 'Choose a PDF e-book.');
+  const ebookSubmit = button('Publish E-Book', null, 'submit');
+  const ebookFeedback = status();
+  const ebookForm = el('form', {}, field('E-Book Title', ebookTitle),
+    field('Description', ebookDescription), field('Price (₹)', ebookPrice, PRICE_HINT),
+    field('PDF File', ebookPdf), ebookSubmit, ebookFeedback);
+  const loadEbooks = () => loadInto(ebooks, ctx, async () => {
+    const rows = await get('/admin/ebooks');
+    ebooks.replaceChildren(...(rows.length ? rows.map(book => {
+      const remove = button('Delete', 'danger secondary');
+      remove.disabled = book.orders > 0;
+      remove.title = book.orders ? 'Cannot delete an e-book with purchase requests.' : 'Delete e-book';
+      remove.addEventListener('click', () => {
+        if (!window.confirm(`Delete “${book.title}”?`)) return;
+        run(remove, ebookFeedback, async () => {
+          await api(`/admin/ebooks/${idPart(book.id)}`, {ctx, auth: true, method: 'DELETE'});
+          await loadEbooks();
+        }, 'Deleting e-book…');
+      });
+      return el('article', {class: 'manage-item'},
+        el('div', {class: 'manage-main'}, el('h3', {}, book.title),
+          el('p', {class: 'muted'}, book.description),
+          el('ul', {class: 'manage-details'}, [new Intl.NumberFormat('en-IN',
+            {style: 'currency', currency: 'INR'}).format(book.price / 100),
+          `${book.pages} pages`, `${book.orders || 0} purchase requests`].map(value => el('li', {}, value)))),
+        el('div', {class: 'actions manage-actions'}, remove));
+    }) : [el('p', {class: 'empty'}, 'No e-books published yet.')]));
+  });
+  bindForm(ebookForm, ebookSubmit, ebookFeedback, async () => {
+    const file = ebookPdf.files[0];
+    const query = new URLSearchParams({
+      title: textValue(ebookTitle, 'E-book title'),
+      description: textValue(ebookDescription, 'Description'),
+      price: String(toPaise(ebookPrice)),
+    });
+    await api(`/admin/ebooks?${query}`, {ctx, auth: true, method: 'POST', binary: file});
+    ebookForm.reset();
+    say(ebookFeedback, 'E-book published in the student Book Store.');
+    await loadEbooks();
+  }, 'Uploading e-book…');
   samples.addEventListener('click', () => run(samples, sampleStatus, async () => {
     const result = await post('/admin/seed-samples', {json: {}});
     await refresh();
@@ -370,9 +416,11 @@ export function showAdmin(main, ctx) {
   panel('Manage Published Content', el('p', {class: 'muted'},
     'See everything you have published with its date. Edit details or delete items students should no longer see.'), manager.node));
   loadPayments();
+  loadEbooks();
   main.append(panel('Payment Information', el('p', {class: 'muted'},
     'Choose what students see at checkout. UPI and QR payment proofs still require admin approval.'), paymentForm),
     panel('Student Timetable', scheduleForm),
+    panel('E-Books', ebookForm, ebooks),
     panel('Physical Books', physicalForm, physicalBooks),
     panel('Physical Book Orders', physicalOrders),
     panel('Student Accounts', students),
@@ -593,6 +641,7 @@ export function showAdmin(main, ctx) {
   const workspace = el('div', {class: 'admin-workspace'});
   const menu = el('div', {class: 'admin-area-grid'});
   const openList = ({label, managerType, list, add, addLabel}) => {
+    if (!list) return;
     const toolbar = el('div', {class: 'admin-section-toolbar'},
       el('button', {type: 'button', class: 'admin-back-button'}, '← All Areas'),
       el('h2', {}, label), el('div', {class: 'admin-section-actions'}));
@@ -627,6 +676,7 @@ export function showAdmin(main, ctx) {
       actions.append(plus);
     }
     if (managerType) manager.select(managerType);
+    list.hidden = false;
     workspace.replaceChildren(toolbar, list);
     if (add) add.hidden = true;
   };
@@ -643,6 +693,8 @@ export function showAdmin(main, ctx) {
       open: () => openList({label: 'Learning Resources', managerType: 'resources', list: manager.node, add: findPanel('Publish Learning Resources'), addLabel: 'Add Resource'})},
     {label: 'Course Payments', description: 'Approve or reject course payment requests', icon: '₹',
       open: () => openList({label: 'Course Payments', list: findPanel('Payment Approvals')})},
+    {label: 'E-Books', description: 'Upload and price protected PDF books', icon: '▤',
+      open: () => openList({label: 'E-Books', list: ebooks, add: findPanel('E-Books'), addLabel: 'Add E-Book'})},
     {label: 'Physical Books', description: 'Inventory and published book list', icon: '▤',
       open: () => openList({label: 'Physical Books', managerType: 'physicalBooks', list: manager.node, add: findPanel('Physical Books'), addLabel: 'Add Physical Book'})},
     {label: 'Book Orders', description: 'Physical-book fulfillment and tracking', icon: '▣',

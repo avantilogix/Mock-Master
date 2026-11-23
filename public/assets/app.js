@@ -1,11 +1,12 @@
-import {showAdmin} from './admin.js?v=expiry-covers-1';
+import {showAdmin} from './admin.js?v=payment-approval-visible-final';
 import {showCatalog, showContentLibrary, showCourse, showDashboard, showMyCourses} from './course.js?v=android-design-1';
-import {api, firebaseAuth} from './services.js?v=expiry-covers-1';
+import {api, firebaseAuth} from './services.js?v=ebook-store-final';
 import {showSignIn} from './signin.js';
 import {showBook, showTest, showVideo} from './study.js?v=expiry-covers-1';
 import {showLearningContent, showNotifications, showProgress} from './reports.js?v=manage-20261122';
 import {showDownloads, showReferrals, showTimetable, socialFooter} from './features.js?v=expiry-covers-1';
 import {showCourseGroups, showShareRate, showVideos} from './engagement.js?v=expiry-covers-1';
+import {showEbook, showEbookStore} from './ebooks.js?v=ebook-store-final';
 import {bindForm, button, el, field, heading, icon, link, panel, run, say, status, textValue} from './ui.js';
 
 const main = document.querySelector('#main');
@@ -16,7 +17,7 @@ const routes = new Map([
   ['free-tests', 0], ['current-affairs', 0], ['pyqs', 0], ['syllabus', 0], ['progress', 0], ['notifications', 0],
   ['timetable', 0], ['referrals', 0], ['downloads', 0],
   ['videos', 0], ['groups', 0], ['share-app', 0], ['about', 0],
-  ['course', 1], ['test', 2], ['book', 2], ['video', 2], ['signin', 0],
+  ['course', 1], ['test', 2], ['book', 2], ['ebook', 1], ['video', 2], ['signin', 0],
   ['profile', 0], ['support', 0], ['admin', 0]
 ]);
 let firebase;
@@ -294,8 +295,8 @@ function render(focus = false) {
     case 'catalog': showCatalog(main, ctx, current?.me); break;
     case 'my-courses': showMyCourses(main, ctx, current?.me, {signInLink}); break;
     case 'test-series':
-    case 'book-store':
     case 'materials': showContentLibrary(main, ctx, current?.me, parsed.page, {signInLink}); break;
+    case 'book-store': showEbookStore(main, ctx, {signInLink}); break;
     case 'progress': showProgress(main, ctx, {signInLink}); break;
     case 'notifications': showNotifications(main, ctx, {signInLink}); break;
     case 'timetable': showTimetable(main, ctx, {signInLink, personalTimetable: firebase?.personalTimetable}); break;
@@ -353,6 +354,7 @@ function render(focus = false) {
     case 'profile': if (current) showProfile(ctx); else needSignIn(); break;
     case 'test': if (current) showTest(main, ctx, courseId, itemId, current.user.phoneNumber); else needSignIn(); break;
     case 'book': if (current) showBook(main, ctx, courseId, itemId); else needSignIn(); break;
+    case 'ebook': showEbook(main, ctx, courseId, {signInLink}); break;
     case 'video': if (current) showVideo(main, ctx, courseId, itemId); else needSignIn(); break;
     case 'admin':
       if (!current) needSignIn();
