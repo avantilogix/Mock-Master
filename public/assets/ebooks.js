@@ -1,5 +1,5 @@
-import {priceText, upiReference} from './course.js?v=ebook-store-final';
-import {api} from './services.js?v=ebook-store-final';
+import {priceText, upiReference} from './course.js?v=ist-payment-fixes-final';
+import {api} from './services.js?v=ist-payment-fixes-final';
 import {bindForm, button, el, field, heading, idPart, link, loadInto, run, say, status, textValue} from './ui.js';
 
 export function showEbookStore(main, ctx, action) {
@@ -20,16 +20,21 @@ export function showEbookStore(main, ctx, action) {
     content.replaceChildren(...books.map(book => {
       const order = states.get(book.id);
       const owned = order?.status === 'approved';
+      const rejected = order?.status === 'rejected';
       return el('article', {class: 'panel ebook-card'},
         el('div', {class: 'ebook-cover', 'aria-hidden': 'true'},
           el('span', {}, 'E-BOOK'), el('strong', {}, book.title)),
         el('div', {class: 'ebook-copy'}, owned ? el('span', {class: 'badge'}, 'Purchased') : null,
           el('h2', {}, book.title), el('p', {class: 'muted'}, book.description),
+          rejected ? el('div', {class: 'rejection', role: 'alert'},
+            el('strong', {}, 'Payment Not Approved'),
+            el('p', {}, order.reviewNote || 'Please resubmit correct payment details.')) : null,
           el('small', {}, `${book.pages} protected pages`),
           el('div', {class: 'card-footer'},
             owned ? el('span', {class: 'muted'}, 'Approved') : el('strong', {class: 'price'}, priceText(book.price)),
             owned ? link('Open E-Book', `#ebook/${idPart(book.id)}`, 'button') :
-              ctx.user ? link(order?.status === 'pending' ? 'View Payment Status' : 'Buy E-Book',
+              ctx.user ? link(order?.status === 'pending' ? 'View Payment Status' :
+                rejected ? 'Resubmit Payment' : 'Buy E-Book',
                 `#ebook/${idPart(book.id)}`, 'button') : action.signInLink('Sign In to Buy'))));
     }));
   });
@@ -137,14 +142,26 @@ async function buttonDownload(ctx, book, control, feedback) {
   await run(control, feedback, async () => {
     const blob = await api(`/ebooks/${idPart(book.id)}/download`, {ctx, auth: true, blob: true});
     const filename = `${book.title.replace(/[^\\w .-]+/g, '_')}-protected.pdf`;
-    if (window.MissionSelectionDownloads?.savePdf) {
+    if (window.MissionSelectionDownloads?.beginPdf) {
       const bytes = new Uint8Array(await blob.arrayBuffer());
-      let binary = '';
-      for (let index = 0; index < bytes.length; index += 0x8000) {
-        binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000));
+      if (!window.MissionSelectionDownloads.beginPdf(filename)) {
+        throw new Error('The protected PDF could not be started. Check device storage access.');
       }
-      if (!window.MissionSelectionDownloads.savePdf(filename, btoa(binary))) {
-        throw new Error('The protected PDF could not be saved. Check device storage permission.');
+      try {
+        for (let index = 0; index < bytes.length; index += 24576) {
+          let binary = '';
+          const chunk = bytes.subarray(index, index + 24576);
+          for (const value of chunk) binary += String.fromCharCode(value);
+          if (!window.MissionSelectionDownloads.appendPdf(btoa(binary))) {
+            throw new Error('The protected PDF could not be written completely.');
+          }
+        }
+        if (!window.MissionSelectionDownloads.finishPdf(true)) {
+          throw new Error('The protected PDF could not be finalized.');
+        }
+      } catch (error) {
+        window.MissionSelectionDownloads.finishPdf(false);
+        throw error;
       }
       say(feedback, 'Protected PDF saved to Downloads.');
       return;

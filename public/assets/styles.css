@@ -632,3 +632,8 @@ button[hidden] { display: none; }
 .ebook-copy { display: grid; align-content: start; gap: .4rem; padding: 1rem; }
 .ebook-copy h2 { margin: 0; font-size: 1.2rem; }
 .ebook-copy .card-footer { margin-top: .75rem; }
+.student-control > div { min-width: 0; }
+.student-control code { word-break: break-all; white-space: normal; }
+.exam-counters { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .4rem; margin-bottom: .7rem; }
+.exam-counters span { display: grid; gap: .05rem; padding: .45rem .25rem; border-radius: .65rem; color: var(--muted); background: var(--bg); text-align: center; font-size: .68rem; }
+.exam-counters strong { color: var(--accent-dark); font-size: 1.05rem; }

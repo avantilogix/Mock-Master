@@ -1,8 +1,8 @@
 import {api} from './services.js';
-import {publishedManager, weekdays} from './admin-manage.js?v=admin-mobile-results-final';
+import {publishedManager, weekdays} from './admin-manage.js?v=ist-payment-fixes-final';
 import {adminContentForm} from './reports.js';
 import {coverPicker} from './publishing-media.js';
-import {bindForm, button, el, entries, field, fieldError, heading, idPart, loadInto, panel, rule, run, say, status, textValue} from './ui.js';
+import {bindForm, button, el, entries, field, fieldError, formatDate, heading, idPart, loadInto, panel, rule, run, say, status, textValue} from './ui.js';
 
 const pdfAccept = '.pdf,application/pdf';
 const videoAccept = '.mp4,.m4v,.webm,.mov,video/mp4,video/webm,video/quicktime';
@@ -199,7 +199,8 @@ export function showAdmin(main, ctx) {
       const rejection = el('textarea', {rows: '2', maxlength: '500', placeholder: 'Reason for rejection'});
       const feedback = status();
       approve.disabled = request.status !== 'pending';
-      reject.disabled = request.status !== 'pending';
+      reject.disabled = request.status === 'rejected';
+      reject.textContent = request.status === 'approved' ? 'Reject and Revoke Access' : 'Reject';
       approve.addEventListener('click', () => run(approve, feedback, async () => {
         await post(`/admin/payments/${idPart(request.id)}/approve`, {json: {}});
         say(feedback, `${request.course} is now unlocked for ${request.name}.`);
@@ -222,10 +223,11 @@ export function showAdmin(main, ctx) {
         el('h3', {}, request.course), el('p', {class: 'price'}, new Intl.NumberFormat('en-IN',
           {style: 'currency', currency: 'INR'}).format(request.amount / 100)),
         el('dl', {class: 'payment-summary'}, el('dt', {}, 'UPI Reference'), el('dd', {}, request.reference),
-          el('dt', {}, 'Submitted'), el('dd', {}, request.submittedAt ? new Date(request.submittedAt).toLocaleString('en-IN') : 'Unavailable')),
+          el('dt', {}, 'Submitted (IST)'), el('dd', {}, request.submittedAt ? formatDate(request.submittedAt) : 'Unavailable')),
         request.note ? el('p', {class: 'muted'}, request.note) : null,
         request.reviewNote ? el('p', {class: 'rejection'}, request.reviewNote) : null,
-        request.status === 'pending' ? field('Rejection Reason (only if needed)', rejection) : null,
+        request.status !== 'rejected' ? field(request.status === 'approved' ?
+          'Revocation Reason' : 'Rejection Reason', rejection) : null,
         el('div', {class: 'actions'}, approve, reject), feedback);
     }) : [el('p', {class: 'empty'}, 'No payment requests yet.')]));
   });
@@ -464,9 +466,8 @@ export function showAdmin(main, ctx) {
   const marksPerQuestion = el('input', {type: 'number', min: '0.25', max: '10', step: '0.25', value: '1'});
   const negativeMark = el('input', {type: 'number', min: '0', max: '5', step: '0.25', value: '0'});
   const liveFields = el('div', {class: 'live-test-fields', hidden: ''},
-    field('Live Start Date and Time', startsAt), field('Attempts Allowed Until Expiry', attemptsLimit),
-    field('Live Window Expiry Date and Time', expiresAt), field('Duration (minutes)', durationMinutes),
-    field('Marks Per Correct Answer', marksPerQuestion), field('Negative Mark Per Wrong Answer', negativeMark));
+    field('Live Start Date and Time (IST)', startsAt), field('Attempts Allowed Until Expiry', attemptsLimit),
+    field('Live Window Expiry Date and Time (IST)', expiresAt));
   live.addEventListener('change', () => {
     liveFields.hidden = !live.checked;
     startsAt.required = expiresAt.required = durationMinutes.required = attemptsLimit.required = live.checked;
@@ -474,15 +475,18 @@ export function showAdmin(main, ctx) {
   const testStatus = status();
   const testForm = el('form', {}, testField, field('Test Title', testTitle),
     el('label', {class: 'choice'}, live, 'Publish as a live scheduled mock test'), liveFields,
+    field('Duration (minutes)', durationMinutes, 'Used for every attempt.'),
+    field('Marks Per Correct Answer', marksPerQuestion),
+    field('Negative Mark Per Wrong Answer', negativeMark),
     field('Questions (JSON)', editor, 'Enter an array of objects with prompt, options, and answer. The first option is answer 0.'),
     publish, testStatus);
   bindForm(testForm, publish, testStatus, async () => {
     const questions = questionData(editor.value);
     await post(`/admin/courses/${idPart(testCourse.value)}/tests`, {json: {
       title: textValue(testTitle, 'Test title'), questions, live: live.checked,
-      startsAt: live.checked ? new Date(startsAt.value).toISOString() : undefined,
-      expiresAt: live.checked ? new Date(expiresAt.value).toISOString() : undefined,
-      durationMinutes: live.checked ? durationMinutes.valueAsNumber : 90,
+      startsAt: live.checked ? startsAt.value : undefined,
+      expiresAt: live.checked ? expiresAt.value : undefined,
+      durationMinutes: durationMinutes.valueAsNumber,
       attemptsLimit: live.checked ? attemptsLimit.valueAsNumber : 0,
       marksPerQuestion: marksPerQuestion.valueAsNumber, negativeMark: negativeMark.valueAsNumber,
     }});

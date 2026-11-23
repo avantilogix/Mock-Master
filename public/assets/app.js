@@ -1,12 +1,12 @@
-import {showAdmin} from './admin.js?v=payment-approval-visible-final';
-import {showCatalog, showContentLibrary, showCourse, showDashboard, showMyCourses} from './course.js?v=android-design-1';
+import {showAdmin} from './admin.js?v=exam-submit-counts-final';
+import {showCatalog, showContentLibrary, showCourse, showDashboard, showMyCourses} from './course.js?v=ist-payment-fixes-final';
 import {api, firebaseAuth} from './services.js?v=ebook-store-final';
 import {showSignIn} from './signin.js';
-import {showBook, showTest, showVideo} from './study.js?v=expiry-covers-1';
+import {showBook, showTest, showVideo} from './study.js?v=exam-submit-counts-final';
 import {showLearningContent, showNotifications, showProgress} from './reports.js?v=manage-20261122';
 import {showDownloads, showReferrals, showTimetable, socialFooter} from './features.js?v=expiry-covers-1';
 import {showCourseGroups, showShareRate, showVideos} from './engagement.js?v=expiry-covers-1';
-import {showEbook, showEbookStore} from './ebooks.js?v=ebook-store-final';
+import {showEbook, showEbookStore} from './ebooks.js?v=ist-payment-fixes-final';
 import {bindForm, button, el, field, heading, icon, link, panel, run, say, status, textValue} from './ui.js';
 
 const main = document.querySelector('#main');
@@ -223,10 +223,13 @@ function showProfile(ctx) {
     showSavedName();
     accountEditor.hidden = true;
   }, 'Saving name…');
-  const profileAction = (iconName, title, description, href) => link('', href, 'profile-menu-row').append(
-    icon(iconName, 'line-icon profile-menu-icon'),
-    el('span', {}, el('strong', {}, title), el('small', {}, description)),
-    el('span', {class: 'profile-menu-arrow', 'aria-hidden': 'true'}, '→'));
+  const profileAction = (iconName, title, description, href) => {
+    const row = link('', href, 'profile-menu-row');
+    row.append(icon(iconName, 'line-icon profile-menu-icon'),
+      el('span', {}, el('strong', {}, title), el('small', {}, description)),
+      el('span', {class: 'profile-menu-arrow', 'aria-hidden': 'true'}, '→'));
+    return row;
+  };
   main.append(
     panel('My Learning', el('div', {class: 'profile-menu'},
       profileAction('missions', 'Explore Courses', 'Browse missions and available content', '#catalog'),

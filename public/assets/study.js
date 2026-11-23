@@ -24,6 +24,7 @@ export function showTest(main, ctx, courseId, testId, phone) {
     let submitted = false;
     const questionArea = el('div', {class: 'exam-question'});
     const palette = el('div', {class: 'question-palette'});
+    const counters = el('div', {class: 'exam-counters'});
     const timer = el('strong', {class: 'exam-timer', role: 'timer'});
     const feedback = status();
     const previous = button('Previous', 'secondary');
@@ -39,6 +40,11 @@ export function showTest(main, ctx, courseId, testId, phone) {
       return marked.has(index) ? 'answered-marked' : 'answered';
     };
     const renderPalette = () => {
+      const answered = answers.filter(answer => answer !== null).length;
+      counters.replaceChildren(
+        el('span', {}, el('strong', {}, String(answered)), ' Answered'),
+        el('span', {}, el('strong', {}, String(marked.size)), ' Marked'),
+        el('span', {}, el('strong', {}, String(test.questions.length - answered)), ' Unanswered'));
       palette.replaceChildren(...test.questions.map((question, index) => {
         const tile = button(String(index + 1), `question-tile ${scoreState(index)}`);
         tile.setAttribute('aria-label', `Question ${index + 1}, ${scoreState(index).replace('-', ' ')}`);
@@ -116,12 +122,12 @@ export function showTest(main, ctx, courseId, testId, phone) {
     tick();
     main.replaceChildren(back(), ...heading(test.title, test.live ?
       `Live attempt ${test.attempts + 1}${test.limited ? ` of ${test.attemptsLimit}` : ' · unlimited window'}` :
-      'Practice attempt'), content);
+      'Practice attempt · unlimited'), content);
     content.replaceChildren(el('div', {class: 'exam-topbar'},
       el('span', {}, `${test.marksPerQuestion || 1} mark(s) per question${test.negativeMark ? ` · −${test.negativeMark} for wrong answer` : ''}`),
       timer),
       el('div', {class: 'exam-layout'}, questionArea,
-        el('aside', {class: 'exam-sidebar'}, el('h3', {}, 'Question Navigator'), palette,
+        el('aside', {class: 'exam-sidebar'}, el('h3', {}, 'Question Navigator'), counters, palette,
           el('div', {class: 'palette-legend'}, el('span', {}, 'Answered'), el('span', {}, 'Marked'), el('span', {}, 'Unanswered')))),
       el('div', {class: 'exam-actions'}, previous, mark, next, submit), feedback);
     renderQuestion();

@@ -175,7 +175,7 @@ export function showContentLibrary(main, ctx, me, kind, action) {
           el('h2', {}, course.title),
           entries(material[config.item], config.empty, item => el('div', {class: 'test-series-row'},
            el('div', {}, el('strong', {}, item.title), item.live ? el('span', {class: 'badge live-badge'},
-             `Live · ${new Date(item.startsAt).toLocaleString('en-IN')} · ${item.durationMinutes} min`) : null),
+             `Live · ${formatDate(item.startsAt)} IST · ${item.durationMinutes} min`) : null),
            link('Start Test', `#test/${idPart(course.id)}/${idPart(item.id)}`, 'button secondary')))));
     }));
     content.replaceChildren(...folders);
@@ -314,7 +314,7 @@ function showMaterials(access, ctx, path, id) {
       el('div', {class: 'test-series-row'},
         el('div', {}, link(test.title, `#test/${idPart(id)}/${idPart(test.id)}`, 'material-link'),
           test.live ? el('span', {class: 'badge live-badge'},
-            `Live · ${new Date(test.startsAt).toLocaleString('en-IN')} · ${test.durationMinutes} min`) : null),
+            `Live · ${formatDate(test.startsAt)} IST · ${test.durationMinutes} min`) : null),
         link('Start', `#test/${idPart(id)}/${idPart(test.id)}`, 'button secondary')))),
     panel('Study Materials by Chapter', chapterFolders(chapterGroups(books, videos), id)),
     panel('Course Discussion', messageList, form));

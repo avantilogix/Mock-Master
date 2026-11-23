@@ -17,6 +17,15 @@ function text(value, label, max) {
   return value.trim();
 }
 
+function istIso(value, label) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/.test(value)) {
+    fail(422, `${label} must be a valid date and time in IST.`);
+  }
+  const date = new Date(`${value}${value.length === 16 ? ':00' : ''}+05:30`);
+  if (Number.isNaN(date.getTime())) fail(422, `${label} must be a valid date and time in IST.`);
+  return date.toISOString();
+}
+
 const MAX_VIDEO_BYTES = 300 * 1024 * 1024;
 const VIDEO_LINK_SECONDS = 2 * 60 * 60;
 const videoTypes = { 'video/mp4': 'mp4', 'video/webm': 'webm', 'video/quicktime': 'mov' };
@@ -121,7 +130,7 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     if (!row) fail(404, 'Course not found.');
     return row;
   }
-  const owns = (uid, id) => one('SELECT 1 FROM orders WHERE uid=? AND course=? AND payment IS NOT NULL', uid, id);
+  const owns = (uid, id) => one("SELECT 1 FROM orders WHERE uid=? AND course=? AND payment IS NOT NULL AND payment!=''", uid, id);
   function requirePurchase(req, id, allowAdmin = true) {
     if (!(allowAdmin && req.user.admin) && !owns(req.user.uid, id)) fail(403, 'Purchase this course to unlock it.');
   }
@@ -202,7 +211,7 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     const { uid, phone, admin } = req.user;
     const { name, exam_preference: examPreference } = one('SELECT name, exam_preference FROM students WHERE uid=?', uid);
     res.json({ uid, name, phone, admin, examPreference,
-      purchases: all('SELECT course FROM orders WHERE uid=? AND payment IS NOT NULL', uid).map(p => p.course) });
+      purchases: all("SELECT course FROM orders WHERE uid=? AND payment IS NOT NULL AND payment!=''", uid).map(p => p.course) });
   });
   api.put('/me', (req, res) => {
     const current = one('SELECT name, exam_preference FROM students WHERE uid=?', req.user.uid);
@@ -400,13 +409,14 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     const expires = Date.parse(row.expires_at);
     if (row.live && Number.isFinite(starts) && now < starts) fail(423, `This live test opens on ${new Date(starts).toLocaleString('en-IN')}.`);
     const limited = row.live && (!Number.isFinite(expires) || now <= expires);
-    if (limited && attempts >= (row.attempts_limit || 2)) fail(409,
-      `You have used ${row.attempts_limit || 2} attempts. Unlimited attempts open after the live window ends.`);
+    const attemptsLimit = row.live ? (row.attempts_limit || 2) : Infinity;
+    if (limited && attempts >= attemptsLimit) fail(409,
+      `You have used ${attemptsLimit} attempts. Unlimited attempts open after the live window ends.`);
     const sections = [...new Set(JSON.parse(row.questions).map(question => question.section || 'General'))];
     res.json({
       title: row.title, live: Boolean(row.live), startsAt: row.starts_at, expiresAt: row.expires_at,
-      durationMinutes: row.duration_minutes || 90, attempts, attemptsLimit: row.attempts_limit || 2,
-      limited, marksPerQuestion: row.marks_per_question || 1, negativeMark: row.negative_mark || 0, sections,
+      durationMinutes: row.duration_minutes || 90, attempts, attemptsLimit: row.live ? (row.attempts_limit || 2) : 0,
+      limited: Boolean(limited), marksPerQuestion: row.marks_per_question || 1, negativeMark: row.negative_mark || 0, sections,
       questions: JSON.parse(row.questions).map(({ prompt, options, section }) => ({ prompt, options, section: section || 'General' })),
     });
   });
@@ -419,8 +429,9 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     const expires = Date.parse(row.expires_at);
     if (row.live && Number.isFinite(starts) && nowMs < starts) fail(423, 'This live test has not opened yet.');
     const limited = row.live && (!Number.isFinite(expires) || nowMs <= expires);
-    if (limited && attempts >= (row.attempts_limit || 2)) fail(409,
-      `You have used ${row.attempts_limit || 2} attempts. Unlimited attempts open after the live window ends.`);
+    const attemptsLimit = row.live ? (row.attempts_limit || 2) : Infinity;
+    if (limited && attempts >= attemptsLimit) fail(409,
+      `You have used ${attemptsLimit} attempts. Unlimited attempts open after the live window ends.`);
     const now = new Date().toISOString();
     const active = one('SELECT id, started_at FROM exam_sessions WHERE uid=? AND test=? AND active=1',
       req.user.uid, row.id);
@@ -525,7 +536,7 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     }));
     const testNotices = all(`SELECT t.id, t.title, t.starts_at AS startsAt, t.expires_at AS expiresAt, t.course
       FROM tests t JOIN orders o ON o.course=t.course
-      WHERE t.live=1 AND o.uid=? AND o.payment IS NOT NULL
+      WHERE t.live=1 AND o.uid=? AND o.payment IS NOT NULL AND o.payment!=''
         AND (t.expires_at='' OR datetime(t.expires_at)>datetime('now','localtime'))
       ORDER BY t.starts_at LIMIT 20`, req.user.uid).map(test => ({
       id: `live-test-${test.id}`,
@@ -782,15 +793,14 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     let scheduled = '';
     let duration = 0;
     if (live) {
-      const start = new Date(startsAt);
+      const scheduledDate = istIso(startsAt, 'Live start time');
       duration = durationMinutes;
-      if (Number.isNaN(start.getTime()) || !Number.isInteger(duration) || duration < 10 || duration > 300) {
+      if (!Number.isInteger(duration) || duration < 10 || duration > 300) {
         fail(422, 'A live test needs a valid start time and a duration from 10–300 minutes.');
       }
-      scheduled = start.toISOString();
+      scheduled = scheduledDate;
     }
-    const expiryDate = new Date(expiresAt);
-    const expires = live && !Number.isNaN(expiryDate.getTime()) ? expiryDate.toISOString() : '';
+    const expires = live ? istIso(expiresAt, 'Live expiry time') : '';
     if (live && (Number.isNaN(Date.parse(expires)) || Date.parse(expires) <= Date.parse(scheduled) ||
         !Number.isInteger(attemptsLimit) || attemptsLimit < 1 || attemptsLimit > 10)) {
       fail(422, 'Live expiry must be after the start time, with 1–10 attempts allowed.');
@@ -911,14 +921,15 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
       FROM ebook_orders WHERE id=?`, req.params.id);
     const order = courseOrder || ebookOrder;
     if (!order) fail(404, 'Payment request not found.');
-    if (order.payment_status !== 'pending') fail(409, 'Only pending requests can be rejected.');
+    if (!['pending', 'approved'].includes(order.payment_status)) fail(409, 'This payment was already rejected.');
     const reviewNote = typeof req.body?.note === 'string' ? req.body.note.trim() : '';
     if (!reviewNote || reviewNote.length > 500) fail(422, 'Enter a rejection reason (maximum 500 characters).');
     if (order.credits_used) run('UPDATE referrals SET credits=credits+? WHERE uid=?',
       order.credits_used, order.uid);
-    run(`UPDATE ${courseOrder ? 'orders' : 'ebook_orders'} SET payment_status='rejected',
+    run(`UPDATE ${courseOrder ? 'orders' : 'ebook_orders'} SET payment='', payment_status='rejected',
       ${courseOrder ? 'credits_used=0, ' : ''}reviewed_at=?, reviewed_by=?, review_note=?
-      WHERE id=? AND payment_status='pending'`, new Date().toISOString(), req.user.uid, reviewNote, order.id);
+      WHERE id=? AND payment_status IN ('pending','approved')`,
+    new Date().toISOString(), req.user.uid, reviewNote, order.id);
     res.sendStatus(204);
   });
   const priceInput = value => {

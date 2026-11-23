@@ -206,6 +206,11 @@ test('admin approval grants only the confirmed student access to their course, t
     assert.equal(page.headers.get('content-type'), 'image/png');
     assert.equal(Buffer.from(await page.arrayBuffer()).subarray(1, 4).toString(), 'PNG');
   }
+  assert.equal((await request(`/admin/payments/${requestId}/reject`, 'admin', 'POST',
+    {note: 'Payment reversed'})).status, 204);
+  assert.equal((await request(path, 'buyer')).status, 403);
+  assert.equal((await request(testPath, 'buyer')).status, 403);
+  assert.ok(!(await (await request('/me', 'buyer')).json()).purchases.includes(id));
 });
 
 test('chapter videos upload for admins and stream only through signed links for buyers', async t => {
@@ -370,4 +375,58 @@ test('standalone e-books unlock after admin payment approval and download as pro
   assert.equal(download.status, 200);
   assert.match(download.headers.get('content-disposition'), /protected\.pdf/);
   assert.equal(Buffer.from(await download.arrayBuffer()).subarray(0, 4).toString(), '%PDF');
+  assert.equal((await request(`/admin/payments/${orderId}/reject`, 'admin', 'POST',
+    {note: 'Transaction could not be verified'})).status, 204);
+  assert.equal((await request(`/ebooks/${id}/pages/1`, 'buyer')).status, 403);
+  const rejected = (await (await request('/ebook-orders', 'buyer')).json())[0];
+  assert.equal(rejected.status, 'rejected');
+  assert.equal(rejected.reviewNote, 'Transaction could not be verified');
+});
+
+test('live test schedule is stored and returned in a stable IST-derived instant', async t => {
+  const users = new Map([['admin', { uid: 'admin', phone: '+919000000041' }]]);
+  const { server, request, db } = jsonServer(t, users);
+  await once(server, 'listening');
+  const { body: { id } } = await request('/admin/courses', 'admin', 'POST', {
+    title: 'IST Mission', description: 'Timing check', price: 10000,
+  });
+  const response = await request(`/admin/courses/${id}/tests`, 'admin', 'POST', {
+    title: 'IST Live Test',
+    questions: [{prompt: 'One?', options: ['A', 'B'], answer: 0, section: 'General'}],
+    live: true,
+    startsAt: '2026-11-24T09:00',
+    expiresAt: '2026-11-25T21:00',
+    durationMinutes: 60,
+    attemptsLimit: 2,
+    marksPerQuestion: 1,
+    negativeMark: 0.25,
+  });
+  assert.equal(response.status, 201);
+  const row = db.prepare('SELECT starts_at, expires_at FROM tests WHERE id=?').get(response.body.id);
+  assert.equal(row.starts_at, '2026-11-24T03:30:00.000Z');
+  assert.equal(row.expires_at, '2026-11-25T15:30:00.000Z');
+});
+
+test('practice tests allow repeated attempts without a live attempt limit', async t => {
+  const users = new Map([
+    ['buyer', { uid: 'buyer', phone: '+919000000051' }],
+    ['admin', { uid: 'admin', phone: '+919000000052' }],
+  ]);
+  const { server, request, db } = jsonServer(t, users);
+  await once(server, 'listening');
+  const { body: { id: courseId } } = await request('/admin/courses', 'admin', 'POST',
+    {title: 'Unlimited Practice', description: 'Practice', price: 10000});
+  const { body: { id: testId } } = await request(`/admin/courses/${courseId}/tests`, 'admin', 'POST',
+    {title: 'Practice', questions: [{prompt: 'A?', options: ['Yes', 'No'], answer: 0, section: 'General'}],
+      live: false, durationMinutes: 30, attemptsLimit: 0, marksPerQuestion: 1, negativeMark: 0});
+  db.prepare('INSERT OR IGNORE INTO students (uid, phone) VALUES (?, ?)').run('buyer', users.get('buyer').phone);
+  db.prepare('INSERT INTO orders (id, uid, course, amount, payment, payment_status) VALUES (?, ?, ?, ?, ?, ?)')
+    .run('order-unlimited', 'buyer', courseId, 10000, 'manual:order-unlimited', 'approved');
+  for (let attempt = 0; attempt < 3; attempt++) {
+    assert.equal((await request(`/tests/${testId}/start`, 'buyer', 'POST')).status, 201);
+    assert.equal((await request(`/tests/${testId}/submit`, 'buyer', 'POST', {answers: [0]})).status, 200);
+  }
+  const test = (await request(`/tests/${testId}`, 'buyer')).body;
+  assert.equal(test.attemptsLimit, 0);
+  assert.equal(test.limited, false);
 });

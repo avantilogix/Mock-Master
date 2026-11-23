@@ -14,8 +14,8 @@ manifest.startUrl = '/';
 manifest.name = 'Mission Selection';
 manifest.launcherName = 'Mission';
 manifest.packageId = 'com.avantilogix.missionselection';
-manifest.appVersionCode = 5;
-manifest.appVersionName = '5';
+manifest.appVersionCode = 7;
+manifest.appVersionName = '7';
 manifest.display = 'standalone';
 manifest.orientation = 'default';
 manifest.minSdkVersion = 24;
@@ -40,6 +40,7 @@ import android.util.Base64;
 import android.view.View;
 import android.view.WindowManager;
 import android.webkit.JavascriptInterface;
+import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
@@ -54,6 +55,8 @@ public class LauncherActivity extends Activity {
     private static final String HOST = "mission-selection-ba819.web.app";
     private static final String START_URL = "https://" + HOST + "/";
     private WebView webView;
+    private OutputStream pendingDownload;
+    private Uri pendingDownloadUri;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -64,6 +67,7 @@ public class LauncherActivity extends Activity {
         webView.setLongClickable(false);
         webView.setOnLongClickListener(view -> true);
         webView.setOverScrollMode(View.OVER_SCROLL_NEVER);
+        webView.setWebChromeClient(new WebChromeClient());
         WebSettings settings = webView.getSettings();
         settings.setJavaScriptEnabled(true);
         settings.setDomStorageEnabled(true);
@@ -72,7 +76,7 @@ public class LauncherActivity extends Activity {
         settings.setAllowContentAccess(false);
         settings.setMediaPlaybackRequiresUserGesture(true);
         settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
-        settings.setUserAgentString(settings.getUserAgentString() + " MissionSelectionSecureApp/5");
+        settings.setUserAgentString(settings.getUserAgentString() + " MissionSelectionSecureApp/7");
         webView.addJavascriptInterface(new DownloadBridge(), "MissionSelectionDownloads");
         webView.setWebViewClient(new WebViewClient() {
             @Override
@@ -116,29 +120,63 @@ public class LauncherActivity extends Activity {
 
     private class DownloadBridge {
         @JavascriptInterface
-        public boolean savePdf(String filename, String base64) {
-            byte[] bytes = Base64.decode(base64, Base64.DEFAULT);
+        public boolean beginPdf(String filename) {
             try {
+                finishPdf(false);
+                pendingDownloadUri = null;
                 OutputStream output = null;
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                     ContentValues values = new ContentValues();
                     values.put(MediaStore.Downloads.DISPLAY_NAME, filename);
                     values.put(MediaStore.Downloads.MIME_TYPE, "application/pdf");
                     values.put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/Mission Selection");
-                    Uri uri = getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
-                    if (uri == null) return false;
-                    output = getContentResolver().openOutputStream(uri);
+                    values.put(MediaStore.Downloads.IS_PENDING, 1);
+                    pendingDownloadUri = getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
+                    if (pendingDownloadUri == null) return false;
+                    output = getContentResolver().openOutputStream(pendingDownloadUri);
                 } else {
                     File directory = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS);
                     if (directory == null || (!directory.exists() && !directory.mkdirs())) return false;
                     output = new FileOutputStream(new File(directory, filename));
                 }
                 if (output == null) return false;
-                try (OutputStream stream = output) {
-                    stream.write(bytes);
+                pendingDownload = output;
+                return true;
+            } catch (IOException ignored) {
+                return false;
+            }
+        }
+
+        @JavascriptInterface
+        public boolean appendPdf(String base64) {
+            if (pendingDownload == null) return false;
+            try {
+                pendingDownload.write(Base64.decode(base64, Base64.DEFAULT));
+                return true;
+            } catch (IOException ignored) {
+                return false;
+            }
+        }
+
+        @JavascriptInterface
+        public boolean finishPdf(boolean commit) {
+            try {
+                if (pendingDownload != null) {
+                    pendingDownload.flush();
+                    pendingDownload.close();
+                    pendingDownload = null;
+                }
+                if (pendingDownloadUri != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    ContentValues values = new ContentValues();
+                    values.put(MediaStore.Downloads.IS_PENDING, 0);
+                    getContentResolver().update(pendingDownloadUri, values, null, null);
+                    if (!commit) getContentResolver().delete(pendingDownloadUri, null, null);
+                    pendingDownloadUri = null;
                 }
                 return true;
             } catch (IOException ignored) {
+                pendingDownload = null;
+                pendingDownloadUri = null;
                 return false;
             }
         }

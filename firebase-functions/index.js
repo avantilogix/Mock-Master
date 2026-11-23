@@ -36,20 +36,29 @@ function text(value, label, max) {
   if (typeof value !== 'string' || !value.trim() || value.length > max) {
     fail(422, `${label} is required (maximum ${max} characters).`);
   }
-
-  async function protectedPdf(source, pages, phone) {
-    const output = await PDFDocument.create();
-    for (let page = 1; page <= pages; page++) {
-      const image = await output.embedPng(await renderPage(source, page, phone));
-      const target = output.addPage([595, 842]);
-      const scale = Math.min(595 / image.width, 842 / image.height);
-      const width = image.width * scale;
-      const height = image.height * scale;
-      target.drawImage(image, { x: (595 - width) / 2, y: (842 - height) / 2, width, height });
-    }
-    return Buffer.from(await output.save());
-  }
   return value.trim();
+}
+
+function istIso(value, label) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/.test(value)) {
+    fail(422, `${label} must be a valid date and time in IST.`);
+  }
+  const date = new Date(`${value}${value.length === 16 ? ':00' : ''}+05:30`);
+  if (Number.isNaN(date.getTime())) fail(422, `${label} must be a valid date and time in IST.`);
+  return date.toISOString();
+}
+
+async function protectedPdf(source, pages, phone) {
+  const output = await PDFDocument.create();
+  for (let page = 1; page <= pages; page++) {
+    const image = await output.embedPng(await renderPage(source, page, phone));
+    const target = output.addPage([595, 842]);
+    const scale = Math.min(595 / image.width, 842 / image.height);
+    const width = image.width * scale;
+    const height = image.height * scale;
+    target.drawImage(image, { x: (595 - width) / 2, y: (842 - height) / 2, width, height });
+  }
+  return Buffer.from(await output.save());
 }
 
 function idFor(...parts) {
@@ -647,7 +656,7 @@ function createApp() {
       fail(423, `This live test opens on ${new Date(starts).toLocaleString('en-IN')}.`);
     }
     const limited = Boolean(item.live) && (!Number.isFinite(expires) || now <= expires);
-    const attemptsLimit = item.attemptsLimit || 2;
+    const attemptsLimit = item.live ? (item.attemptsLimit || 2) : Infinity;
     if (limited && attempts >= attemptsLimit) {
       fail(409, `You have used ${attemptsLimit} attempts. Unlimited attempts open after the live window ends.`);
     }
@@ -659,7 +668,7 @@ function createApp() {
       expiresAt: item.expiresAt || '',
       durationMinutes: item.durationMinutes || 90,
       attempts,
-      attemptsLimit,
+      attemptsLimit: item.live ? attemptsLimit : 0,
       limited,
       marksPerQuestion: item.marksPerQuestion || 1,
       negativeMark: item.negativeMark || 0,
@@ -681,7 +690,7 @@ function createApp() {
       fail(423, 'This live test has not opened yet.');
     }
     const limited = Boolean(item.live) && (!Number.isFinite(expires) || nowMs <= expires);
-    const attemptsLimit = item.attemptsLimit || 2;
+    const attemptsLimit = item.live ? (item.attemptsLimit || 2) : Infinity;
     if (limited && attempts >= attemptsLimit) {
       fail(409, `You have used ${attemptsLimit} attempts. Unlimited attempts open after the live window ends.`);
     }
@@ -1195,17 +1204,14 @@ function createApp() {
     let expiration = '';
     let duration = 0;
     if (live) {
-      const start = new Date(startsAt);
       duration = durationMinutes;
-      if (Number.isNaN(start.getTime()) || !Number.isInteger(duration) || duration < 10 || duration > 300) {
+      if (!Number.isInteger(duration) || duration < 10 || duration > 300) {
         fail(422, 'A live test needs a valid start time and a duration from 10–300 minutes.');
       }
-      scheduled = start.toISOString();
+      scheduled = istIso(startsAt, 'Live start time');
     }
     if (expiresAt !== undefined && expiresAt !== '') {
-      const expires = new Date(expiresAt);
-      if (Number.isNaN(expires.getTime())) fail(422, 'Provide a valid test expiry time.');
-      expiration = expires.toISOString();
+      expiration = istIso(expiresAt, 'Live expiry time');
     }
     if (live && (!expiration || Date.parse(expiration) <= Date.parse(scheduled))) {
       fail(422, 'A live test expiry must be after its start time.');
@@ -1375,7 +1381,7 @@ function createApp() {
       const snapshot = await transaction.get(ref);
       const order = value(snapshot);
       if (!order) fail(404, 'Payment request not found.');
-      if (order.paymentStatus !== 'pending') fail(409, 'Only pending requests can be rejected.');
+      if (!['pending', 'approved'].includes(order.paymentStatus)) fail(409, 'This payment was already rejected.');
       const referralRef = order.creditsUsed ? db.collection('referrals').doc(order.uid) : null;
       if (referralRef) {
         const referral = value(await transaction.get(referralRef));

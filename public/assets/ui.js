@@ -169,9 +169,9 @@ export function formatDate(value, withTime = true) {
   if (!value) return 'Date not recorded';
   const date = new Date(/^\d{4}-\d{2}-\d{2}$/.test(value) ? `${value}T00:00:00` : value);
   if (Number.isNaN(date.getTime())) return 'Date not recorded';
-  return date.toLocaleString('en-IN', withTime && value.length > 10 ?
+  return date.toLocaleString('en-IN', {...(withTime && value.length > 10 ?
     {day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit'} :
-    {day: 'numeric', month: 'short', year: 'numeric'});
+    { day: 'numeric', month: 'short', year: 'numeric' }), timeZone: 'Asia/Kolkata'});
 }
 
 // A delete button that asks for confirmation inline before running `action`.
