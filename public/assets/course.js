@@ -193,7 +193,10 @@ export function showContentLibrary(main, ctx, me, kind, action) {
           entries(material[config.item], config.empty, item => el('div', {class: 'test-series-row'},
            el('div', {}, el('strong', {}, item.title), item.live ? el('span', {class: 'badge live-badge'},
              `Live · ${formatDate(item.startsAt)} IST · ${item.durationMinutes} min`) : null),
-           link('Start Test', `#test/${idPart(course.id)}/${idPart(item.id)}`, 'button secondary')))));
+           el('div', {class: 'actions'},
+             item.live && Date.parse(item.expiresAt) <= Date.now() ?
+               link('Leaderboard', `#leaderboard/${idPart(course.id)}/${idPart(item.id)}`, 'button secondary') : null,
+             link('Start Test', `#test/${idPart(course.id)}/${idPart(item.id)}`, 'button secondary'))))));
     }));
     content.replaceChildren(...folders);
   });

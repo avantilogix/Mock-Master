@@ -1,8 +1,8 @@
 import {showAdmin} from './admin.js?v=mock-live-readmore-final';
-import {showCatalog, showContentLibrary, showCourse, showDashboard, showMyCourses} from './course.js?v=mock-live-readmore-final';
+import {showCatalog, showContentLibrary, showCourse, showDashboard, showMyCourses} from './course.js?v=leaderboard-live-final';
 import {api, firebaseAuth} from './services.js?v=ebook-store-final';
 import {showSignIn} from './signin.js';
-import {showBook, showTest, showVideo} from './study.js?v=cards-support-exam-final';
+import {showBook, showLeaderboard, showTest, showVideo} from './study.js?v=leaderboard-live-final';
 import {showLearningContent, showNotifications, showProgress} from './reports.js?v=manage-20261122';
 import {showDownloads, showReferrals, showTimetable, socialFooter} from './features.js?v=expiry-covers-1';
 import {showCourseGroups, showShareRate, showVideos} from './engagement.js?v=expiry-covers-1';
@@ -17,7 +17,7 @@ const routes = new Map([
   ['free-tests', 0], ['current-affairs', 0], ['pyqs', 0], ['syllabus', 0], ['progress', 0], ['notifications', 0],
   ['timetable', 0], ['referrals', 0], ['downloads', 0],
   ['videos', 0], ['groups', 0], ['share-app', 0], ['about', 0], ['privacy', 0], ['terms', 0],
-  ['course', 1], ['test', 2], ['book', 2], ['ebook', 1], ['video', 2], ['signin', 0],
+  ['course', 1], ['test', 2], ['book', 2], ['ebook', 1], ['video', 2], ['leaderboard', 2], ['signin', 0],
   ['profile', 0], ['support', 0], ['admin', 0]
 ]);
 let firebase;
@@ -413,6 +413,7 @@ function render(focus = false) {
     case 'support': showSupport(ctx); break;
     case 'profile': if (current) showProfile(ctx); else needSignIn(); break;
     case 'test': if (current) showTest(main, ctx, courseId, itemId, current.user.phoneNumber); else needSignIn(); break;
+    case 'leaderboard': if (current) showLeaderboard(main, ctx, courseId, itemId); else needSignIn(); break;
     case 'book': if (current) showBook(main, ctx, courseId, itemId); else needSignIn(); break;
     case 'ebook': showEbook(main, ctx, courseId, {signInLink}); break;
     case 'video': if (current) showVideo(main, ctx, courseId, itemId); else needSignIn(); break;

@@ -435,7 +435,7 @@ function createApp() {
     await requirePurchase(req.user, id);
     const tests = (await db.collection('tests').where('course', '==', id).get()).docs.map(value).sort(byNewest).reverse()
       .map(item => ({ id: item.id, title: item.title, live: Boolean(item.live),
-        startsAt: item.startsAt || '', durationMinutes: item.durationMinutes || 0 }));
+        startsAt: item.startsAt || '', expiresAt: item.expiresAt || '', durationMinutes: item.durationMinutes || 0 }));
     const books = (await db.collection('books').where('course', '==', id).get()).docs.map(value)
       .sort((a, b) => `${a.subject || ''}${a.chapter || ''}`.localeCompare(`${b.subject || ''}${b.chapter || ''}`))
       .map(item => ({ id: item.id, title: item.title, pages: item.pages,
@@ -790,6 +790,39 @@ function createApp() {
     });
     await active.docs[0].ref.update({ active: false });
     res.json(result);
+  });
+  api.get('/tests/:id/leaderboard', async (req, res) => {
+    const item = await test(req.params.id);
+    await requirePurchase(req.user, item.course);
+    if (!item.live) fail(404, 'Leaderboard is available for live tests only.');
+    const expires = Date.parse(item.expiresAt);
+    if (!Number.isFinite(expires) || Date.now() < expires) {
+      fail(423, 'The leaderboard will unlock when the live test window ends.');
+    }
+    const snapshots = (await db.collection('attempts').where('test', '==', item.id).get()).docs.map(value)
+      .filter(attempt => Date.parse(attempt.createdAt) <= expires);
+    const byBest = new Map();
+    for (const attempt of snapshots.sort((a, b) => b.score - a.score ||
+      a.elapsedSeconds - b.elapsedSeconds || String(a.createdAt).localeCompare(String(b.createdAt)))) {
+      if (!byBest.has(attempt.uid)) byBest.set(attempt.uid, attempt);
+    }
+    let previous = null;
+    const rows = [];
+    let index = 0;
+    for (const entry of [...byBest.values()]) {
+      index++;
+      if (!previous || entry.score !== previous.score || entry.elapsedSeconds !== previous.elapsedSeconds) {
+        previous = {...entry, rank: index};
+      }
+      const student = value(await db.collection('students').doc(entry.uid).get());
+      const name = student?.name || 'Student';
+      rows.push({rank: previous.rank, name: entry.uid === req.user.uid ? name : `${name.slice(0, 1)}.`,
+        score: entry.score, maxMarks: entry.maxMarks, elapsedSeconds: entry.elapsedSeconds,
+        attempts: snapshots.filter(attempt => attempt.uid === entry.uid).length,
+        isCurrentUser: entry.uid === req.user.uid});
+    }
+    res.json({title: item.title, expiresAt: item.expiresAt, participants: rows.length,
+      rows, mine: rows.find(row => row.isCurrentUser) || null});
   });
   api.get('/progress', async (req, res) => {
     const attempts = (await db.collection('attempts').where('uid', '==', req.user.uid).get()).docs

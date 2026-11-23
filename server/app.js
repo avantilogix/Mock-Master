@@ -278,7 +278,8 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     const { id } = course(req.params.id);
     requirePurchase(req, id);
     res.json({
-      tests: all('SELECT id, title, live, starts_at AS startsAt, duration_minutes AS durationMinutes FROM tests WHERE course=? ORDER BY rowid', id),
+      tests: all(`SELECT id, title, live, starts_at AS startsAt, expires_at AS expiresAt,
+        duration_minutes AS durationMinutes FROM tests WHERE course=? ORDER BY rowid`, id),
       books: all('SELECT id, title, pages, subject, chapter FROM books WHERE course=? ORDER BY subject, chapter, rowid', id),
       videos: all('SELECT id, title, subject, chapter, type, size FROM chapter_videos WHERE course=? ORDER BY subject, chapter, rowid', id),
       messages: all(`SELECT COALESCE(NULLIF(s.name, ''), 'Student') AS name, m.text
@@ -491,6 +492,39 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
       JSON.stringify(answers), total, wrong * penalty, elapsed, JSON.stringify(sectionScores));
     run('UPDATE exam_sessions SET active=0 WHERE id=?', session.id);
     res.json(result);
+  });
+  api.get('/tests/:id/leaderboard', (req, res) => {
+    const row = test(req.params.id);
+    requirePurchase(req, row.course);
+    if (!row.live) fail(404, 'Leaderboard is available for live tests only.');
+    const expires = Date.parse(row.expires_at);
+    if (!Number.isFinite(expires) || Date.now() < expires) {
+      fail(423, 'The leaderboard will unlock when the live test window ends.');
+    }
+    const attempts = all(`SELECT a.uid, a.score, a.max_marks AS maxMarks, a.elapsed_seconds AS elapsedSeconds,
+      a.created_at AS createdAt, COALESCE(NULLIF(s.name, ''), 'Student') AS name
+      FROM attempts a JOIN students s ON s.uid=a.uid WHERE a.test=? AND a.created_at<=? ORDER BY a.score DESC,
+      a.elapsed_seconds ASC, a.created_at ASC`, row.id, row.expires_at);
+    const best = new Map();
+    for (const attempt of attempts) {
+      if (!best.has(attempt.uid)) best.set(attempt.uid, attempt);
+    }
+    const ranked = [...best.values()].sort((a, b) => b.score - a.score ||
+      a.elapsedSeconds - b.elapsedSeconds || String(a.createdAt).localeCompare(String(b.createdAt)));
+    let previous = null;
+    const rows = ranked.map((entry, index) => {
+      if (!previous || entry.score !== previous.score || entry.elapsedSeconds !== previous.elapsedSeconds) {
+        previous = {...entry, rank: index + 1};
+      }
+      return {
+        rank: previous.rank, name: entry.uid === req.user.uid ? entry.name : `${entry.name.slice(0, 1)}.` || 'Student',
+        score: entry.score, maxMarks: entry.maxMarks, elapsedSeconds: entry.elapsedSeconds,
+        attempts: attempts.filter(item => item.uid === entry.uid).length,
+        isCurrentUser: entry.uid === req.user.uid,
+      };
+    });
+    const mine = rows.find(entry => entry.isCurrentUser) || null;
+    res.json({title: row.title, expiresAt: row.expires_at, participants: rows.length, rows, mine});
   });
   api.get('/progress', (req, res) => {
     const attempts = all(`SELECT a.id, a.course, c.title AS courseTitle, a.test, a.title, a.score, a.total,

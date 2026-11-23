@@ -444,3 +444,37 @@ test('configured phone numbers retain admin access across Firebase UID changes',
   assert.equal(response.status, 200);
   assert.equal((await response.json()).admin, true);
 });
+
+test('live leaderboard is private, rank ordered, and locked until expiry', async t => {
+  const db = openDatabase(':memory:');
+  const users = new Map([
+    ['one', {uid: 'one', phone: '+919000000061'}],
+    ['two', {uid: 'two', phone: '+919000000062'}],
+  ]);
+  const server = createApp({db, verifyToken: async token => users.get(token)}).listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  t.after(() => new Promise(resolve => server.close(() => {db.close(); resolve();})));
+  const base = `http://127.0.0.1:${server.address().port}/api`;
+  db.prepare('INSERT INTO students (uid,phone,name) VALUES (?,?,?)').run('one', users.get('one').phone, 'Aarav');
+  db.prepare('INSERT INTO students (uid,phone,name) VALUES (?,?,?)').run('two', users.get('two').phone, 'Bhavin');
+  db.prepare('INSERT INTO courses (id,title,description,price) VALUES (?,?,?,?)').run('c', 'Live', 'Live', 100);
+  db.prepare(`INSERT INTO tests (id,course,title,questions,live,starts_at,expires_at,duration_minutes)
+    VALUES (?,?,?,?,?,?,?,?)`).run('t', 'c', 'Final Live', JSON.stringify([{prompt:'A?', options:['A','B'], answer:0}]),
+  1, '2026-01-01T00:00:00.000Z', '2099-01-01T00:00:00.000Z', 60);
+  db.prepare('INSERT INTO orders (id,uid,course,amount,payment) VALUES (?,?,?,?,?)').run('o1', 'one', 'c', 100, 'paid-one');
+  db.prepare('INSERT INTO orders (id,uid,course,amount,payment) VALUES (?,?,?,?,?)').run('o2', 'two', 'c', 100, 'paid-two');
+  for (const [id, uid, score, elapsed] of [
+    ['a1', 'one', 4, 60], ['a2', 'two', 2, 40],
+  ]) db.prepare(`INSERT INTO attempts (id,uid,course,test,title,score,total,created_at,max_marks,elapsed_seconds)
+    VALUES (?,?,?,?,?,?,?,?,?,?)`).run(id, uid, 'c', 't', 'Final Live', score, 1, '2026-01-02T00:00:00.000Z', 4, elapsed);
+  let response = await fetch(`${base}/tests/t/leaderboard`, {headers:{Authorization:'Bearer one'}});
+  assert.equal(response.status, 423);
+  db.prepare('UPDATE tests SET expires_at=? WHERE id=?').run('2026-01-03T00:00:00.000Z', 't');
+  response = await fetch(`${base}/tests/t/leaderboard`, {headers:{Authorization:'Bearer one'}});
+  assert.equal(response.status, 200);
+  const board = await response.json();
+  assert.equal(board.rows[0].rank, 1);
+  assert.equal(board.rows[0].isCurrentUser, true);
+  assert.equal(board.rows[1].name, 'B.');
+  assert.equal(JSON.stringify(board).includes('+919000000062'), false);
+});

@@ -98,6 +98,9 @@ export function showTest(main, ctx, courseId, testId, phone) {
           ...(result.sectionScores || []).map(section => el('article', {},
             el('strong', {}, section.section), el('span', {}, `${section.score}/${section.total}`),
             el('small', {}, `${section.correct} correct · ${section.wrong} wrong · ${section.unanswered} unattempted`))));
+        const resultActions = el('div', {class: 'actions'},
+          button('Return to Course', 'secondary'),
+          test.live ? link('View Leaderboard', `#leaderboard/${idPart(courseId)}/${idPart(testId)}`, 'button secondary') : null);
         content.replaceChildren(el('section', {class: 'exam-result'},
           resultTitle, el('div', {class: 'result-score'}, el('strong', {}, `${result.score}`),
             el('span', {}, ` / ${result.maxMarks || result.total}`)),
@@ -105,14 +108,20 @@ export function showTest(main, ctx, courseId, testId, phone) {
             el('span', {}, `Correct ${result.correct ?? result.score}`),
             el('span', {}, `Wrong ${result.wrong ?? 0}`),
             el('span', {}, `Unattempted ${result.unanswered ?? 0}`)),
-          sectionResults, button('Return to Course', 'secondary')));
-        content.querySelector('.button, button').addEventListener('click', () => { location.hash = `#course/${idPart(courseId)}`; });
+          sectionResults,
+          test.live && Date.now() < Date.parse(test.expiresAt) ?
+            el('p', {class: 'leaderboard-locked'}, `Leaderboard unlocks ${new Date(test.expiresAt).toLocaleString('en-IN', {
+              timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short'
+            })} IST.`) : null,
+          resultActions));
+        resultActions.querySelector('button').addEventListener('click', () => { location.hash = `#course/${idPart(courseId)}`; });
         resultTitle.focus();
       } catch (error) {
         submitted = false;
         submit.disabled = false;
         say(feedback, error.message, true);
       }
+
     };
     submit.addEventListener('click', () => {
       if (window.confirm('Submit this attempt? You cannot change answers after submission.')) finish();
@@ -137,6 +146,43 @@ export function showTest(main, ctx, courseId, testId, phone) {
           el('div', {class: 'palette-legend'}, el('span', {}, 'Answered'), el('span', {}, 'Marked'), el('span', {}, 'Unanswered')))),
       el('div', {class: 'exam-actions'}, previous, mark, next, submit), feedback);
     renderQuestion();
+  });
+}
+
+export function showLeaderboard(main, ctx, courseId, testId) {
+  const content = el('div', {class: 'leaderboard-shell'});
+  main.append(link('Back to Course', `#course/${idPart(courseId)}`, 'back'),
+    ...heading('Live Test Leaderboard', 'Rankings are finalized when the live window closes.'), content);
+  loadInto(content, ctx, async () => {
+    const board = await protectedGet(ctx, `/tests/${idPart(testId)}/leaderboard`);
+    const top = board.rows.slice(0, 3);
+    const podium = el('div', {class: 'leaderboard-podium'},
+      ...[1, 0, 2].map(index => {
+        const row = top[index];
+        if (!row) return null;
+        return el('article', {class: `podium-place place-${row.rank}${row.isCurrentUser ? ' mine' : ''}`},
+          el('span', {class: 'podium-medal'}, row.rank === 1 ? '🥇' : row.rank === 2 ? '🥈' : '🥉'),
+          el('div', {class: 'podium-avatar', 'aria-hidden': 'true'}, row.name.slice(0, 1).toUpperCase()),
+          el('strong', {}, row.name), el('b', {}, `${row.score}/${row.maxMarks}`),
+          el('small', {}, `${Math.floor(row.elapsedSeconds / 60)}m ${row.elapsedSeconds % 60}s`));
+      }).filter(Boolean));
+    const mine = board.mine ? el('section', {class: 'leaderboard-you'},
+      el('span', {}, 'Your Rank'), el('strong', {}, `#${board.mine.rank}`),
+      el('span', {}, `${board.mine.score}/${board.mine.maxMarks} · ${board.mine.attempts} attempt${board.mine.attempts === 1 ? '' : 's'}`)) : null;
+    const rankingRows = board.rows.map(row => el('div', {class: `leaderboard-row${row.isCurrentUser ? ' mine' : ''}`},
+      el('span', {class: 'leaderboard-rank'}, `#${row.rank}`),
+      el('div', {class: 'leaderboard-student'}, el('strong', {}, row.isCurrentUser ? `${row.name} (You)` : row.name),
+        el('small', {}, `${row.attempts} attempt${row.attempts === 1 ? '' : 's'} · ${Math.floor(row.elapsedSeconds / 60)}m ${row.elapsedSeconds % 60}s`)),
+      el('div', {class: 'leaderboard-score'}, el('strong', {}, `${row.score}/${row.maxMarks}`),
+        el('small', {}, `${Math.round((row.score / (row.maxMarks || 1)) * 100)}%`))));
+    content.replaceChildren(
+      el('section', {class: 'leaderboard-summary'}, el('div', {}, el('span', {}, 'Live Test'), el('strong', {}, board.title)),
+        el('div', {}, el('span', {}, 'Participants'), el('strong', {}, String(board.participants))),
+        el('div', {}, el('span', {}, 'Closed'), el('strong', {}, new Date(board.expiresAt).toLocaleString('en-IN', {
+          timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short'
+        }))), mine), podium,
+      el('section', {class: 'panel leaderboard-list'}, el('h2', {}, 'Final Rankings'),
+        ...rankingRows));
   });
 }
 
