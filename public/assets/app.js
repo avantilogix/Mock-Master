@@ -1,8 +1,8 @@
-import {showAdmin} from './admin.js?v=exam-submit-counts-final';
-import {showCatalog, showContentLibrary, showCourse, showDashboard, showMyCourses} from './course.js?v=ist-payment-fixes-final';
+import {showAdmin} from './admin.js?v=cards-support-exam-final';
+import {showCatalog, showContentLibrary, showCourse, showDashboard, showMyCourses} from './course.js?v=cards-support-exam-final';
 import {api, firebaseAuth} from './services.js?v=ebook-store-final';
 import {showSignIn} from './signin.js';
-import {showBook, showTest, showVideo} from './study.js?v=exam-submit-counts-final';
+import {showBook, showTest, showVideo} from './study.js?v=cards-support-exam-final';
 import {showLearningContent, showNotifications, showProgress} from './reports.js?v=manage-20261122';
 import {showDownloads, showReferrals, showTimetable, socialFooter} from './features.js?v=expiry-covers-1';
 import {showCourseGroups, showShareRate, showVideos} from './engagement.js?v=expiry-covers-1';

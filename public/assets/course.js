@@ -28,7 +28,6 @@ function courseCard(course, index, me) {
     el('span', {}, owned ? 'Your Learning Space' : 'Mock Tests + E-Books'));
   const body = el('div', {class: 'card-body'}, owned ? el('span', {class: 'badge'}, 'Purchased') : null,
     el('h3', {}, course.title), expiryLabel(course), el('p', {class: 'description tile-description'}, course.description),
-    el('div', {class: 'spacer'}),
     link('Read more', `#course/${idPart(course.id)}`, 'text-link tile-read-more'),
     el('div', {class: 'card-footer'}, course.expired ? el('span', {class: 'muted'}, 'Access closed') :
       owned ? el('span', {class: 'muted'}, 'Continue Learning') : el('p', {class: 'price'}, priceText(course.price)),
@@ -43,12 +42,23 @@ export function showDashboard(main, ctx, me) {
   const missionCount = el('strong', {}, String(me?.purchases?.length || 0));
   main.append(
     el('section', {class: 'dashboard-welcome'},
-      el('div', {}, el('p', {class: 'eyebrow'}, 'Mission Selection'), el('h1', {}, `Hello, ${name}`),
-        el('p', {class: 'lead'}, 'Your next selection starts with today’s practice. Pick up where you left off.')),
+      el('div', {class: 'dashboard-intro'}, el('p', {class: 'eyebrow'}, 'Your daily preparation hub'),
+        el('h1', {}, `Hello, ${name}`),
+        el('p', {class: 'lead'}, 'Choose today’s mission, strengthen one topic, and get closer to selection.'),
+        el('div', {class: 'hero-quick-links'},
+          link('Start a Mock Test', '#test-series', 'button'),
+          link('Explore E-Books', '#book-store', 'button secondary'))),
       el('div', {class: 'dashboard-score'}, el('span', {}, me ? 'Your Missions' : 'Available Missions'), missionCount,
-        link(me ? 'Open My Courses' : 'Sign In to Begin', me ? '#my-courses' : '#signin', 'button'))),
+        el('small', {}, 'Practice · Read · Improve'),
+        link(me ? 'Continue Learning' : 'Join for Free', me ? '#my-courses' : '#signin', 'button'))),
+    el('section', {class: 'dashboard-highlights', 'aria-label': 'Learning benefits'},
+      el('span', {}, el('strong', {}, 'Daily'), el('small', {}, 'Practice questions')),
+      el('span', {}, el('strong', {}, 'Protected'), el('small', {}, 'PDF learning')),
+      el('span', {}, el('strong', {}, 'Focused'), el('small', {}, 'Exam roadmap')),
+      el('span', {}, el('strong', {}, 'Live'), el('small', {}, 'Mock analysis'))),
     el('section', {class: 'section'},
-      el('div', {class: 'section-heading'}, el('h2', {}, 'Start Learning'), link('View All Missions', '#catalog')),
+      el('div', {class: 'section-heading'}, el('div', {}, el('span', {class: 'section-kicker'}, 'Your study toolkit'),
+        el('h2', {}, 'Start Learning')), link('View All Missions', '#catalog')),
       el('div', {class: 'shortcut-grid'},
         shortcut('courses', 'My Courses', 'Continue purchased learning', '#my-courses', 'mint'),
         shortcut('test', 'Test Series', 'Practice exam questions', '#test-series', 'blue'),
@@ -68,7 +78,8 @@ export function showDashboard(main, ctx, me) {
         shortcut('share', 'Share & Rate', 'Invite and review', '#share-app', 'yellow'),
         shortcut('profile', me ? 'Profile' : 'Sign In', me ? 'Manage your account' : 'Use your mobile number', me ? '#profile' : '#signin', 'yellow'))),
     el('section', {class: 'section'},
-      el('div', {class: 'section-heading'}, el('h2', {}, me?.purchases?.length ? 'Continue Learning' : 'Popular Missions'),
+      el('div', {class: 'section-heading'}, el('div', {}, el('span', {class: 'section-kicker'}, 'Recommended for you'),
+        el('h2', {}, me?.purchases?.length ? 'Continue Learning' : 'Popular Missions')),
         link('Browse Catalog', '#catalog')),
       courses));
   loadInto(courses, ctx, async () => {

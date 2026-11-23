@@ -27,8 +27,14 @@ export function showTest(main, ctx, courseId, testId, phone) {
     const counters = el('div', {class: 'exam-counters'});
     const timer = el('strong', {class: 'exam-timer', role: 'timer'});
     const feedback = status();
-    const previous = button('Previous', 'secondary');
-    const next = button('Next', 'secondary');
+    const previous = button('', 'secondary icon-button');
+    const next = button('', 'secondary icon-button');
+    previous.textContent = '‹';
+    next.textContent = '›';
+    previous.setAttribute('aria-label', 'Previous question');
+    previous.title = 'Previous question';
+    next.setAttribute('aria-label', 'Next question');
+    next.title = 'Next question';
     const mark = button('Mark for Review', 'secondary');
     const submit = button('Submit Exam');
 

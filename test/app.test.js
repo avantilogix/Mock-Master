@@ -430,3 +430,17 @@ test('practice tests allow repeated attempts without a live attempt limit', asyn
   assert.equal(test.attemptsLimit, 0);
   assert.equal(test.limited, false);
 });
+
+test('configured phone numbers retain admin access across Firebase UID changes', async t => {
+  const db = openDatabase(':memory:');
+  const users = new Map([['phone-admin', {uid: 'new-firebase-uid', phone: '+919131463747'}]]);
+  const server = createApp({db, verifyToken: async token => users.get(token),
+    adminPhones: ['+919131463747']}).listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  t.after(() => new Promise(resolve => server.close(() => { db.close(); resolve(); })));
+  const response = await fetch(`http://127.0.0.1:${server.address().port}/api/me`, {
+    headers: {Authorization: ['Bearer', 'phone-admin'].join(' ')},
+  });
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).admin, true);
+});

@@ -14,8 +14,8 @@ manifest.startUrl = '/';
 manifest.name = 'Mission Selection';
 manifest.launcherName = 'Mission';
 manifest.packageId = 'com.avantilogix.missionselection';
-manifest.appVersionCode = 7;
-manifest.appVersionName = '7';
+manifest.appVersionCode = 10;
+manifest.appVersionName = '10';
 manifest.display = 'standalone';
 manifest.orientation = 'default';
 manifest.minSdkVersion = 24;
@@ -76,7 +76,7 @@ public class LauncherActivity extends Activity {
         settings.setAllowContentAccess(false);
         settings.setMediaPlaybackRequiresUserGesture(true);
         settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
-        settings.setUserAgentString(settings.getUserAgentString() + " MissionSelectionSecureApp/7");
+        settings.setUserAgentString(settings.getUserAgentString() + " MissionSelectionSecureApp/10");
         webView.addJavascriptInterface(new DownloadBridge(), "MissionSelectionDownloads");
         webView.setWebViewClient(new WebViewClient() {
             @Override

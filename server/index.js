@@ -26,6 +26,7 @@ const app = createApp({
   },
   adminUids: [...(env.ADMIN_UIDS || '').split(',').map(value => value.trim()).filter(Boolean),
     ...(dummyLogin ? [dummyAdmin] : [])],
+  adminPhones: (env.ADMIN_PHONES || '').split(',').map(value => value.trim()).filter(Boolean),
   trustLocalProxy: env.TRUST_LOCAL_PROXY === 'true',
   manualPayment: { upiId: env.UPI_ID, payeeName: env.UPI_PAYEE_NAME },
   videoDir: join(directory, 'videos'),

@@ -630,21 +630,25 @@ export function showAdmin(main, ctx) {
     }
   }, 'Uploading…');
   setCourses(courseList);
+  const supportRefresh = button('Refresh Support Requests', 'secondary');
+  const loadSupport = () => loadInto(inbox, ctx, async () => {
+    const messages = await get('/admin/support');
+    inbox.replaceChildren(entries(messages, 'No support requests have arrived yet.', item =>
+      el('article', {class: 'support-ticket'},
+        el('a', {href: `tel:${item.phone || ''}`, class: 'support-phone'}, item.phone || 'Student'),
+        el('p', {class: 'entry-text'}, item.text))));
+  });
+  supportRefresh.addEventListener('click', loadSupport);
   main.append(panel('Upload a Study Book or Video', bookForm),
     panel('Publish Learning Resources', adminContentForm(post, () => refresh())),
-    panel('Support Inbox', inbox));
-  loadInto(inbox, ctx, async () => {
-    const messages = await get('/admin/support');
-    inbox.replaceChildren(entries(messages, 'No support requests have arrived yet.', item => [
-      el('strong', {}, item.phone), el('p', {class: 'entry-text'}, item.text)
-    ]));
-  });
+    panel('Support Inbox', supportRefresh, inbox));
+  loadSupport();
   const panels = [...main.querySelectorAll(':scope > section.panel')];
   const sectionTitle = section => section.querySelector(':scope > h2')?.textContent || '';
   const findPanel = title => panels.find(section => sectionTitle(section) === title);
   const workspace = el('div', {class: 'admin-workspace'});
   const menu = el('div', {class: 'admin-area-grid'});
-  const openList = ({label, managerType, list, add, addLabel}) => {
+  const openList = ({label, managerType, list, add, addLabel, onOpen}) => {
     if (!list) return;
     const toolbar = el('div', {class: 'admin-section-toolbar'},
       el('button', {type: 'button', class: 'admin-back-button'}, '← All Areas'),
@@ -682,6 +686,7 @@ export function showAdmin(main, ctx) {
     if (managerType) manager.select(managerType);
     list.hidden = false;
     workspace.replaceChildren(toolbar, list);
+    onOpen?.();
     if (add) add.hidden = true;
   };
   const areas = [
@@ -708,7 +713,7 @@ export function showAdmin(main, ctx) {
     {label: 'Students', description: 'Accounts, activation, and disabling', icon: '●',
       open: () => openList({label: 'Students', list: findPanel('Student Accounts')})},
     {label: 'Support', description: 'Student help requests', icon: '?',
-      open: () => openList({label: 'Support', list: findPanel('Support Inbox')})},
+      open: () => openList({label: 'Support', list: findPanel('Support Inbox'), onOpen: loadSupport})},
     {label: 'Payment Settings', description: 'UPI ID, QR image, and methods', icon: '⚙',
       open: () => openList({label: 'Payment Settings', list: findPanel('Payment Information')})},
     {label: 'Social Links', description: 'YouTube, Instagram, and Telegram', icon: '↗',

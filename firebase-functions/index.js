@@ -22,6 +22,7 @@ const db = getFirestore();
 const bucket = getStorage().bucket();
 const auth = getAuth();
 const adminUidsParameter = defineString('ADMIN_UIDS', { default: '' });
+const adminPhonesParameter = defineString('ADMIN_PHONES', { default: '' });
 const upiIdParameter = defineString('UPI_ID', { default: '' });
 const upiPayeeNameParameter = defineString('UPI_PAYEE_NAME', { default: '' });
 const firebaseProjectIdParameter = defineString('PUBLIC_PROJECT_ID', { default: '' });
@@ -181,7 +182,9 @@ function createApp() {
       fail(403, 'This account is disabled. Contact support to request reactivation.');
     }
     const admins = new Set(parameterValue(adminUidsParameter).split(',').map(uid => uid.trim()).filter(Boolean));
-    req.user = { uid: user.uid, phone: user.phone, admin: admins.has(user.uid) };
+    const adminPhones = new Set(parameterValue(adminPhonesParameter).split(',')
+      .map(phone => phone.trim()).filter(Boolean));
+    req.user = { uid: user.uid, phone: user.phone, admin: admins.has(user.uid) || adminPhones.has(user.phone) };
     next();
   };
   const admin = (req, _res, next) => {

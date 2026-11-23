@@ -90,15 +90,15 @@ p { margin: 0 0 .85rem; }
 .card-cover span { width: fit-content; padding: .22rem .5rem; border: 1px solid rgba(255,255,255,.35); border-radius: 2rem; font-size: .72rem; font-weight: 750; }
 .card-body { display: flex; flex: 1; flex-direction: column; align-items: flex-start; width: 100%; padding: 1.1rem; }
 .card .description { min-height: 3rem; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
-.tile-description { height: 4.65rem; min-height: 4.65rem; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
-.tile-read-more { align-self: flex-start; margin: 0 0 .75rem; font-size: .82rem; font-weight: 800; }
+.tile-description { height: auto; min-height: 0; max-height: 6.2rem; margin-bottom: .7rem; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+.tile-read-more { display: inline-flex; flex: none; align-self: flex-start; min-height: 2rem; margin: 0 0 .8rem; font-size: .82rem; font-weight: 800; }
 .test-series-row { display: flex; align-items: center; justify-content: space-between; gap: .75rem; }
 .test-series-row > div { min-width: 0; }
 .live-badge { margin: .35rem 0 0; color: #9b2c12; background: #ffe9df; }
 .live-test-fields { padding: .8rem; border: 1px solid var(--line); border-radius: .8rem; }
 .text-link { color: var(--accent-dark); text-decoration: none; }
 .text-link:hover { text-decoration: underline; }
-.card { height: 27rem; min-height: 27rem; max-height: 27rem; }
+.card { height: auto; min-height: 29rem; max-height: none; }
 .card .card-cover { flex: 0 0 5.75rem; height: 5.75rem; min-height: 5.75rem; overflow: hidden; }
 .card > .cover-gallery { flex: 0 0 5.75rem; height: 5.75rem; min-height: 5.75rem; overflow: hidden; border-radius: 0; }
 .card > .cover-gallery .cover-photo { aspect-ratio: auto; height: 5.75rem; object-fit: cover; }
@@ -106,7 +106,7 @@ p { margin: 0 0 .85rem; }
 fieldset.panel { position: relative; margin-top: 1.35rem; padding-top: 1.5rem; }
 fieldset.panel > legend { position: absolute; left: 1rem; right: 1rem; top: 0; display: block; width: calc(100% - 2rem); padding: .55rem .75rem; border-radius: .75rem; color: var(--ink); background: var(--surface); transform: translateY(-50%); font-weight: 800; line-height: 1.35; }
 .card .spacer { flex: 1; }
-.card-footer { display: flex; justify-content: space-between; align-items: center; gap: .7rem; width: 100%; margin-top: .65rem; }
+.card-footer { display: flex; flex: none; justify-content: space-between; align-items: center; gap: .7rem; width: 100%; margin-top: auto; padding-top: .5rem; }
 .badge { display: inline-block; margin-bottom: .6rem; padding: .2rem .62rem; border-radius: 2rem; color: #14604f; background: var(--accent-soft); font-size: .78rem; font-weight: 800; }
 .price { font-weight: 850; font-size: 1.2rem; margin: 0; }
 .price small { color: var(--muted); font-size: .72rem; font-weight: 600; }
