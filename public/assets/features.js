@@ -251,7 +251,7 @@ export function showDownloads(main, ctx, action) {
   const loader = el('div');
   main.append(panel('Protected Downloads',
     el('div', {class: 'tabs', role: 'tablist', 'aria-label': 'Download type'}, ...tabs.map(({tab}) => tab)),
-    el('p', {}, 'PDF downloads are watermarked PNG pages. Use the Video tab to save chapter videos.'),
+    el('p', {}, 'Download the complete protected PDF. Your verified mobile number is watermarked on every page.'),
     loader, ...tabs.map(({tabPanel}) => tabPanel)));
   if (!ctx.user) {
     content.append(el('p', {}, 'Sign in to download protected PDF pages.'), action.signInLink());
@@ -268,13 +268,13 @@ export function showDownloads(main, ctx, action) {
     for (const course of owned) {
       const material = await api(`/courses/${idPart(course.id)}`, {ctx, auth: true});
       for (const book of material.books) {
-        const page = el('input', {type: 'number', min: '1', max: String(book.pages), step: '1', value: '1', required: '', 'data-label': 'Page number'});
-        const download = button('Download Protected Page');
+        const download = button('Download PDF');
         const feedback = status();
-        download.addEventListener('click', () => buttonDownload(ctx, book.id, page, download, feedback));
+        download.prepend(icon('download', 'line-icon'));
+        download.addEventListener('click', () => buttonDownload(ctx, book.id, download, feedback));
         rows.push(el('article', {class: 'download-row'}, el('div', {}, el('strong', {}, book.title),
           el('p', {class: 'muted'}, `${course.title} · ${book.subject} · ${book.chapter} · ${book.pages} pages`)),
-          field('Page', page), download, feedback));
+          download, feedback));
       }
       for (const video of material.videos || []) {
         const download = button('Download Video');
@@ -306,19 +306,17 @@ async function videoDownload(ctx, video, control, feedback) {
   }, 'Preparing video…');
 }
 
-async function buttonDownload(ctx, bookId, pageInput, control, feedback) {
+async function buttonDownload(ctx, bookId, control, feedback) {
   run(control, feedback, async () => {
-    const page = pageInput.valueAsNumber;
-    if (!checkField(pageInput) || !Number.isSafeInteger(page)) throw new Error(`Choose a page from 1 to ${pageInput.max}.`);
-    const blob = await api(`/books/${idPart(bookId)}/pages/${page}/download`, {ctx, auth: true, image: true});
+    const blob = await api(`/books/${idPart(bookId)}/download`, {ctx, auth: true, blob: true});
     const url = URL.createObjectURL(blob);
-    const anchor = el('a', {href: url, download: `mission-selection-page-${page}.png`});
+    const anchor = el('a', {href: url, download: `mission-selection-book-${bookId}.pdf`});
     document.body.append(anchor);
     anchor.click();
     anchor.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
-    say(feedback, 'Protected page downloaded.');
-  }, 'Preparing protected page…');
+    say(feedback, 'Protected PDF downloaded.');
+  }, 'Preparing protected PDF…');
 }
 
 export function socialFooter(ctx) {

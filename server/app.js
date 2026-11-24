@@ -761,6 +761,13 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     const pdf = await buildReceiptPdf({student, order, course: selectedCourse});
     res.type('pdf').attachment(`${selectedCourse.title}-receipt.pdf`).send(pdf);
   });
+  api.get('/receipts', (req, res) => {
+    res.json(all(`SELECT o.id, o.course, c.title AS title, o.amount, o.transaction_ref AS reference,
+      o.reviewed_at AS reviewedAt, o.submitted_at AS submittedAt
+      FROM orders o JOIN courses c ON c.id=o.course
+      WHERE o.uid=? AND o.payment IS NOT NULL AND o.payment!=''
+      ORDER BY COALESCE(NULLIF(o.reviewed_at,''), o.submitted_at) DESC`, req.user.uid));
+  });
   api.get('/tests/:id/question-paper.pdf', async (req, res) => {
     const row = test(req.params.id);
     requirePurchase(req, row.course);
@@ -891,6 +898,15 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     const png = await processDocument(() => renderPage(Buffer.from(book.pdf), page, req.user.phone));
     res.attachment(`${book.title}-page-${page}.png`).type('png').send(png);
   });
+  api.get('/books/:id/download', async (req, res) => {
+    const book = one(`SELECT b.id, b.course, b.title, b.pages, b.pdf, c.downloads_enabled
+      FROM books b JOIN courses c ON c.id=b.course WHERE b.id=?`, req.params.id);
+    if (!book) fail(404, 'Book not found.');
+    requirePurchase(req, book.course);
+    if (!book.downloads_enabled) fail(403, 'Downloads are disabled for this course.');
+    const pdf = await protectedPdf(Buffer.from(book.pdf), book.pages, req.user.phone);
+    res.attachment(`${book.title}-protected.pdf`).type('pdf').send(pdf);
+  });
   api.get('/videos/:id/link', (req, res) => {
     const video = one('SELECT id, course, title, type FROM chapter_videos WHERE id=?', req.params.id);
     if (!video) fail(404, 'Video not found.');
@@ -986,18 +1002,44 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     const row = test(req.params.id);
     const results = all(`SELECT a.score, a.max_marks AS maxMarks, a.created_at AS createdAt,
       s.name, s.phone FROM attempts a JOIN students s ON s.uid=a.uid WHERE a.test=? ORDER BY a.created_at DESC`, row.id);
-    const pdf = await PDFDocument.create();
-    const font = await pdf.embedFont(StandardFonts.Helvetica);
-    let page = pdf.addPage([842, 595]);
-    let y = 545;
-    page.drawText(`Mission Selection — ${row.title}`, {x: 40, y, size: 18, font}); y -= 38;
-    for (const result of results) {
-      if (y < 45) { page = pdf.addPage([842, 595]); y = 545; }
-      page.drawText(`${result.name || 'Student'}  ${result.phone}  ${result.score}/${result.maxMarks || 0}  ${result.createdAt}`,
-        {x: 40, y, size: 11, font});
-      y -= 20;
+    const ranked = results;
+    const best = new Map();
+    for (const result of ranked.sort((a, b) => b.score - a.score || String(a.createdAt).localeCompare(String(b.createdAt)))) {
+      if (!best.has(result.phone)) best.set(result.phone, result);
     }
+    const finalRows = [...best.values()].map((result, index) => ({...result, rank: index + 1}));
+    const pdf = await PDFDocument.create();
+    const regular = await pdf.embedFont(StandardFonts.Helvetica);
+    const bold = await pdf.embedFont(StandardFonts.HelveticaBold);
+    let page = pdf.addPage([595, 842]);
+    const blue = rgb(.03, .2, .42);
+    page.drawRectangle({x: 36, y: 785, width: 523, height: 30, color: blue});
+    page.drawText(`${row.title.toUpperCase()} — RESULT BY MISSION SELECTION`, {x: 47, y: 795, size: 12, font: bold, color: rgb(1,1,1)});
+    page.drawRectangle({x: 36, y: 750, width: 523, height: 25, color: rgb(.98,.71,.47)});
+    [['Rank', 48], ['Name', 105], ['Marks', 500]].forEach(([label, x]) =>
+      page.drawText(label, {x, y: 758, size: 9, font: bold}));
+    let y = 725;
+    for (const result of finalRows) {
+      if (y < 52) {
+        page = pdf.addPage([595, 842]); y = 792;
+      }
+      const shade = result.rank % 2 ? rgb(.94, .98, .96) : rgb(1, 1, 1);
+      page.drawRectangle({x: 36, y: y - 8, width: 523, height: 24, color: shade, borderColor: rgb(.15,.25,.35), borderWidth: .35});
+      page.drawText(String(result.rank), {x: 51, y, size: 9, font: regular});
+      page.drawText(result.name || 'Student', {x: 105, y, size: 9, font: regular});
+      page.drawText(`${result.score} / ${result.maxMarks || 0}`, {x: 480, y, size: 9, font: bold});
+      y -= 25;
+    }
+    page.drawText(`Generated ${new Date().toLocaleString('en-IN', {timeZone:'Asia/Kolkata'})} IST • Admin confidential`, {x: 36, y: 24, size: 7, font: regular, color: rgb(.35,.4,.45)});
     res.type('pdf').attachment(`${row.title}-results.pdf`).send(Buffer.from(await pdf.save()));
+  });
+  api.get('/admin/payments/:id/receipt.pdf', async (req, res) => {
+    const order = one(`SELECT o.*, c.title AS courseTitle FROM orders o JOIN courses c ON c.id=o.course WHERE o.id=?`, req.params.id);
+    if (!order) fail(404, 'Payment request not found.');
+    if (!order.payment || order.payment_status !== 'approved') fail(403, 'Receipt is available only for approved payments.');
+    const student = one('SELECT name, phone FROM students WHERE uid=?', order.uid);
+    const pdf = await buildReceiptPdf({student, order, course: {title: order.courseTitle}});
+    res.type('pdf').attachment(`${order.courseTitle}-receipt.pdf`).send(pdf);
   });
   api.post('/admin/videos', (req, res) => {
     const raw = req.body?.url || '';
@@ -1263,6 +1305,7 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
   };
   api.get('/admin/published', (_req, res) => {
     const tests = all(`SELECT t.id, t.course, c.title AS courseTitle, t.title, t.questions, t.created_at AS createdAt,
+      t.duration_minutes AS durationMinutes, t.marks_per_question AS marksPerQuestion, t.negative_mark AS negativeMark,
       (SELECT COUNT(*) FROM attempts a WHERE a.test=t.id) AS attempts, t.live,
       t.question_paper_download AS questionPaperDownload
       FROM tests t JOIN courses c ON c.id=t.course ORDER BY t.created_at DESC, t.rowid DESC`)
@@ -1308,8 +1351,21 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
       found('tests', id, 'Test');
       const row = found('tests', id, 'Test');
       if (typeof body.questionPaperDownload !== 'boolean') fail(422, 'Choose a valid question paper download option.');
-      run('UPDATE tests SET title=?, questions=?, question_paper_download=? WHERE id=?', text(body.title, 'Title', 120),
-        JSON.stringify(validateQuestions(body.questions)), row.live && body.questionPaperDownload ? 1 : 0, id);
+      const selectedCourse = course(body.course || row.course);
+      if ((body.durationMinutes !== undefined && (!Number.isInteger(body.durationMinutes) || body.durationMinutes < 10 || body.durationMinutes > 300)) ||
+          (body.marksPerQuestion !== undefined && (!Number.isFinite(body.marksPerQuestion) || body.marksPerQuestion <= 0 || body.marksPerQuestion > 100)) ||
+          (body.negativeMark !== undefined && (!Number.isFinite(body.negativeMark) || body.negativeMark < 0 ||
+            body.negativeMark > (body.marksPerQuestion ?? row.marks_per_question)))) {
+        fail(422, 'Enter valid duration and marking values.');
+      }
+      run(`UPDATE tests SET course=?, title=?, questions=?, duration_minutes=?, marks_per_question=?,
+        negative_mark=?, question_paper_download=?, starts_at=?, expires_at=?, attempts_limit=? WHERE id=?`,
+      selectedCourse.id, text(body.title, 'Title', 120), JSON.stringify(validateQuestions(body.questions)),
+      body.durationMinutes ?? row.duration_minutes, body.marksPerQuestion ?? row.marks_per_question,
+      body.negativeMark ?? row.negative_mark, row.live && body.questionPaperDownload ? 1 : 0,
+      row.live && body.startsAt !== undefined ? istIso(body.startsAt, 'Live start time') : row.starts_at,
+      row.live && body.expiresAt !== undefined ? istIso(body.expiresAt, 'Live expiry time') : row.expires_at,
+      row.live ? (body.attemptsLimit ?? row.attempts_limit) : 0, id);
     },
     books(id, body) {
       found('books', id, 'Study book');

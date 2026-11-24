@@ -160,6 +160,9 @@ test('admin approval grants only the confirmed student access to their course, t
   const receiptPdf = await request(`${path}/receipt.pdf`, 'buyer');
   assert.equal(receiptPdf.headers.get('content-type'), 'application/pdf');
   assert.equal(Buffer.from(await receiptPdf.arrayBuffer()).subarray(0, 4).toString(), '%PDF');
+  assert.equal((await request('/receipts', 'buyer')).status, 200);
+  assert.equal((await request(`/admin/payments/${requestId}/receipt.pdf`, 'admin')).status, 200);
+  assert.equal((await request(`/admin/payments/${requestId}/receipt.pdf`, 'buyer')).status, 403);
   const progress = await (await request('/progress', 'buyer')).json();
   assert.deepEqual(progress.summary, { attempts: 1, questions: 1, correct: 1, accuracy: 100, best: 100, courses: 1 });
   assert.equal(progress.attempts[0].course, id);

@@ -1,14 +1,14 @@
-import {showAdmin} from './admin.js?v=test-editor-fix';
-import {showCatalog, showContentLibrary, showCourse, showDashboard, showMyCourses} from './course.js?v=result-receipt-documents';
+import {showAdmin} from './admin.js?v=stable-mobile-admin-downloads';
+import {showCatalog, showContentLibrary, showCourse, showDashboard, showMyCourses} from './course.js?v=stable-mobile-admin-downloads';
 import {api, firebaseAuth} from './services.js?v=ebook-store-final';
 import {showSignIn} from './signin.js?v=multi-exam-selection';
 import {showBook, showLeaderboard, showTest, showVideo} from './study.js?v=result-receipt-documents';
-import {showLearningContent, showNotifications, showProgress} from './reports.js?v=result-receipt-documents';
-import {showDownloads, showReferrals, showTimetable, socialFooter} from './features.js?v=course-download-controls';
+import {showLearningContent, showNotifications, showProgress} from './reports.js?v=stable-mobile-admin-downloads';
+import {showDownloads, showReferrals, showTimetable, socialFooter} from './features.js?v=stable-mobile-admin-downloads';
 import {showCourseGroups, showShareRate, showVideos} from './engagement.js?v=expiry-covers-1';
 import {showEbook, showEbookStore} from './ebooks.js?v=ist-payment-fixes-final';
 import {examPreferenceField, normalizeExamPreferences} from './exam-preferences.js';
-import {bindForm, button, el, field, heading, icon, link, panel, run, say, status, textValue} from './ui.js';
+import {bindForm, button, el, field, heading, icon, idPart, link, loadInto, panel, run, say, status, textValue} from './ui.js';
 
 const main = document.querySelector('#main');
 const nav = document.querySelector('#nav');
@@ -241,6 +241,7 @@ function showProfile(ctx) {
       profileAction('courses', 'My Courses', 'Continue purchased missions', '#my-courses'),
       profileAction('chat', 'Course Groups', 'Open purchaser-only text groups', '#groups'),
       profileAction('progress', 'Progress Reports', 'Review scores, accuracy, and test attempts', '#progress'))),
+    panel('Purchase Receipts', receiptList(ctx)),
     panel('Community', el('div', {class: 'profile-menu'},
       profileAction('gift', 'Referrals', 'Share your code and view earned credits', '#referrals'),
       profileAction('share', 'Share & Rate App', 'Invite friends or review Mission Selection', '#share-app')),
@@ -261,6 +262,35 @@ function showProfile(ctx) {
   accountEditor.replaceChildren(form);
   showSavedName();
   accountEditor.hidden = true;
+}
+
+function receiptList(ctx) {
+  const target = el('div', {class: 'receipt-list'});
+  loadInto(target, ctx, async () => {
+    const receipts = await api('/receipts', {ctx, auth: true});
+    if (!receipts.length) {
+      target.replaceChildren(el('p', {class: 'muted'}, 'Approved course receipts will appear here.'));
+      return;
+    }
+    target.replaceChildren(...receipts.map(receipt => {
+      const feedback = status();
+      const download = button('Download Receipt', 'secondary');
+      download.addEventListener('click', () => run(download, feedback, async () => {
+        const blob = await api(`/courses/${idPart(receipt.course)}/receipt.pdf`, {ctx, auth: true, blob: true});
+        const url = URL.createObjectURL(blob);
+        const anchor = el('a', {href: url, download: `${receipt.title}-receipt.pdf`});
+        document.body.append(anchor); anchor.click(); anchor.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        say(feedback, 'Receipt downloaded.');
+      }, 'Preparing receipt…'));
+      return el('article', {class: 'receipt-row'},
+        el('div', {}, el('strong', {}, receipt.title),
+          el('small', {class: 'muted'}, `${new Intl.NumberFormat('en-IN', {style:'currency', currency:'INR'})
+            .format(receipt.amount / 100)} · ${receipt.reference || 'UPI approved'}`)),
+        download, feedback);
+    }));
+  });
+  return target;
 }
 
 function showLegalPage(type) {

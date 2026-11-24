@@ -298,12 +298,8 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px
   .site-header .brand > span { min-width: 0; }
 }
 
-@media (max-width: 700px) and (hover: none) and (pointer: coarse) {
-  body:has(main :is(textarea, input:is([type="text"], [type="tel"], [type="number"], [type="search"], [type="url"], [type="email"], :not([type]))):focus) #nav {
-    position: static;
-    border-top: 0;
-    box-shadow: none;
-  }
+@media (max-width: 700px) {
+  #nav { position: fixed; }
 }
 
 @media (forced-colors: active) {

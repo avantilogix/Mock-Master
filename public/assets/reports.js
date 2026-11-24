@@ -95,9 +95,10 @@ export function showNotifications(main, ctx, action) {
     return;
   }
   const list = el('div', {class: 'notification-list'});
-  main.append(list);
+  const refresh = button('Refresh Notifications', 'secondary');
+  main.append(el('div', {class: 'actions'}, refresh), list);
   loadInto(list, ctx, async () => {
-    const rows = await api('/notifications', {ctx, auth: true});
+    const rows = await api(`/notifications?at=${Date.now()}`, {ctx, auth: true});
     list.replaceChildren(entries(rows, 'You are all caught up. New course updates will appear here.', item => {
       const card = link('', item.href || '#home', 'notification-card');
       const indicator = item.unread ? el('span', {class: 'notification-dot', 'aria-label': 'New'}) : null;
@@ -108,6 +109,18 @@ export function showNotifications(main, ctx, action) {
       card.append(content);
       return card;
     }));
+  });
+  refresh.addEventListener('click', () => {
+    loadInto(list, ctx, async () => {
+      const rows = await api(`/notifications?at=${Date.now()}`, {ctx, auth: true});
+      list.replaceChildren(entries(rows, 'No notifications yet. Payment and live-test updates will appear here.', item => {
+        const card = link('', item.href || '#home', 'notification-card');
+        card.append(el('div', {}, el('strong', {}, item.title || 'Course Update'),
+          el('p', {class: 'muted'}, item.body || ''), el('small', {class: 'muted'},
+            item.date ? new Date(item.date).toLocaleString('en-IN', {timeZone:'Asia/Kolkata'}) : '')));
+        return card;
+      }));
+    });
   });
 }
 

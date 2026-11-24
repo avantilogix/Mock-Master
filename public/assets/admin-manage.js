@@ -20,7 +20,7 @@ const area = (value, maxlength, rows = 3, required = true) => {
 };
 
 // Each type describes how its rows are summarised, which fields can be edited, and how deletion is explained.
-function types({rupeeInput, toPaise, questionData, priceHint, courses}) {
+function types({ctx, rupeeInput, toPaise, questionData, priceHint, courses}) {
   const price = value => {
     const control = rupeeInput();
     control.value = String(value / 100);
@@ -44,6 +44,25 @@ function types({rupeeInput, toPaise, questionData, priceHint, courses}) {
       text: item => item.description,
       edit(item) {
         const title = input(item.title, 120);
+        const course = el('select', {required: ''},
+          courses().map(entry => el('option', {value: entry.id}, entry.title)));
+        course.value = item.course || '';
+        const duration = el('input', {type: 'number', min: '10', max: '300', step: '1',
+          required: '', value: String(item.durationMinutes || 90)});
+        const marks = el('input', {type: 'number', min: '0.25', max: '100', step: '0.25',
+          required: '', value: String(item.marksPerQuestion || 1)});
+        const negative = el('input', {type: 'number', min: '0', max: '100', step: '0.25',
+          required: '', value: String(item.negativeMark || 0)});
+        const startsAt = el('input', {type: 'datetime-local', value: item.startsAt ?
+          new Date(Date.parse(item.startsAt) + 330 * 60_000).toISOString().slice(0,16) : ''});
+        const expiresAt = el('input', {type: 'datetime-local', value: item.expiresAt ?
+          new Date(Date.parse(item.expiresAt) + 330 * 60_000).toISOString().slice(0,16) : ''});
+        const attempts = el('input', {type: 'number', min: '1', max: '100', step: '1',
+          value: String(item.attemptsLimit || 2)});
+        if (item.live) startsAt.required = expiresAt.required = attempts.required = true;
+        const questionFile = el('input', {type: 'file', accept: '.pdf,.docx,.txt'});
+        const importStatus = status();
+        const importButton = button('Import Question File', 'secondary');
         const download = el('input', {type: 'checkbox'});
         download.checked = Boolean(item.questionPaperDownload);
         const description = area(item.description, 2000);
@@ -68,19 +87,38 @@ function types({rupeeInput, toPaise, questionData, priceHint, courses}) {
       details: item => [plural(item.questions.length, 'question'), plural(item.attempts, 'student attempt')],
       edit(item) {
         const title = input(item.title, 120);
-        const download = el('input', {type: 'checkbox'});
-        download.checked = Boolean(item.questionPaperDownload);
         const questions = rule(area(JSON.stringify(item.questions, null, 2), 200000, 10), value => {
           try { questionData(value); return ''; } catch (error) { return error.message; }
         });
         questions.classList.add('json');
         questions.spellcheck = false;
+        importButton.addEventListener('click', () => run(importButton, importStatus, async () => {
+          const file = questionFile.files[0];
+          if (!file) throw new Error('Choose a PDF, DOCX, or TXT file.');
+          const format = file.name.split('.').pop().toLowerCase();
+          const result = await api(`/admin/import?format=${format}`, {ctx, auth: true, binary: file});
+          if (!Array.isArray(result?.questions) || !result.questions.length) throw new Error('No questions were imported.');
+          questions.value = JSON.stringify(result.questions, null, 2);
+          say(importStatus, `Imported ${result.questions.length} questions.`);
+        }, 'Importing questions…'));
         return {
-          fields: [field('Test Title', title), field('Questions (JSON)', questions,
+          fields: [field('Course', course), field('Test Title', title),
+            field('Duration (minutes)', duration), field('Marks Per Correct Answer', marks),
+            field('Negative Mark Per Wrong Answer', negative),
+            ...(item.live ? [field('Live Start Date and Time (IST)', startsAt),
+              field('Live Expiry Date and Time (IST)', expiresAt),
+              field('Attempts Allowed Until Expiry', attempts)] : []),
+            field('Replace Questions from PDF/DOCX/TXT', questionFile), importButton, importStatus,
+            field('Questions (JSON)', questions,
             'Each question needs a prompt, at least two options, and a zero-based answer.'),
           ...(item.live ? [el('label', {class: 'choice'}, download,
             'Enable Question Paper Download after first completed attempt')] : [])],
-          values: () => ({title: textValue(title, 'Test title'), questions: questionData(questions.value),
+          values: () => ({course: course.value, title: textValue(title, 'Test title'),
+            questions: questionData(questions.value), durationMinutes: duration.valueAsNumber,
+            marksPerQuestion: marks.valueAsNumber, negativeMark: negative.valueAsNumber,
+            startsAt: item.live ? startsAt.value : undefined,
+            expiresAt: item.live ? expiresAt.value : undefined,
+            attemptsLimit: item.live ? attempts.valueAsNumber : undefined,
             questionPaperDownload: item.live && download.checked}),
         };
       },
@@ -181,7 +219,7 @@ function types({rupeeInput, toPaise, questionData, priceHint, courses}) {
 }
 
 export function publishedManager({ctx, onChange, ...helpers}) {
-  const config = types(helpers);
+  const config = types({ctx, ...helpers});
   const keys = Object.keys(config);
   let data = Object.fromEntries(keys.map(key => [key, []]));
   let active = 'courses';

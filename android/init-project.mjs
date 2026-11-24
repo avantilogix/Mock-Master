@@ -14,8 +14,8 @@ manifest.startUrl = '/';
 manifest.name = 'Mission Selection';
 manifest.launcherName = 'Mission';
 manifest.packageId = 'com.avantilogix.missionselection';
-manifest.appVersionCode = 10;
-manifest.appVersionName = '10';
+manifest.appVersionCode = 12;
+manifest.appVersionName = '12';
 manifest.display = 'standalone';
 manifest.orientation = 'default';
 manifest.minSdkVersion = 24;
@@ -36,6 +36,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
 import android.provider.MediaStore;
+import android.content.SharedPreferences;
 import android.util.Base64;
 import android.view.View;
 import android.view.WindowManager;
@@ -64,6 +65,13 @@ public class LauncherActivity extends Activity {
         getWindow().setFlags(WindowManager.LayoutParams.FLAG_SECURE,
                 WindowManager.LayoutParams.FLAG_SECURE);
         webView = new WebView(this);
+        SharedPreferences preferences = getSharedPreferences("mission_selection", MODE_PRIVATE);
+        int cachedVersion = preferences.getInt("web_cache_version", 0);
+        if (cachedVersion < 12) {
+            webView.clearCache(true);
+            webView.clearHistory();
+            preferences.edit().putInt("web_cache_version", 12).apply();
+        }
         webView.setLongClickable(false);
         webView.setOnLongClickListener(view -> true);
         webView.setOverScrollMode(View.OVER_SCROLL_NEVER);
@@ -76,7 +84,7 @@ public class LauncherActivity extends Activity {
         settings.setAllowContentAccess(false);
         settings.setMediaPlaybackRequiresUserGesture(true);
         settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
-        settings.setUserAgentString(settings.getUserAgentString() + " MissionSelectionSecureApp/10");
+        settings.setUserAgentString(settings.getUserAgentString() + " MissionSelectionSecureApp/12");
         webView.addJavascriptInterface(new DownloadBridge(), "MissionSelectionDownloads");
         webView.setWebViewClient(new WebViewClient() {
             @Override

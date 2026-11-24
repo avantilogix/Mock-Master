@@ -1,5 +1,5 @@
 import {api} from './services.js';
-import {publishedManager, weekdays} from './admin-manage.js?v=test-editor-fix';
+import {publishedManager, weekdays} from './admin-manage.js?v=stable-mobile-admin-downloads';
 import {adminContentForm} from './reports.js';
 import {coverPicker} from './publishing-media.js';
 import {bindForm, button, el, entries, field, fieldError, formatDate, heading, idPart, loadInto, panel, rule, run, say, status, textValue} from './ui.js';
@@ -216,6 +216,19 @@ export function showAdmin(main, ctx) {
         say(feedback, 'Request rejected. The student can resubmit payment proof.');
         setTimeout(loadPayments, 500);
       }, 'Rejecting…'));
+      const receipt = request.status === 'approved' && request.type === 'course' ?
+        button('Download Receipt', 'secondary') : null;
+      receipt?.addEventListener('click', () => run(receipt, feedback, async () => {
+        const token = await ctx.user.getIdToken();
+        const response = await fetch(`/api/admin/payments/${idPart(request.id)}/receipt.pdf`,
+          {headers: {Authorization: ['Bearer', token].join(' ') }});
+        if (!response.ok) throw new Error(`Could not download receipt (${response.status}).`);
+        const url = URL.createObjectURL(await response.blob());
+        const anchor = el('a', {href: url, download: `${request.course}-receipt.pdf`});
+        document.body.append(anchor); anchor.click(); anchor.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        say(feedback, 'Receipt downloaded.');
+      }, 'Preparing receipt…'));
       return el('article', {class: 'payment-request'},
         el('div', {class: 'payment-request-head'}, el('div', {}, el('strong', {}, request.name),
           el('p', {class: 'muted'}, request.phone)), el('span', {class: `request-state ${request.status}`}, request.status)),
@@ -228,7 +241,7 @@ export function showAdmin(main, ctx) {
         request.reviewNote ? el('p', {class: 'rejection'}, request.reviewNote) : null,
         request.status !== 'rejected' ? field(request.status === 'approved' ?
           'Revocation Reason' : 'Rejection Reason', rejection) : null,
-        el('div', {class: 'actions'}, approve, reject), feedback);
+        el('div', {class: 'actions'}, approve, reject, receipt), feedback);
     }) : [el('p', {class: 'empty'}, 'No payment requests yet.')]));
   });
   paymentRefresh.addEventListener('click', loadPayments);

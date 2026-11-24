@@ -1,6 +1,13 @@
 import { fail, validateQuestions } from './documents.js';
 import { expiryInput } from './publishing-media.js';
 
+function istIso(value, label) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/.test(value)) {
+    fail(422, `${label} must be a valid IST date and time.`);
+  }
+  return new Date(`${value}${value.length === 16 ? ':00' : ''}+05:30`).toISOString();
+}
+
 export function registerPublishedRoutes(api, { db, bucket, value, text, byNewest, queryCollection, media }) {
   const collection = name => db.collection(name);
   const at = (name, field, id) => collection(name).where(field, '==', id);
@@ -24,8 +31,21 @@ export function registerPublishedRoutes(api, { db, bucket, value, text, byNewest
     },
     tests: body => {
       if (typeof body.questionPaperDownload !== 'boolean') fail(422, 'Choose a valid question paper download option.');
+      if ((body.durationMinutes !== undefined && (!Number.isInteger(body.durationMinutes) || body.durationMinutes < 10 || body.durationMinutes > 300)) ||
+          (body.marksPerQuestion !== undefined && (!Number.isFinite(body.marksPerQuestion) || body.marksPerQuestion <= 0 || body.marksPerQuestion > 100)) ||
+          (body.negativeMark !== undefined && (!Number.isFinite(body.negativeMark) || body.negativeMark < 0 || body.negativeMark > 100))) {
+        fail(422, 'Enter valid duration and marking values.');
+      }
       return { title: text(body.title, 'Title', 120), questions: validateQuestions(body.questions),
-        questionPaperDownload: body.questionPaperDownload };
+        ...(body.course ? {course: text(body.course, 'Course', 128)} : {}),
+        marksPerQuestion: body.marksPerQuestion, negativeMark: body.negativeMark,
+        questionPaperDownload: body.questionPaperDownload,
+        ...(body.durationMinutes !== undefined ? {durationMinutes: body.durationMinutes} : {}),
+        ...(body.marksPerQuestion !== undefined ? {marksPerQuestion: body.marksPerQuestion} : {}),
+        ...(body.negativeMark !== undefined ? {negativeMark: body.negativeMark} : {}),
+        ...(body.startsAt !== undefined ? {startsAt: body.startsAt} : {}),
+        ...(body.expiresAt !== undefined ? {expiresAt: body.expiresAt} : {}),
+        ...(body.attemptsLimit !== undefined ? {attemptsLimit: body.attemptsLimit} : {})};
     },
     books: chapterFields,
     chapterVideos: chapterFields,
@@ -100,7 +120,14 @@ export function registerPublishedRoutes(api, { db, bucket, value, text, byNewest
       const existing = value(await tx.get(ref));
       if (!existing) fail(404, 'Published item not found.');
       if (type === 'tests' && !existing.live) patch.questionPaperDownload = false;
-      if (type === 'videos' && patch.course && !(await tx.get(collection('courses').doc(patch.course))).exists) {
+      if (type === 'tests' && existing.live && patch.startsAt !== undefined) {
+        patch.startsAt = istIso(patch.startsAt, 'Live start time');
+        patch.expiresAt = istIso(patch.expiresAt, 'Live expiry time');
+        if (!Number.isInteger(patch.attemptsLimit) || patch.attemptsLimit < 1 || patch.attemptsLimit > 100) {
+          fail(422, 'Attempt limit must be from 1–100.');
+        }
+      }
+      if (['videos', 'tests'].includes(type) && patch.course && !(await tx.get(collection('courses').doc(patch.course))).exists) {
         fail(404, 'Course not found.');
       }
       tx.update(ref, patch);

@@ -998,6 +998,17 @@ function createApp() {
     res.type('pdf').attachment(`${selectedCourse.title}-receipt.pdf`).send(
       await buildReceiptPdf({student:value(student) || {phone:req.user.phone}, order, course:selectedCourse}));
   });
+  api.get('/receipts', async (req, res) => {
+    const orders = (await db.collection('orders').where('uid','==',req.user.uid).get()).docs.map(value)
+      .filter(order => Boolean(order.payment));
+    res.json(await Promise.all(orders.map(async order => {
+      const selected = value(await db.collection('courses').doc(order.course).get());
+      return {id: order.id, course: order.course, title: selected?.title || 'Course',
+        amount: order.amount, reference: order.transactionRef,
+        reviewedAt: order.reviewedAt, submittedAt: order.submittedAt};
+    })).then(rows => rows.sort((a,b) =>
+      String(b.reviewedAt || b.submittedAt).localeCompare(String(a.reviewedAt || a.submittedAt)))));
+  });
   api.get('/tests/:id/question-paper.pdf', async (req, res) => {
     const item = await test(req.params.id);
     await requirePurchase(req.user, item.course);
@@ -1155,6 +1166,16 @@ function createApp() {
     }
     res.attachment(`${book.title}-page-${page}.png`).type('png').send(png);
   });
+  api.get('/books/:id/download', async (req, res) => {
+    const book = value(await db.collection('books').doc(req.params.id).get());
+    if (!book) fail(404, 'Book not found.');
+    await requirePurchase(req.user, book.course);
+    const selectedCourse = value(await db.collection('courses').doc(book.course).get());
+    if (!selectedCourse?.downloadsEnabled) fail(403, 'Downloads are disabled for this course.');
+    const [source] = await bucket.file(`books/${book.id}.pdf`).download();
+    const pdf = await protectedPdf(source, book.pages, req.user.phone);
+    res.attachment(`${book.title}-protected.pdf`).type('pdf').send(pdf);
+  });
 
   api.use('/admin', admin);
   api.get('/admin/analytics', async (_req, res) => {
@@ -1195,19 +1216,43 @@ function createApp() {
   api.get('/admin/tests/:id/results.pdf', async (req, res) => {
     const selected = await test(req.params.id);
     const snapshots = await db.collection('attempts').where('test', '==', selected.id).get();
-    const pdf = await PDFDocument.create();
-    const font = await pdf.embedFont(StandardFonts.Helvetica);
-    let page = pdf.addPage([842, 595]);
-    let y = 545;
-    page.drawText(`Mission Selection — ${selected.title}`, {x: 40, y, size: 18, font}); y -= 38;
-    for (const snapshot of snapshots.docs.map(value).sort(byNewest)) {
-      const student = value(await db.collection('students').doc(snapshot.uid).get());
-      if (y < 45) { page = pdf.addPage([842, 595]); y = 545; }
-      page.drawText(`${student?.name || 'Student'}  ${student?.phone || ''}  ${snapshot.score}/${snapshot.maxMarks || snapshot.total || 0}  ${snapshot.createdAt}`,
-        {x: 40, y, size: 11, font});
-      y -= 20;
+    const entries = await Promise.all(snapshots.docs.map(value).map(async result => {
+      const student = value(await db.collection('students').doc(result.uid).get());
+      return {...result, name: student?.name || 'Student'};
+    }));
+    const best = new Map();
+    for (const result of entries.sort((a,b) => b.score-a.score || String(a.createdAt).localeCompare(String(b.createdAt)))) {
+      if (!best.has(result.uid)) best.set(result.uid, result);
     }
+    const finalRows = [...best.values()];
+    const pdf = await PDFDocument.create();
+    const regular = await pdf.embedFont(StandardFonts.Helvetica), bold = await pdf.embedFont(StandardFonts.HelveticaBold);
+    let page = pdf.addPage([595,842]);
+    const blue=rgb(.03,.2,.42);
+    page.drawRectangle({x:36,y:785,width:523,height:30,color:blue});
+    page.drawText(`${selected.title.toUpperCase()} — RESULT BY MISSION SELECTION`,{x:47,y:795,size:12,font:bold,color:rgb(1,1,1)});
+    page.drawRectangle({x:36,y:750,width:523,height:25,color:rgb(.98,.71,.47)});
+    [['Rank',48],['Name',105],['Marks',500]].forEach(([label,x])=>page.drawText(label,{x,y:758,size:9,font:bold}));
+    let y=725;
+    finalRows.forEach((result,index)=>{
+      page.drawRectangle({x:36,y:y-8,width:523,height:24,color:index%2?rgb(1,1,1):rgb(.94,.98,.96),borderColor:rgb(.15,.25,.35),borderWidth:.35});
+      page.drawText(String(index+1),{x:51,y,size:9,font:regular});
+      page.drawText(result.name,{x:105,y,size:9,font:regular});
+      page.drawText(`${result.score} / ${result.maxMarks||result.total||0}`,{x:480,y,size:9,font:bold});
+      y-=25;
+    });
+    page.drawText(`Generated ${new Date().toLocaleString('en-IN',{timeZone:'Asia/Kolkata'})} IST • Admin confidential`,{x:36,y:24,size:7,font:regular,color:rgb(.35,.4,.45)});
     res.type('pdf').attachment(`${selected.title}-results.pdf`).send(Buffer.from(await pdf.save()));
+  });
+  api.get('/admin/payments/:id/receipt.pdf', async (req, res) => {
+    const order = value(await db.collection('orders').doc(req.params.id).get());
+    if (!order) fail(404, 'Payment request not found.');
+    if (!order.payment || order.paymentStatus !== 'approved') fail(403, 'Receipt is available only for approved payments.');
+    const [selectedCourse, student] = await Promise.all([
+      course(order.course), db.collection('students').doc(order.uid).get(),
+    ]);
+    res.type('pdf').attachment(`${selectedCourse.title}-receipt.pdf`).send(
+      await buildReceiptPdf({student:value(student)||{}, order, course:selectedCourse}));
   });
   media.adminRoutes();
   registerVideoRoutes(api, { db, bucket, value, text, course, requirePurchase });
