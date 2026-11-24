@@ -1,5 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
   <symbol id="home" viewBox="0 0 24 24"><path d="m3 10 9-7 9 7v9a2 2 0 0 1-2 2h-4v-7H9v7H5a2 2 0 0 1-2-2z"/></symbol>
+  <symbol id="back" viewBox="0 0 24 24"><path d="m15 5-7 7 7 7M8 12h12"/></symbol>
   <symbol id="missions" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></symbol>
   <symbol id="courses" viewBox="0 0 24 24"><path d="M5 4h13a2 2 0 0 1 2 2v13H7a3 3 0 1 1 0-6h13M4 16V6a2 2 0 0 1 2-2m2 4h7"/></symbol>
   <symbol id="progress" viewBox="0 0 24 24"><path d="M3 3v18h18M7 16l5-6 4 2 5-7m-4 0h4v4"/></symbol>

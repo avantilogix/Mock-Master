@@ -1,7 +1,5 @@
 import {api} from './services.js';
-import {coverGallery} from './publishing-media.js';
-import {upiReference} from './course.js';
-import {bindForm, button, checkField, confirmDelete, el, entries, field, heading, icon, idPart, loadInto, panel, rule, run, say, status, textValue} from './ui.js';
+import {bindForm, button, confirmDelete, el, entries, field, heading, icon, idPart, loadInto, panel, run, say, status, textValue} from './ui.js';
 
 export const socialLinks = [
   ['YouTube', 'youtube', '▶'],
@@ -154,72 +152,6 @@ export function showReferrals(main, ctx, action) {
       el('p', {class: 'muted'}, `Credits available: ₹${referral.credits || 0}`), copy),
       referral.referred_by || referral.referredBy ? null : panel('Use a Friend’s Code', applyForm)].filter(Boolean));
   });
-}
-
-export function showPhysicalStore(main, ctx, action) {
-  main.append(...heading('Physical Book Store', 'Order printed books with UPI payment proof and delivery tracking.'));
-  const books = el('div', {class: 'grid'});
-  const orders = el('div');
-  main.append(books);
-  if (ctx.user) main.append(panel('Your Physical Orders', orders));
-  loadInto(books, ctx, async () => {
-    const [rows, config] = await Promise.all([api('/physical-books', {ctx}), api('/config', {ctx})]);
-    books.replaceChildren(...(rows.length ? rows.map(item => el('article', {class: 'panel physical-book'},
-      coverGallery(item, 'physical-gallery') || el('div', {class: 'book-cover', 'aria-hidden': 'true'}, 'BOOK'),
-      el('h2', {}, item.title),
-      el('p', {class: 'muted'}, item.description), el('p', {class: 'price'}, `₹${(item.price / 100).toFixed(2)}`),
-      el('small', {class: 'muted'}, `${item.stock} in stock`),
-      ctx.user ? orderForm(ctx, item, config.payment) : action.signInLink('Sign In to Order'))) :
-      [el('div', {class: 'empty-library'}, el('h2', {}, 'Physical Books Are Coming Soon'),
-        el('p', {class: 'muted'}, 'Admin can publish stock and fulfil orders from the Admin workspace.'))]));
-  });
-  if (ctx.user) loadInto(orders, ctx, async () => {
-    const rows = await api('/physical-orders', {ctx, auth: true});
-    orders.replaceChildren(entries(rows, 'No physical book orders yet.', item => el('div', {class: 'physical-order'},
-      el('strong', {}, item.title), el('span', {class: `request-state ${item.status}`}, item.status),
-      el('p', {class: 'muted'}, `${item.quantity} × book · ₹${(item.amount / 100).toFixed(2)}`),
-      item.tracking ? el('p', {}, `Tracking: ${item.tracking}`) : null,
-      item.reviewNote ? el('p', {class: 'muted'}, item.reviewNote) : null)));
-  });
-}
-
-function orderForm(ctx, item, payment) {
-  const details = el('details', {class: 'shipping-order'}, el('summary', {}, 'Order Now'));
-  const quantity = el('input', {type: 'number', min: '1', max: String(Math.min(5, item.stock)), value: '1', required: ''});
-  const reference = upiReference(el('input', {required: '', maxlength: '80', autocomplete: 'off', placeholder: 'Example: 418276930125'}));
-  const fullName = el('input', {required: '', maxlength: '100', autocomplete: 'name'});
-  const phone = rule(el('input', {type: 'tel', required: '', maxlength: '10', inputmode: 'numeric', autocomplete: 'tel-national', placeholder: '9876543210'}),
-    value => /^[6-9]\d{9}$/.test(value) ? '' : 'Enter a 10-digit mobile number starting with 6, 7, 8, or 9.');
-  const line1 = el('input', {required: '', maxlength: '300', autocomplete: 'address-line1'});
-  const line2 = el('input', {maxlength: '300', autocomplete: 'address-line2'});
-  const city = el('input', {required: '', maxlength: '100', autocomplete: 'address-level2'});
-  const state = el('input', {required: '', maxlength: '100', autocomplete: 'address-level1'});
-  const pin = el('input', {required: '', inputmode: 'numeric', maxlength: '6', autocomplete: 'postal-code',
-    pattern: '[1-9][0-9]{5}', 'data-pattern-message': 'Enter a valid 6-digit PIN code.'});
-  for (const input of [phone, pin]) input.addEventListener('input', () => { input.value = input.value.replace(/\D/g, ''); });
-  const submit = button(`Submit ₹${(item.price / 100).toFixed(2)} Payment`, null, 'submit');
-  const feedback = status();
-  const methods = payment.method === 'both' ? 'UPI ID or QR code' : payment.method === 'qr' ? 'QR code' : 'UPI ID';
-  const form = el('form', {}, el('div', {class: 'payment-instructions'},
-    el('strong', {}, `Pay using ${methods}`),
-    payment.method !== 'upi' ? el('img', {class: 'order-qr', src: '/api/payment-qr', alt: 'Payment QR code'}) : null,
-    payment.method !== 'qr' ? el('p', {}, payment.upiId) : null),
-    field('Quantity', quantity), field('UPI Transaction Reference', reference),
-    field('Full Name', fullName), field('Delivery Mobile Number', phone), field('Address Line 1', line1),
-    field('Address Line 2 (optional)', line2), field('City', city), field('State', state),
-    field('PIN Code', pin), submit, feedback);
-  bindForm(form, submit, feedback, async () => {
-    await api('/physical-orders', {ctx, auth: true, method: 'POST', json: {
-      bookId: item.id, quantity: quantity.valueAsNumber, reference: textValue(reference, 'UPI reference'),
-      address: {fullName: textValue(fullName, 'Full name'), phone: phone.value.replace(/\D/g, ''),
-        line1: textValue(line1, 'Address'), line2: line2.value, city: textValue(city, 'City'),
-        state: textValue(state, 'State'), pin: textValue(pin, 'PIN code')},
-    }});
-    form.reset();
-    say(feedback, 'Physical book order submitted for admin review.');
-  }, 'Submitting order…');
-  details.append(form);
-  return details;
 }
 
 export function showDownloads(main, ctx, action) {

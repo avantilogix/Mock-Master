@@ -302,6 +302,10 @@ body { background: linear-gradient(180deg, #edf6ff 0, var(--bg) 17rem, var(--bg)
   .test-series-row .actions .button { min-width: 7rem; }
   .download-row { grid-template-columns: 1fr; }
   .download-row > button { justify-self: start; width: auto; }
+  .leaderboard-summary { grid-template-columns: 1fr; }
+  .leaderboard-summary > div:first-child { grid-column: auto; }
+  .leaderboard-podium { grid-template-columns: 1fr; min-height: 0; }
+  .podium-place.place-1, .podium-place.place-2, .podium-place.place-3 { min-height: 0; order: initial; }
   .exam-choice-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 .legal-list li { padding-left: .2rem; line-height: 1.65; }
@@ -397,6 +401,9 @@ body { background: linear-gradient(180deg, #edf6ff 0, var(--bg) 17rem, var(--bg)
 .receipt-row { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: .5rem .8rem; align-items: center; padding: .8rem; border: 1px solid var(--line); border-radius: .9rem; background: var(--surface-raised); }
 .receipt-row > div:first-child { display: grid; gap: .15rem; min-width: 0; }
 .receipt-row .status { grid-column: 1 / -1; }
+.page-back { display: inline-flex; align-items: center; gap: .35rem; width: fit-content; min-height: 2.75rem; margin: -.45rem 0 .35rem; padding: .35rem .65rem; border: 1px solid transparent; border-radius: .8rem; color: var(--accent-dark); text-decoration: none; font-weight: 750; }
+.page-back:hover { border-color: var(--line); background: white; }
+.page-back svg { width: 1.1rem; height: 1.1rem; }
 .ebook-payment .payment-choice { display: grid; justify-content: center; gap: .75rem; }
 .ebook-payment .payment-choice .payment-methods { justify-content: center; }
 .ebook-payment .payment-choice > div:last-child { width: min(100%, 20rem); margin-inline: auto; }
@@ -451,7 +458,7 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { outline-colo
   .dashboard-welcome .lead { font-size: .94rem; line-height: 1.55; }
   .dashboard-welcome::after { right: -4rem; bottom: -6rem; }
   .hero-quick-links { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; }
-  .hero-quick-links .button { min-width: 0; padding-inline: .7rem; font-size: .76rem; white-space: nowrap; }
+  .hero-quick-links .button { min-width: 0; padding-inline: .7rem; font-size: .76rem; white-space: normal; line-height: 1.25; }
   .dashboard-score { min-height: 0; grid-template-columns: minmax(0, 1fr) auto; padding: .75rem; }
   .dashboard-score small { grid-column: 1; }
   .dashboard-score strong { grid-column: 2; grid-row: 1 / 3; }

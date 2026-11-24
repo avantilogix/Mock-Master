@@ -14,8 +14,8 @@ manifest.startUrl = '/';
 manifest.name = 'Mission Selection';
 manifest.launcherName = 'Mission';
 manifest.packageId = 'com.avantilogix.missionselection';
-manifest.appVersionCode = 13;
-manifest.appVersionName = '13';
+manifest.appVersionCode = 14;
+manifest.appVersionName = '14';
 manifest.display = 'standalone';
 manifest.orientation = 'default';
 manifest.minSdkVersion = 24;
@@ -67,10 +67,10 @@ public class LauncherActivity extends Activity {
         webView = new WebView(this);
         SharedPreferences preferences = getSharedPreferences("mission_selection", MODE_PRIVATE);
         int cachedVersion = preferences.getInt("web_cache_version", 0);
-        if (cachedVersion < 13) {
+        if (cachedVersion < 14) {
             webView.clearCache(true);
             webView.clearHistory();
-            preferences.edit().putInt("web_cache_version", 13).apply();
+            preferences.edit().putInt("web_cache_version", 14).apply();
         }
         webView.setLongClickable(false);
         webView.setOnLongClickListener(view -> true);
@@ -84,7 +84,7 @@ public class LauncherActivity extends Activity {
         settings.setAllowContentAccess(false);
         settings.setMediaPlaybackRequiresUserGesture(true);
         settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
-        settings.setUserAgentString(settings.getUserAgentString() + " MissionSelectionSecureApp/13");
+        settings.setUserAgentString(settings.getUserAgentString() + " MissionSelectionSecureApp/14");
         webView.addJavascriptInterface(new DownloadBridge(), "MissionSelectionDownloads");
         webView.setWebViewClient(new WebViewClient() {
             @Override

@@ -380,6 +380,19 @@ function render(focus = false) {
   main.replaceChildren();
   main.dataset.page = parsed.page;
   renderNav(parsed);
+  const backTargets = {
+    'my-courses': '#home', 'test-series': '#home', 'book-store': '#home', 'materials': '#home',
+    'progress': '#home', 'notifications': '#home', 'timetable': '#home', 'referrals': '#profile',
+    'downloads': '#profile', 'videos': '#home', 'groups': '#profile', 'share-app': '#profile',
+    'about': '#profile', 'privacy': '#profile', 'terms': '#profile', 'free-tests': '#home',
+    'current-affairs': '#home', 'pyqs': '#home', 'syllabus': '#home', 'support': '#profile',
+    'profile': '#home', 'course': '#catalog', 'ebook': '#book-store', 'admin': '#home',
+  };
+  if (backTargets[parsed.page]) {
+    const back = link('', backTargets[parsed.page], 'page-back');
+    back.append(icon('back', 'line-icon'), el('span', {}, parsed.page === 'admin' ? 'Back to Home' : 'Back'));
+    main.append(back);
+  }
   const needSignIn = () => main.append(...heading('Sign In to Continue', 'This area is available after you sign in with your mobile number.'), signInLink());
   const [courseId, itemId] = parsed.args;
 

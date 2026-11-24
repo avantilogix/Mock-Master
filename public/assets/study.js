@@ -98,10 +98,10 @@ export function showTest(main, ctx, courseId, testId, phone) {
           ...(result.sectionScores || []).map(section => el('article', {},
             el('strong', {}, section.section), el('span', {}, `${section.score}/${section.total}`),
             el('small', {}, `${section.correct} correct · ${section.wrong} wrong · ${section.unanswered} unattempted`))));
-        const resultActions = el('div', {class: 'actions'},
-          button('Return to Course', 'secondary'),
-          result.attemptId ? button('Download Result PDF', 'secondary') : null,
-          result.questionPaperDownload ? button('Download Question Paper', 'secondary') : null,
+        const returnButton = button('Return to Course', 'secondary');
+        const resultButton = result.attemptId ? button('Download Result PDF', 'secondary') : null;
+        const paperButton = result.questionPaperDownload ? button('Download Question Paper', 'secondary') : null;
+        const resultActions = el('div', {class: 'actions'}, returnButton, resultButton, paperButton,
           test.live ? link('View Leaderboard', `#leaderboard/${idPart(courseId)}/${idPart(testId)}`, 'button secondary') : null);
         content.replaceChildren(el('section', {class: 'exam-result'},
           resultTitle, el('div', {class: 'result-score'}, el('strong', {}, `${result.score}`),
@@ -116,10 +116,9 @@ export function showTest(main, ctx, courseId, testId, phone) {
               timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short'
             })} IST.`) : null,
           resultActions));
-        resultActions.querySelector('button').addEventListener('click', () => { location.hash = `#course/${idPart(courseId)}`; });
-        if (result.attemptId) {
-          resultActions.querySelectorAll('button')[1].addEventListener('click', () => run(
-            resultActions.querySelectorAll('button')[1], feedback, async () => {
+        returnButton.addEventListener('click', () => { location.hash = `#course/${idPart(courseId)}`; });
+        if (resultButton) {
+          resultButton.addEventListener('click', () => run(resultButton, feedback, async () => {
               const blob = await api(`/attempts/${result.attemptId}/result.pdf`, {ctx, auth: true, blob: true});
               const url = URL.createObjectURL(blob);
               const anchor = el('a', {href: url, download: `${test.title}-result.pdf`});
@@ -127,9 +126,8 @@ export function showTest(main, ctx, courseId, testId, phone) {
               setTimeout(() => URL.revokeObjectURL(url), 1000);
             }, 'Preparing result PDF…'));
         }
-        if (result.questionPaperDownload) {
-          resultActions.querySelectorAll('button')[2].addEventListener('click', () => run(
-            resultActions.querySelectorAll('button')[2], feedback, async () => {
+        if (paperButton) {
+          paperButton.addEventListener('click', () => run(paperButton, feedback, async () => {
               const blob = await api(`${path}/question-paper.pdf`, {ctx, auth: true, blob: true});
               const url = URL.createObjectURL(blob);
               const anchor = el('a', {href: url, download: `${test.title}-question-paper.pdf`});
