@@ -115,7 +115,7 @@ export function showTest(main, ctx, courseId, testId, phone) {
             el('p', {class: 'leaderboard-locked'}, `Leaderboard unlocks ${new Date(test.expiresAt).toLocaleString('en-IN', {
               timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short'
             })} IST.`) : null,
-          resultActions));
+          resultActions, feedback));
         returnButton.addEventListener('click', () => { location.hash = `#course/${idPart(courseId)}`; });
         if (resultButton) {
           resultButton.addEventListener('click', () => run(resultButton, feedback, async () => {

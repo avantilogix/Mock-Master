@@ -8,7 +8,7 @@ function istIso(value, label) {
   return new Date(`${value}${value.length === 16 ? ':00' : ''}+05:30`).toISOString();
 }
 
-export function registerPublishedRoutes(api, { db, bucket, value, text, byNewest, queryCollection, media }) {
+export function registerPublishedRoutes(api, { db, bucket, value, text, byNewest, queryCollection, media, affairs }) {
   const collection = name => db.collection(name);
   const at = (name, field, id) => collection(name).where(field, '==', id);
   const price = amount => {
@@ -61,11 +61,15 @@ export function registerPublishedRoutes(api, { db, bucket, value, text, byNewest
       return {title: text(body.title, 'Title', 120), description: text(body.description, 'Description', 1000),
         course: typeof body.course === 'string' ? body.course : '', videoId};
     },
-    resources(body) {
+    resources(body, existing) {
       const { publishedAt } = body;
       if (typeof publishedAt !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(publishedAt) ||
           Number.isNaN(Date.parse(publishedAt)) || new Date(publishedAt).toISOString().slice(0, 10) !== publishedAt) {
         fail(422, 'Enter a valid publish date.');
+      }
+      if (existing.kind === 'current-affairs') {
+        if (typeof body.downloadsEnabled !== 'boolean') fail(422, 'Choose whether downloads are allowed.');
+        return { title: text(body.title, 'Title', 120), publishedAt, downloadsEnabled: body.downloadsEnabled };
       }
       return { title: text(body.title, 'Title', 120), summary: text(body.summary, 'Summary', 300),
         body: text(body.body, 'Content', 10_000), publishedAt };
@@ -122,14 +126,14 @@ export function registerPublishedRoutes(api, { db, bucket, value, text, byNewest
   api.put('/admin/published/:type/:id', async (req, res) => {
     const type = managed(req.params.type);
     const ref = collection(type).doc(req.params.id);
-    const patch = editors[type](req.body ?? {});
+    const patch = type === 'resources' ? {} : editors[type](req.body ?? {});
     if (['courses', 'books', 'physicalBooks'].includes(type) && req.body?.images !== undefined) {
       patch.images = await media.validate(req.body.images);
     }
     await db.runTransaction(async tx => {
       const existing = value(await tx.get(ref));
       if (!existing) fail(404, 'Published item not found.');
-      if (type === 'tests' && !existing.live) patch.questionPaperDownload = false;
+      if (type === 'resources') Object.assign(patch, editors.resources(req.body ?? {}, existing));
       if (type === 'tests' && existing.live && patch.startsAt !== undefined) {
         patch.startsAt = istIso(patch.startsAt, 'Live start time');
         patch.expiresAt = istIso(patch.expiresAt, 'Live expiry time');
@@ -168,6 +172,14 @@ export function registerPublishedRoutes(api, { db, bucket, value, text, byNewest
       return false;
     });
     const object = type === 'books' ? `books/${id}.pdf` : type === 'chapterVideos' ? `chapter-videos/${id}` : '';
+    if (type === 'resources') {
+      try {
+        await affairs.remove(id);
+      } catch (error) {
+        console.error('Resource media cleanup failed:', id, error.code);
+        return res.json({ deleted: true, archived, warning: 'The resource is unpublished, but its stored files could not be removed.' });
+      }
+    }
     if (object) {
       try {
         await bucket.file(object).delete({ ignoreNotFound: true });

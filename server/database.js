@@ -113,9 +113,17 @@ export function openDatabase(path) {
   if (!studentColumns.has('disabled')) db.exec("ALTER TABLE students ADD COLUMN disabled INTEGER NOT NULL DEFAULT 0");
   const resourceColumns = new Set(db.prepare('PRAGMA table_info(resources)').all().map(column => column.name));
   if (!resourceColumns.has('published_at')) db.exec("ALTER TABLE resources ADD COLUMN published_at TEXT NOT NULL DEFAULT ''");
+  if (!resourceColumns.has('media')) db.exec("ALTER TABLE resources ADD COLUMN media TEXT NOT NULL DEFAULT '{}'");
+  if (!resourceColumns.has('downloads_enabled')) db.exec('ALTER TABLE resources ADD COLUMN downloads_enabled INTEGER NOT NULL DEFAULT 0');
+  db.exec(`CREATE TABLE IF NOT EXISTS resource_uploads (
+    id TEXT PRIMARY KEY, uid TEXT NOT NULL REFERENCES students, files TEXT NOT NULL, expires INTEGER NOT NULL
+  ) STRICT`);
   const bookColumns = new Set(db.prepare('PRAGMA table_info(books)').all().map(column => column.name));
   if (!bookColumns.has('subject')) db.exec("ALTER TABLE books ADD COLUMN subject TEXT NOT NULL DEFAULT 'General'");
   if (!bookColumns.has('chapter')) db.exec("ALTER TABLE books ADD COLUMN chapter TEXT NOT NULL DEFAULT 'Chapter 1'");
+  const ebookColumns = new Set(db.prepare('PRAGMA table_info(ebooks)').all().map(column => column.name));
+  if (!ebookColumns.has('demo_pdf')) db.exec('ALTER TABLE ebooks ADD COLUMN demo_pdf BLOB');
+  if (!ebookColumns.has('demo_pages')) db.exec('ALTER TABLE ebooks ADD COLUMN demo_pages INTEGER NOT NULL DEFAULT 0');
   const testColumns = new Set(db.prepare('PRAGMA table_info(tests)').all().map(column => column.name));
   if (!testColumns.has('live')) db.exec('ALTER TABLE tests ADD COLUMN live INTEGER NOT NULL DEFAULT 0');
   if (!testColumns.has('starts_at')) db.exec("ALTER TABLE tests ADD COLUMN starts_at TEXT NOT NULL DEFAULT ''");

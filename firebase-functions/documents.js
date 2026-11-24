@@ -60,6 +60,14 @@ const MAX_PAGE_PIXELS = 3_000_000;
 
 export async function renderPage(pdf, page, phone) {
   if (!mobile.test(phone)) fail(403, 'A verified Indian mobile number is required.');
+  return renderPdfPage(pdf, page, phone);
+}
+
+export async function renderDemoPage(pdf, page) {
+  return renderPdfPage(pdf, page, 'DEMO - Mission Selection');
+}
+
+async function renderPdfPage(pdf, page, label) {
   let loading;
   let png;
   try {
@@ -115,7 +123,7 @@ export async function renderPage(pdf, page, phone) {
   const { width, height } = await image.metadata();
   const labels = [];
   for (const [x, y] of [[width * .18, height * .22], [width * .55, height * .53], [width * .28, height * .84]]) {
-    labels.push(`<text x="${x}" y="${y}" transform="rotate(-23 ${x} ${y})">${phone}</text>`);
+    labels.push(`<text x="${x}" y="${y}" transform="rotate(-23 ${x} ${y})">${label}</text>`);
   }
   const watermark = Buffer.from(`<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg"><g font-family="sans-serif" font-size="24" fill="#12204d" fill-opacity="0.35" stroke="white" stroke-width="1" paint-order="stroke">${labels.join('')}</g></svg>`);
   return image.composite([{ input: watermark }]).png().toBuffer();

@@ -1,12 +1,12 @@
-import {showAdmin} from './admin.js?v=admin-kpi-dashboard';
-import {showCatalog, showContentLibrary, showCourse, showDashboard, showMyCourses} from './course.js?v=video-edit-actions';
+import {showAdmin} from './admin.js?v=manual-tests';
+import {showCatalog, showContentLibrary, showCourse, showDashboard, showMyCourses} from './course.js?v=manual-tests';
 import {api, firebaseAuth} from './services.js?v=ebook-store-final';
 import {showSignIn} from './signin.js?v=multi-exam-selection';
-import {showBook, showLeaderboard, showTest, showVideo} from './study.js?v=result-receipt-documents';
-import {showLearningContent, showNotifications, showProgress} from './reports.js?v=result-download-icon';
+import {showBook, showLeaderboard, showTest, showVideo} from './study.js?v=manual-tests';
+import {showLearningContent, showNotifications, showProgress, showResource} from './reports.js?v=current-affairs-media';
 import {showDownloads, showReferrals, showTimetable, socialFooter} from './features.js?v=stable-mobile-admin-downloads';
-import {showCourseGroups, showShareRate, showVideos} from './engagement.js?v=expiry-covers-1';
-import {showEbook, showEbookStore} from './ebooks.js?v=ebook-payment-methods';
+import {showCourseGroups, showShareRate, showVideos} from './engagement.js?v=youtube-fullscreen';
+import {showEbook, showEbookDemo, showEbookStore} from './ebooks.js?v=current-affairs-media';
 import {examPreferenceField, normalizeExamPreferences} from './exam-preferences.js';
 import {bindForm, button, el, field, heading, icon, idPart, link, loadInto, panel, run, say, status, textValue} from './ui.js';
 
@@ -18,7 +18,7 @@ const routes = new Map([
   ['free-tests', 0], ['current-affairs', 0], ['pyqs', 0], ['syllabus', 0], ['progress', 0], ['notifications', 0],
   ['timetable', 0], ['referrals', 0], ['downloads', 0],
   ['videos', 0], ['groups', 0], ['share-app', 0], ['about', 0], ['privacy', 0], ['terms', 0],
-  ['course', 1], ['test', 2], ['book', 2], ['ebook', 1], ['video', 2], ['leaderboard', 2], ['signin', 0],
+  ['course', 1], ['test', 2], ['book', 2], ['ebook', 1], ['ebook-demo', 1], ['resource', 1], ['video', 2], ['leaderboard', 2], ['signin', 0],
   ['profile', 0], ['support', 0], ['admin', 0]
 ]);
 let firebase;
@@ -115,13 +115,13 @@ async function initializeProfile(current) {
 }
 
 function renderNav(parsed) {
-  const catalogActive = ['catalog', 'course', 'test', 'book', 'test-series', 'book-store', 'materials'].includes(parsed.page);
+  const catalogActive = ['catalog', 'course', 'test', 'book', 'ebook', 'ebook-demo', 'test-series', 'book-store', 'materials'].includes(parsed.page);
   const navLink = (label, short, glyph, href, active) => el('a', {href, 'data-short': short, 'aria-label': label, 'aria-current': active ? 'page' : null},
     el('span', {class: 'nav-indicator'}, icon(glyph, 'line-icon')), el('span', {class: 'nav-label', 'data-short': short}, label));
   nav.replaceChildren(navLink('Home', 'Home', 'home', '#home', parsed.page === 'home'),
-    navLink('Missions', 'Store', 'missions', '#catalog', catalogActive),
+    navLink('All Courses', 'Courses', 'missions', '#catalog', catalogActive),
     navLink('My Courses', 'My', 'courses', '#my-courses', parsed.page === 'my-courses'),
-    navLink('Progress', 'Stats', 'progress', '#progress', parsed.page === 'progress'),
+    navLink('Downloads', 'Downloads', 'download', '#downloads', parsed.page === 'downloads'),
     session ? navLink('Profile', 'Me', 'profile', '#profile', parsed.page === 'profile') : navLink('Sign In', 'Sign in', 'profile', '#signin', parsed.page === 'signin'));
   if (session?.me?.admin) nav.append(navLink('Admin', 'Admin', 'admin', '#admin', parsed.page === 'admin'));
   nav.style.setProperty('--nav-count', nav.children.length);
@@ -382,8 +382,8 @@ function render(focus = false) {
   renderNav(parsed);
   const backTargets = {
     'my-courses': '#home', 'test-series': '#home', 'book-store': '#home', 'materials': '#home',
-    'progress': '#home', 'notifications': '#home', 'timetable': '#home', 'referrals': '#profile',
-    'downloads': '#profile', 'videos': '#home', 'groups': '#profile', 'share-app': '#profile',
+    'progress': '#profile', 'notifications': '#home', 'timetable': '#home', 'referrals': '#profile',
+    'downloads': '#home', 'videos': '#home', 'groups': '#profile', 'share-app': '#profile',
     'about': '#profile', 'privacy': '#profile', 'terms': '#profile', 'free-tests': '#home',
     'current-affairs': '#home', 'pyqs': '#home', 'syllabus': '#home', 'support': '#profile',
     'profile': '#home', 'course': '#catalog', 'ebook': '#book-store', 'admin': '#home',
@@ -464,6 +464,8 @@ function render(focus = false) {
     case 'leaderboard': if (current) showLeaderboard(main, ctx, courseId, itemId); else needSignIn(); break;
     case 'book': if (current) showBook(main, ctx, courseId, itemId); else needSignIn(); break;
     case 'ebook': showEbook(main, ctx, courseId, {signInLink}); break;
+    case 'ebook-demo': showEbookDemo(main, ctx, courseId); break;
+    case 'resource': showResource(main, ctx, courseId, {signInLink}); break;
     case 'video': if (current) showVideo(main, ctx, courseId, itemId); else needSignIn(); break;
     case 'admin':
       if (!current) needSignIn();

@@ -58,7 +58,7 @@ export function showVideos(main) {
       el('div', {class: 'video-frame'},
         el('iframe', {src: `https://www.youtube-nocookie.com/embed/${encodeURIComponent(video.videoId)}`,
           title: video.title, loading: 'lazy',
-          allow: 'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share',
+          allow: 'accelerometer; autoplay; clipboard-write; encrypted-media; fullscreen; gyroscope; picture-in-picture; web-share',
           allowfullscreen: '', referrerpolicy: 'strict-origin-when-cross-origin'})),
       el('div', {class: 'video-copy'}, el('span', {class: 'badge'}, video.courseTitle || 'Mission Selection'),
         el('h2', {}, video.title), el('p', {class: 'muted'}, video.description)))) :

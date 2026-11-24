@@ -1,9 +1,10 @@
 import {api} from './services.js';
-import {bindForm, button, el, entries, field, heading, icon, link, loadInto, panel, run, say, status, textValue} from './ui.js';
+import {pdfReader} from './ebooks.js?v=current-affairs-media';
+import {bindForm, button, el, entries, field, heading, icon, idPart, link, loadInto, panel, run, say, status, textValue} from './ui.js';
 
 export const contentKinds = {
   'free-tests': {title: 'Free Tests', icon: '✓', description: 'Try selected practice resources without purchasing a mission.'},
-  'current-affairs': {title: 'Current Affairs', icon: '◫', description: 'Read concise updates prepared for competitive examinations.'},
+  'current-affairs': {title: 'Current Affairs', icon: '◫', description: 'Read PDFs and watch video updates, organized by publication date.'},
   'pyqs': {title: 'Previous Year Questions', icon: '?', description: 'Revise important question patterns from earlier examinations.'},
   'syllabus': {title: 'Syllabus', icon: '☷', description: 'Organize preparation with published topic and syllabus resources.'},
 };
@@ -154,8 +155,17 @@ export function showLearningContent(main, ctx, kind, action) {
           ...[...months].sort(([a], [b]) => Number(a) - Number(b)).map(([month, items]) => el('details', {class: 'affairs-month', open: ''},
             el('summary', {}, el('span', {}, monthName(month)), el('small', {}, `${items.length} ${items.length === 1 ? 'item' : 'items'}`)),
             ...items.map(item => el('article', {class: 'resource-card'},
-              el('h3', {}, item.title), el('p', {class: 'muted'}, item.summary),
-              el('details', {}, el('summary', {}, 'Read Update'), el('div', {class: 'resource-body'}, item.body)))))))) :
+              el('h3', {}, item.title),
+              el('small', {class: 'muted'}, new Date(`${(item.publishedAt || item.createdAt.slice(0, 10))}T12:00:00`).toLocaleDateString('en-IN',
+                {day: 'numeric', month: 'long', year: 'numeric'})),
+              item.media?.pdf || item.media?.video ? el('div', {class: 'affairs-media-card'},
+                el('div', {class: 'actions'}, item.media.pdf ? el('span', {class: 'badge'}, `${item.media.pdf.pages} PDF ${item.media.pdf.pages === 1 ? 'page' : 'pages'}`) : null,
+                  item.media.video ? el('span', {class: 'badge'}, 'Video') : null,
+                  el('small', {class: 'muted'}, item.downloadsEnabled ? 'Downloads allowed' : 'View in app')),
+                link(item.media.pdf && item.media.video ? 'View PDF & Video' : item.media.pdf ? 'View PDF' : 'Watch Video',
+                  `#resource/${idPart(item.id)}`, 'button secondary')) :
+                el('div', {}, el('p', {class: 'muted'}, item.summary),
+                  el('details', {}, el('summary', {}, 'Read Update'), el('div', {class: 'resource-body'}, item.body))))))))) :
         [el('div', {class: 'empty-library'}, el('h2', {}, 'No Current Affairs Published Yet'),
           el('p', {class: 'muted'}, 'Admin can add dated updates from the Admin workspace.'))]));
       return;
@@ -171,7 +181,52 @@ export function showLearningContent(main, ctx, kind, action) {
   });
 }
 
-export function adminContentForm(post, refresh) {
+export function showResource(main, ctx, id, action) {
+  main.append(link('Back to Current Affairs', '#current-affairs', 'back'));
+  if (!ctx.user) {
+    main.append(panel('Current Affairs', el('p', {}, 'Sign in to view this resource.'), action.signInLink()));
+    return;
+  }
+  const content = el('div');
+  main.append(content);
+  loadInto(content, ctx, async () => {
+    const item = await api(`/resources/${idPart(id)}`, {ctx, auth: true});
+    content.replaceChildren(...heading(item.title, `Published ${item.publishedAt || item.createdAt.slice(0, 10)}`),
+      el('p', {class: 'muted'}, item.downloadsEnabled ? 'Downloads are enabled for this resource.' : 'View in the app. Downloads are disabled.'));
+    if (item.media?.video) {
+      const videoArea = el('section', {class: 'panel'});
+      content.append(videoArea);
+      loadInto(videoArea, ctx, async () => {
+        const {url} = await api(`/resources/${idPart(id)}/video/link`, {ctx, auth: true});
+        const video = el('video', {class: 'chapter-video', controls: '', playsinline: '', preload: 'metadata',
+          src: url, controlslist: item.downloadsEnabled ? '' : 'nodownload'});
+        const feedback = status();
+        video.addEventListener('error', () => say(feedback, 'The video could not load. Reopen this resource to try again.', true));
+        ctx.signal.addEventListener('abort', () => { video.pause(); video.removeAttribute('src'); video.load(); }, {once: true});
+        videoArea.replaceChildren(el('h2', {}, 'Watch Video'), video, feedback);
+        if (item.downloadsEnabled) {
+          const download = button('Download Video', 'secondary');
+          download.addEventListener('click', () => run(download, feedback, async () => {
+            const {url} = await api(`/resources/${idPart(id)}/video/link?download=1`, {ctx, auth: true});
+            const anchor = el('a', {href: url, download: ''});
+            document.body.append(anchor); anchor.click(); anchor.remove();
+            say(feedback, 'Video download started.');
+          }, 'Preparing download…'));
+          videoArea.append(download);
+        }
+      });
+    }
+    if (item.media?.pdf) {
+      const reader = el('section', {class: 'affairs-pdf'}, el('h2', {}, 'Read PDF'));
+      content.append(reader);
+      pdfReader(reader, ctx, {title: item.title, pages: item.media.pdf.pages,
+        pagePath: `/resources/${idPart(id)}/pdf/pages`,
+        downloadPath: item.downloadsEnabled ? `/resources/${idPart(id)}/pdf/download` : null});
+    }
+  });
+}
+
+export function adminContentForm(post, refresh, ctx) {
   const kind = el('select', {required: ''},
     Object.entries(contentKinds).map(([value, config]) => el('option', {value}, config.title)));
   const title = el('input', {required: '', maxlength: '120'});
@@ -179,20 +234,77 @@ export function adminContentForm(post, refresh) {
   const body = el('textarea', {rows: '7', required: '', maxlength: '10000'});
   const published = el('input', {type: 'date', required: '', value: new Date().toISOString().slice(0, 10)});
   const publishedField = field('Publish Date', published, 'Current Affairs uses this year and month in the student archive.');
-  publishedField.hidden = kind.value !== 'current-affairs';
-  kind.addEventListener('change', () => { publishedField.hidden = kind.value !== 'current-affairs'; });
+  const pdf = el('input', {type: 'file', accept: '.pdf,application/pdf'});
+  const video = el('input', {type: 'file', accept: '.mp4,.m4v,.webm,.mov,video/mp4,video/webm,video/quicktime'});
+  const downloads = el('input', {type: 'checkbox', role: 'switch'});
+  const mediaFields = el('div', {class: 'affairs-upload'},
+    el('div', {class: 'affairs-upload-files'},
+      field('PDF File (optional)', pdf, 'PDF, up to 12 MB. Students read protected pages inside the app.'),
+      field('Video File (optional)', video, 'MP4, WebM, or MOV, up to 300 MB.')),
+    el('label', {class: 'choice'}, downloads, 'Allow PDF and video downloads'),
+    el('p', {class: 'muted'}, 'Upload a PDF, a video, or both. Downloads are off by default.'));
+  const summaryField = field('Short Summary', summary);
+  const bodyField = field('Content', body);
+  const updateFields = () => {
+    const affairs = kind.value === 'current-affairs';
+    publishedField.hidden = mediaFields.hidden = !affairs;
+    summaryField.hidden = bodyField.hidden = affairs;
+    summary.disabled = body.disabled = affairs;
+    pdf.disabled = video.disabled = downloads.disabled = !affairs;
+  };
+  kind.addEventListener('change', updateFields);
+  updateFields();
   const submit = button('Publish Resource', null, 'submit');
   const feedback = status();
-  const form = el('form', {}, field('Section', kind), publishedField, field('Resource Title', title),
-    field('Short Summary', summary), field('Content', body), submit, feedback);
+  const fields = el('fieldset', {class: 'upload-fields'}, field('Section', kind), field('Resource Title', title),
+    mediaFields, publishedField, summaryField, bodyField);
+  const form = el('form', {}, fields, submit, feedback);
   bindForm(form, submit, feedback, async () => {
-    await post(`/admin/content/${kind.value}`, {json: {
-      title: textValue(title, 'Title'), summary: textValue(summary, 'Summary'), body: textValue(body, 'Content'),
-      publishedAt: published.value,
-    }});
-    form.reset();
-    say(feedback, 'Learning resource published.');
-    refresh?.();
+    const section = kind.value;
+    const json = {title: textValue(title, 'Title'), publishedAt: published.value};
+    if (section !== 'current-affairs') Object.assign(json, {
+      summary: textValue(summary, 'Summary'), body: textValue(body, 'Content'),
+    });
+    fields.disabled = true;
+    try {
+      if (section === 'current-affairs') {
+        const files = {pdf: pdf.files[0], video: video.files[0]};
+        const descriptors = {};
+        for (const [name, file] of Object.entries(files)) {
+          if (!file) continue;
+          const type = name === 'pdf' ? (file.type === 'application/pdf' || /\.pdf$/i.test(file.name)) && 'application/pdf' :
+            ['video/mp4', 'video/webm', 'video/quicktime'].includes(file.type) ? file.type :
+              ({mp4: 'video/mp4', m4v: 'video/mp4', mov: 'video/quicktime', webm: 'video/webm'})[file.name.split('.').pop().toLowerCase()];
+          if (!type || file.size < (name === 'pdf' ? 1 : 12) || file.size > (name === 'pdf' ? 12 : 300) * 1024 * 1024) {
+            throw new Error(name === 'pdf' ? 'Choose a PDF up to 12 MB.' : 'Choose an MP4, WebM, or MOV video up to 300 MB.');
+          }
+          descriptors[name] = {type, size: file.size};
+        }
+        if (!Object.keys(descriptors).length) throw new Error('Choose a PDF or video to publish.');
+        const draft = await post('/admin/current-affairs/uploads', {json: descriptors});
+        for (const [name, descriptor] of Object.entries(descriptors)) {
+          say(feedback, `Uploading ${name === 'pdf' ? 'PDF' : 'video'}… Keep this screen open.`);
+          if (draft.direct) {
+            await api(`/admin/current-affairs/uploads/${idPart(draft.id)}/${name}`, {ctx, auth: true,
+              method: 'PUT', binary: files[name], imageUpload: descriptor.type});
+          } else {
+            const upload = draft.files[name];
+            const response = await fetch(upload.url, {method: 'PUT', signal: ctx.signal,
+              headers: {'Content-Type': descriptor.type, ...upload.headers}, body: files[name]});
+            if (!response.ok) throw new Error(`The ${name} upload failed (${response.status}). Choose the file and try again.`);
+          }
+        }
+        Object.assign(json, {uploadId: draft.id, downloadsEnabled: downloads.checked});
+        say(feedback, 'Processing files and publishing…');
+      }
+      await post(`/admin/content/${section}`, {json});
+      form.reset();
+      updateFields();
+      say(feedback, 'Learning resource published.');
+      refresh?.();
+    } finally {
+      fields.disabled = false;
+    }
   }, 'Publishing resource…');
   return form;
 }

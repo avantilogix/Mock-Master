@@ -1,5 +1,5 @@
 import {api} from './services.js';
-import {contentKinds} from './reports.js?v=manage-20261122';
+import {contentKinds} from './reports.js?v=current-affairs-media';
 import {coverPicker} from './publishing-media.js';
 import {bindForm, button, confirmDelete, el, field, formatDate, idPart, loadInto, rule, run, say, status, textValue} from './ui.js';
 
@@ -111,15 +111,15 @@ function types({ctx, rupeeInput, toPaise, questionData, priceHint, courses}) {
             field('Replace Questions from PDF/DOCX/TXT', questionFile), importButton, importStatus,
             field('Questions (JSON)', questions,
             'Each question needs a prompt, at least two options, and a zero-based answer.'),
-          ...(item.live ? [el('label', {class: 'choice'}, download,
-            'Enable Question Paper Download after first completed attempt')] : [])],
+          el('label', {class: 'choice'}, download,
+            'Enable Question Paper Download after first completed attempt')],
           values: () => ({course: course.value, title: textValue(title, 'Test title'),
             questions: questionData(questions.value), durationMinutes: duration.valueAsNumber,
             marksPerQuestion: marks.valueAsNumber, negativeMark: negative.valueAsNumber,
             startsAt: item.live ? startsAt.value : undefined,
             expiresAt: item.live ? expiresAt.value : undefined,
             attemptsLimit: item.live ? attempts.valueAsNumber : undefined,
-            questionPaperDownload: item.live && download.checked}),
+            questionPaperDownload: download.checked}),
         };
       },
       remove: item => item.attempts ? {blocked: 'This test has student results and cannot be deleted.'} :
@@ -166,11 +166,25 @@ function types({ctx, rupeeInput, toPaise, questionData, priceHint, courses}) {
     },
     resources: {
       label: 'Learning Resources', noun: 'resource', empty: 'No learning resources published yet.',
-      details: item => [contentKinds[item.kind]?.title || item.kind],
+      details: item => [contentKinds[item.kind]?.title || item.kind,
+        ...(item.kind === 'current-affairs' && (item.media?.pdf || item.media?.video) ?
+          [item.media.pdf ? 'PDF' : '', item.media.video ? 'Video' : '',
+            item.downloadsEnabled ? 'Downloads on' : 'Downloads off'].filter(Boolean) : [])],
       date: item => item.publishedAt || item.createdAt,
       text: item => item.summary,
       edit(item) {
         const title = input(item.title, 120);
+        if (item.kind === 'current-affairs') {
+          const published = el('input', {type: 'date', required: '', value: (item.publishedAt || item.createdAt || '').slice(0, 10)});
+          const downloads = el('input', {type: 'checkbox', role: 'switch'});
+          downloads.checked = Boolean(item.downloadsEnabled);
+          return {
+            fields: [field('Resource Title', title), field('Publish Date', published),
+              el('label', {class: 'choice'}, downloads, 'Allow PDF and video downloads'),
+              el('p', {class: 'muted'}, 'To change uploaded files, delete this resource and publish its replacement.')],
+            values: () => ({title: textValue(title, 'Title'), publishedAt: published.value, downloadsEnabled: downloads.checked}),
+          };
+        }
         const summary = area(item.summary, 300, 2);
         const body = area(item.body, 10000, 7);
         const published = el('input', {type: 'date', required: ''});

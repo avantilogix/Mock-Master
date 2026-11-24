@@ -9,12 +9,13 @@ import { defineString } from 'firebase-functions/params';
 import { onRequest } from 'firebase-functions/v2/https';
 import QRCode from 'qrcode';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
-import { fail, importQuestions, mobile, pageCount, renderPage, validateQuestions } from './documents.js';
+import { fail, importQuestions, mobile, pageCount, renderDemoPage, renderPage, validateQuestions } from './documents.js';
 import { paymentReference, upiDetails, upiPaymentUri } from './manual-payments.js';
 import { sampleBookPdf, sampleCourses, sampleResources } from './sample-data.js';
 import { registerVideoRoutes } from './chapter-videos.js';
 import { registerPublishedRoutes } from './published.js';
 import { courseCutoff, expiryInput, publishingMedia, requireActive } from './publishing-media.js';
+import { currentAffairs } from './current-affairs.js';
 
 initializeApp();
 
@@ -322,6 +323,7 @@ function createApp() {
   });
   const authLimit = limit(120);
   const paymentLimit = limit(20);
+  const demoLimit = limit(60);
   let documentJobs = 0;
   async function processDocument(operation) {
     if (documentJobs >= 4) fail(503, 'Document processing is busy. Please retry.');
@@ -402,7 +404,20 @@ function createApp() {
   api.get('/ebooks', async (_req, res) => {
     res.json((await queryCollection('ebooks')).sort(byNewest).map(book =>
       ({ id: book.id, title: book.title, description: book.description, price: book.price,
-        pages: book.pages, createdAt: book.createdAt })));
+        pages: book.pages, demoPages: book.demoFile ? book.demoPages : 0, createdAt: book.createdAt })));
+  });
+  api.get('/ebooks/:id/demo', demoLimit, async (req, res) => {
+    const book = value(await db.collection('ebooks').doc(req.params.id).get());
+    if (!book?.demoFile || !book.demoPages) fail(404, 'A demo is not available for this e-book.');
+    res.json({ id: book.id, title: book.title, pages: book.demoPages });
+  });
+  api.get('/ebooks/:id/demo/pages/:page', demoLimit, async (req, res) => {
+    const book = value(await db.collection('ebooks').doc(req.params.id).get());
+    if (!book?.demoFile || !book.demoPages) fail(404, 'A demo is not available for this e-book.');
+    const page = Number(req.params.page);
+    if (!Number.isInteger(page) || page < 1 || page > book.demoPages) fail(404, 'Page not found.');
+    const [pdf] = await bucket.file(book.demoFile).download();
+    res.type('png').send(await processDocument(() => renderDemoPage(pdf, page)));
   });
   api.get('/courses/:id/payment-qr', async (req, res) => {
     const row = await course(req.params.id);
@@ -462,7 +477,9 @@ function createApp() {
   });
 
   const media = publishingMedia(api, { bucket, processDocument });
+  const affairs = currentAffairs(api, { db, bucket, value, text, processDocument, protectedPdf });
   api.use(authLimit, login);
+  affairs.routes();
   api.get('/me', async (req, res) => {
     const { uid, phone, admin: isAdmin } = req.user;
     const student = value(await db.collection('students').doc(uid).get());
@@ -960,7 +977,7 @@ function createApp() {
       elapsedSeconds: Math.min(elapsed, maxSeconds),
       sectionScores,
       timedOut,
-      questionPaperDownload: Boolean(item.live && item.questionPaperDownload),
+      questionPaperDownload: Boolean(item.questionPaperDownload),
     };
     const attemptId = await createWithId('attempts', {
       uid: req.user.uid,
@@ -1017,7 +1034,6 @@ function createApp() {
   api.get('/tests/:id/question-paper.pdf', async (req, res) => {
     const item = await test(req.params.id);
     await requirePurchase(req.user, item.course);
-    if (!item.live) fail(404, 'Question paper download is available for live tests only.');
     if (!item.questionPaperDownload) fail(403, 'Question paper download is disabled by the admin.');
     const attempt = await db.collection('attempts').where('uid', '==', req.user.uid)
       .where('test', '==', item.id).limit(1).get();
@@ -1261,7 +1277,8 @@ function createApp() {
   });
   media.adminRoutes();
   registerVideoRoutes(api, { db, bucket, value, text, course, requirePurchase });
-  registerPublishedRoutes(api, { db, bucket, value, text, byNewest, queryCollection, media });
+  registerPublishedRoutes(api, { db, bucket, value, text, byNewest, queryCollection, media, affairs });
+  affairs.adminRoutes();
   api.post('/admin/videos', async (req, res) => {
     const input = String(req.body?.url || '');
     let videoId = '';
@@ -1445,6 +1462,9 @@ function createApp() {
     res.sendStatus(204);
   });
   api.post('/admin/content/:kind', async (req, res) => {
+    if (req.params.kind === 'current-affairs' && req.body?.uploadId !== undefined) {
+      return res.status(201).json({ id: await affairs.publish(req) });
+    }
     const kind = req.params.kind;
     if (!['current-affairs', 'pyqs', 'syllabus', 'free-tests'].includes(kind)) fail(422, 'Choose a valid content section.');
     const publishedAt = typeof req.body?.publishedAt === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(req.body.publishedAt)
@@ -1547,7 +1567,7 @@ function createApp() {
       attemptsLimit: attempts,
       marksPerQuestion: marks,
       negativeMark: negative,
-      questionPaperDownload: Boolean(live) && questionPaperDownload,
+      questionPaperDownload,
       sections: [...new Set(validQuestions.map(question => question.section))],
     });
     res.status(201).json({ id });
@@ -1579,7 +1599,7 @@ function createApp() {
     const [books, orders] = await Promise.all([queryCollection('ebooks'), queryCollection('ebookOrders')]);
     res.json(books.sort(byNewest).map(book => ({
       id: book.id, title: book.title, description: book.description, price: book.price,
-      pages: book.pages, createdAt: book.createdAt,
+      pages: book.pages, demoPages: book.demoFile ? book.demoPages : 0, createdAt: book.createdAt,
       orders: orders.filter(order => order.ebook === book.id).length,
     })));
   });
@@ -1604,12 +1624,47 @@ function createApp() {
     }
     res.status(201).json({ id, pages });
   });
+  api.put('/admin/ebooks/:id/demo', raw, async (req, res) => {
+    const ref = db.collection('ebooks').doc(req.params.id);
+    if (!(await ref.get()).exists) fail(404, 'E-book not found.');
+    if (!Buffer.isBuffer(req.body)) fail(400, 'Upload a demo PDF.');
+    const pages = await processDocument(() => pageCount(req.body));
+    const file = bucket.file(`ebook-demos/${req.params.id}/${randomUUID()}.pdf`);
+    await file.save(req.body, { resumable: false, contentType: 'application/pdf',
+      metadata: { cacheControl: 'private, no-store' } });
+    let previous;
+    try {
+      previous = await db.runTransaction(async transaction => {
+        const book = value(await transaction.get(ref));
+        if (!book) fail(404, 'E-book not found.');
+        transaction.update(ref, { demoFile: file.name, demoPages: pages });
+        return book.demoFile;
+      });
+    } catch (error) {
+      await file.delete({ ignoreNotFound: true });
+      throw error;
+    }
+    if (previous) await bucket.file(previous).delete({ ignoreNotFound: true });
+    res.json({ pages });
+  });
+  api.delete('/admin/ebooks/:id/demo', async (req, res) => {
+    const ref = db.collection('ebooks').doc(req.params.id);
+    const previous = await db.runTransaction(async transaction => {
+      const book = value(await transaction.get(ref));
+      if (!book) fail(404, 'E-book not found.');
+      transaction.update(ref, { demoFile: null, demoPages: 0 });
+      return book.demoFile;
+    });
+    if (previous) await bucket.file(previous).delete({ ignoreNotFound: true });
+    res.sendStatus(204);
+  });
   api.delete('/admin/ebooks/:id', async (req, res) => {
     const book = await db.collection('ebooks').doc(req.params.id).get();
     if (!book.exists) fail(404, 'E-book not found.');
     const orders = await db.collection('ebookOrders').where('ebook', '==', req.params.id).limit(1).get();
     if (!orders.empty) fail(409, 'This e-book has purchase requests and cannot be deleted.');
-    await Promise.all([book.ref.delete(), bucket.file(`ebooks/${req.params.id}.pdf`).delete({ ignoreNotFound: true })]);
+    await Promise.all([book.ref.delete(), bucket.file(`ebooks/${req.params.id}.pdf`).delete({ ignoreNotFound: true }),
+      ...(book.data().demoFile ? [bucket.file(book.data().demoFile).delete({ ignoreNotFound: true })] : [])]);
     res.sendStatus(204);
   });
   api.get('/admin/payments', async (_req, res) => {

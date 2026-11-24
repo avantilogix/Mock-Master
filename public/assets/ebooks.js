@@ -32,10 +32,12 @@ export function showEbookStore(main, ctx, action) {
           el('small', {}, `${book.pages} protected pages`),
           el('div', {class: 'card-footer'},
             owned ? el('span', {class: 'muted'}, 'Approved') : el('strong', {class: 'price'}, priceText(book.price)),
-            owned ? link('Open E-Book', `#ebook/${idPart(book.id)}`, 'button') :
-              ctx.user ? link(order?.status === 'pending' ? 'View Payment Status' :
-                rejected ? 'Resubmit Payment' : 'Buy E-Book',
-                `#ebook/${idPart(book.id)}`, 'button') : action.signInLink('Sign In to Buy'))));
+            el('div', {class: 'actions ebook-actions'},
+              owned ? link('Open E-Book', `#ebook/${idPart(book.id)}`, 'button') :
+                ctx.user ? link(order?.status === 'pending' ? 'View Payment Status' :
+                  rejected ? 'Resubmit Payment' : 'Buy E-Book',
+                  `#ebook/${idPart(book.id)}`, 'button') : action.signInLink('Sign In to Buy'),
+              book.demoPages > 0 ? link('Demo', `#ebook-demo/${idPart(book.id)}`, 'button secondary') : null))));
     }));
   });
 }
@@ -126,40 +128,61 @@ export function showEbook(main, ctx, bookId, action) {
       paymentPanel(panel, ctx, book, action);
       return;
     }
-    let page = 1;
-    let objectUrl;
-    const imageArea = el('div', {class: 'panel'});
-    const counter = status();
-    const previous = button('Previous Page', 'secondary');
-    const next = button('Next Page', 'secondary');
+    pdfReader(main, ctx, {...book, pagePath: `/ebooks/${idPart(book.id)}/pages`,
+      downloadPath: `/ebooks/${idPart(book.id)}/download`});
+  });
+}
+
+export function showEbookDemo(main, ctx, bookId) {
+  const content = el('div');
+  main.append(link('Back to E-Book Store', '#book-store', 'back'), content);
+  loadInto(content, ctx, async () => {
+    const book = await api(`/ebooks/${idPart(bookId)}/demo`, {ctx});
+    content.replaceChildren(el('span', {class: 'badge'}, 'Free Demo'),
+      ...heading(`${book.title} — Demo`, 'Sample pages only. The full e-book requires approved purchase.'),
+      link('View Full E-Book', `#ebook/${idPart(book.id)}`, 'button secondary'));
+    pdfReader(content, ctx, {...book, title: `${book.title} demo`, pagePath: `/ebooks/${idPart(book.id)}/demo/pages`, auth: false});
+  });
+}
+
+export function pdfReader(main, ctx, book) {
+  let page = 1;
+  let objectUrl;
+  const imageArea = el('div', {class: 'panel'});
+  const counter = status();
+  const previous = button('Previous Page', 'secondary');
+  const next = button('Next Page', 'secondary');
+  const controls = el('div', {class: 'actions reader-controls'}, previous, counter, next);
+  if (book.downloadPath) {
     const download = button('Download Protected PDF');
-    const controls = el('div', {class: 'actions reader-controls'}, previous, counter, next, download);
-    main.append(controls, imageArea);
-    const render = () => loadInto(imageArea, ctx, async () => {
+    download.addEventListener('click', () => buttonDownload(ctx, book, download, counter));
+    controls.append(download);
+  }
+  main.append(controls, imageArea);
+  const render = () => {
+    previous.disabled = next.disabled = true;
+    loadInto(imageArea, ctx, async () => {
+      const blob = await api(`${book.pagePath}/${page}`, {ctx, auth: book.auth !== false, image: true});
       if (objectUrl) URL.revokeObjectURL(objectUrl);
-      const blob = await api(`/ebooks/${idPart(book.id)}/pages/${page}`, {ctx, auth: true, image: true});
       objectUrl = URL.createObjectURL(blob);
       const image = el('img', {class: 'book-page protected-reader', src: objectUrl,
-        alt: `${book.title}, page ${page}`});
+        alt: `${book.title}, page ${page}`, draggable: 'false'});
       imageArea.replaceChildren(image);
       say(counter, `Page ${page} of ${book.pages}`);
       previous.disabled = page === 1;
       next.disabled = page === book.pages;
     });
-    previous.addEventListener('click', () => { if (page > 1) { page--; render(); } });
-    next.addEventListener('click', () => { if (page < book.pages) { page++; render(); } });
-    download.addEventListener('click', () => {
-      buttonDownload(ctx, book, download, counter);
-    });
-    ctx.signal.addEventListener('abort', () => { if (objectUrl) URL.revokeObjectURL(objectUrl); }, {once: true});
-    render();
-  });
+  };
+  previous.addEventListener('click', () => { if (page > 1) { page--; render(); } });
+  next.addEventListener('click', () => { if (page < book.pages) { page++; render(); } });
+  ctx.signal.addEventListener('abort', () => { if (objectUrl) URL.revokeObjectURL(objectUrl); }, {once: true});
+  render();
 }
 
 async function buttonDownload(ctx, book, control, feedback) {
   await run(control, feedback, async () => {
-    const blob = await api(`/ebooks/${idPart(book.id)}/download`, {ctx, auth: true, blob: true});
-    const filename = `${book.title.replace(/[^\\w .-]+/g, '_')}-protected.pdf`;
+    const blob = await api(book.downloadPath, {ctx, auth: true, blob: true});
+    const filename = `${book.title.replace(/[^\w .-]+/g, '_')}-protected.pdf`;
     if (window.MissionSelectionDownloads?.beginPdf) {
       const bytes = new Uint8Array(await blob.arrayBuffer());
       if (!window.MissionSelectionDownloads.beginPdf(filename)) {

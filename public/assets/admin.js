@@ -1,7 +1,8 @@
 import {api} from './services.js';
-import {publishedManager, weekdays} from './admin-manage.js?v=stable-mobile-admin-downloads';
-import {adminContentForm} from './reports.js';
+import {publishedManager, weekdays} from './admin-manage.js?v=manual-tests';
+import {adminContentForm} from './reports.js?v=current-affairs-media';
 import {coverPicker} from './publishing-media.js';
+import {manualQuestions} from './manual-questions.js';
 import {bindForm, button, el, entries, field, fieldError, formatDate, heading, icon, idPart, loadInto, panel, rule, run, say, status, textValue} from './ui.js';
 
 const pdfAccept = '.pdf,application/pdf';
@@ -256,8 +257,9 @@ export function showAdmin(main, ctx) {
   const ebookFeedback = status();
   const ebookForm = el('form', {}, field('E-Book Title', ebookTitle),
     field('Description', ebookDescription), field('Price (₹)', ebookPrice, PRICE_HINT),
-    field('PDF File', ebookPdf), ebookSubmit, ebookFeedback);
-  const loadEbooks = () => loadInto(ebooks, ctx, async () => {
+    field('PDF File', ebookPdf, 'Upload the full paid book. After publishing, add a separate Demo PDF from the book list.'),
+    ebookSubmit, ebookFeedback);
+  const loadEbooks = (message = '') => loadInto(ebooks, ctx, async () => {
     const rows = await get('/admin/ebooks');
     ebooks.replaceChildren(...(rows.length ? rows.map(book => {
       const remove = button('Delete', 'danger secondary');
@@ -270,14 +272,45 @@ export function showAdmin(main, ctx) {
           await loadEbooks();
         }, 'Deleting e-book…');
       });
+      const demoPdf = rule(el('input', {type: 'file', accept: pdfAccept, required: ''}), (_, control) => {
+        const file = control.files[0];
+        return !/\.pdf$/i.test(file?.name || '') || file.size > 12 * 1024 * 1024 ?
+          'Choose a PDF no larger than 12 MB.' : '';
+      });
+      const demoUpload = button(book.demoPages ? 'Replace Demo' : 'Upload Demo', null, 'submit');
+      const demoFeedback = status();
+      const demoActions = el('div', {class: 'actions'}, demoUpload);
+      const demoForm = el('form', {}, field('Demo PDF', demoPdf,
+        'Separate sample PDF, up to 12 MB. Anyone can view it in the app without signing in. No PDF download is provided.'),
+        demoActions, demoFeedback);
+      bindForm(demoForm, demoUpload, demoFeedback, async () => {
+        await api(`/admin/ebooks/${idPart(book.id)}/demo`, {ctx, auth: true, method: 'PUT', binary: demoPdf.files[0]});
+        await loadEbooks(`Demo published for ${book.title}.`);
+      }, 'Uploading demo…');
+      if (book.demoPages) {
+        const preview = el('a', {class: 'button secondary', href: `#ebook-demo/${idPart(book.id)}`}, 'Preview Demo');
+        const removeDemo = button('Remove Demo', 'danger secondary');
+        removeDemo.addEventListener('click', () => {
+          if (!window.confirm(`Remove the demo for “${book.title}”? The paid book will not change.`)) return;
+          run(removeDemo, demoFeedback, async () => {
+            await api(`/admin/ebooks/${idPart(book.id)}/demo`, {ctx, auth: true, method: 'DELETE'});
+            await loadEbooks(`Demo removed for ${book.title}.`);
+          }, 'Removing demo…');
+        });
+        demoActions.append(preview, removeDemo);
+      }
       return el('article', {class: 'manage-item'},
         el('div', {class: 'manage-main'}, el('h3', {}, book.title),
           el('p', {class: 'muted'}, book.description),
           el('ul', {class: 'manage-details'}, [new Intl.NumberFormat('en-IN',
             {style: 'currency', currency: 'INR'}).format(book.price / 100),
           `${book.pages} pages`, `${book.orders || 0} purchase requests`].map(value => el('li', {}, value)))),
-        el('div', {class: 'actions manage-actions'}, remove));
+        el('div', {class: 'actions manage-actions'}, remove),
+        el('details', {class: 'ebook-demo-editor'},
+          el('summary', {}, book.demoPages ? `Demo PDF · ${book.demoPages} pages` : 'Add a Demo PDF'),
+          demoForm));
     }) : [el('p', {class: 'empty'}, 'No e-books published yet.')]));
+    if (message) ebooks.prepend(el('p', {class: 'status', role: 'status'}, message));
   });
   bindForm(ebookForm, ebookSubmit, ebookFeedback, async () => {
     const file = ebookPdf.files[0];
@@ -448,6 +481,10 @@ export function showAdmin(main, ctx) {
   loadStudents();
 
   const example = JSON.stringify([{prompt: 'What is 2 + 2?', options: ['3', '4'], answer: 1}], null, 2);
+  const creationMethod = el('select', {},
+    el('option', {value: 'existing'}, 'Import File / Questions (JSON)'),
+    el('option', {value: 'manual'}, 'Create Test Manually'));
+  const manual = manualQuestions();
   const editor = el('textarea', {class: 'json', rows: '12', required: '', spellcheck: 'false', placeholder: example});
   const importFile = rule(el('input', {type: 'file', accept: '.pdf,.docx,.txt', required: ''}), (_, control) =>
     /\.(pdf|docx|txt)$/i.test(control.files[0]?.name || '') ? '' : 'Choose a PDF, DOCX, or TXT file.');
@@ -485,8 +522,7 @@ export function showAdmin(main, ctx) {
   const negativeMark = el('input', {type: 'number', min: '0', max: '5', step: '0.25', value: '0'});
   const liveFields = el('div', {class: 'live-test-fields', hidden: ''},
     field('Live Start Date and Time (IST)', startsAt), field('Attempts Allowed Until Expiry', attemptsLimit),
-    field('Live Window Expiry Date and Time (IST)', expiresAt),
-    el('label', {class: 'choice'}, questionPaperDownload, 'Enable Question Paper Download after first completed attempt'));
+    field('Live Window Expiry Date and Time (IST)', expiresAt));
   const updateTestType = () => {
     const isLive = testType.value === 'live';
     liveFields.hidden = !isLive;
@@ -494,32 +530,50 @@ export function showAdmin(main, ctx) {
   };
   testType.addEventListener('change', updateTestType);
   updateTestType();
+  const jsonField = field('Questions (JSON)', editor,
+    'Enter an array of objects with prompt, options, and answer. The first option is answer 0.');
+  const importSection = el('div', {}, el('h3', {}, 'Import Questions (optional)'), importForm);
+  const updateCreationMethod = () => {
+    const isManual = creationMethod.value === 'manual';
+    manual.node.hidden = manual.node.disabled = !isManual;
+    jsonField.hidden = editor.disabled = isManual;
+    importSection.hidden = isManual;
+    importFile.disabled = importButton.disabled = isManual;
+  };
+  creationMethod.addEventListener('change', updateCreationMethod);
+  updateCreationMethod();
   const testStatus = status();
-  const testForm = el('form', {}, testField, field('Test Title', testTitle),
+  const testFields = el('fieldset', {class: 'upload-fields'}, testField, field('Test Title', testTitle),
     field('Test Type', testType, 'Mock tests allow unlimited attempts. Attempt limits apply only to live tests.'), liveFields,
     field('Duration (minutes)', durationMinutes, 'Used for every attempt.'),
     field('Marks Per Correct Answer', marksPerQuestion),
     field('Negative Mark Per Wrong Answer', negativeMark),
-    field('Questions (JSON)', editor, 'Enter an array of objects with prompt, options, and answer. The first option is answer 0.'),
-    publish, testStatus);
+    el('label', {class: 'choice'}, questionPaperDownload, 'Enable Question Paper Download after first completed attempt'),
+    jsonField, manual.node);
+  const testForm = el('form', {}, testFields, publish, testStatus);
   bindForm(testForm, publish, testStatus, async () => {
-    const questions = questionData(editor.value);
-    await post(`/admin/courses/${idPart(testCourse.value)}/tests`, {json: {
-      title: textValue(testTitle, 'Test title'), questions, live: testType.value === 'live',
-      startsAt: testType.value === 'live' ? startsAt.value : undefined,
-      expiresAt: testType.value === 'live' ? expiresAt.value : undefined,
-      durationMinutes: durationMinutes.valueAsNumber,
-      attemptsLimit: testType.value === 'live' ? attemptsLimit.valueAsNumber : 0,
-      questionPaperDownload: testType.value === 'live' && questionPaperDownload.checked,
-      marksPerQuestion: marksPerQuestion.valueAsNumber, negativeMark: negativeMark.valueAsNumber,
-    }});
-    testForm.reset();
-    updateTestType();
-    liveFields.hidden = true;
-    startsAt.required = expiresAt.required = durationMinutes.required = attemptsLimit.required = false;
-    say(testStatus, 'Test published.');
+    const questions = questionData(creationMethod.value === 'manual' ? JSON.stringify(manual.values()) : editor.value);
+    testFields.disabled = creationMethod.disabled = importButton.disabled = true;
+    try {
+      await post(`/admin/courses/${idPart(testCourse.value)}/tests`, {json: {
+        title: textValue(testTitle, 'Test title'), questions, live: testType.value === 'live',
+        startsAt: testType.value === 'live' ? startsAt.value : undefined,
+        expiresAt: testType.value === 'live' ? expiresAt.value : undefined,
+        durationMinutes: durationMinutes.valueAsNumber,
+        attemptsLimit: testType.value === 'live' ? attemptsLimit.valueAsNumber : 0,
+        questionPaperDownload: questionPaperDownload.checked,
+        marksPerQuestion: marksPerQuestion.valueAsNumber, negativeMark: negativeMark.valueAsNumber,
+      }});
+      testForm.reset();
+      manual.reset();
+      updateTestType();
+      say(testStatus, 'Test published.');
+    } finally {
+      testFields.disabled = creationMethod.disabled = false;
+      updateCreationMethod();
+    }
   }, 'Publishing test…');
-  main.append(panel('Publish a Test', el('h3', {}, 'Import Questions (optional)'), importForm,
+  main.append(panel('Publish a Test', field('Test Creation Method', creationMethod), importSection,
     el('div', {class: 'section'}, el('h3', {}, 'Review, Edit, and Publish'), testForm)));
 
   const [bookCourse, bookField] = courseField();
@@ -664,7 +718,7 @@ export function showAdmin(main, ctx) {
   });
   supportRefresh.addEventListener('click', loadSupport);
   main.append(panel('Upload a Study Book or Video', bookForm),
-    panel('Publish Learning Resources', adminContentForm(post, () => refresh())),
+    panel('Publish Learning Resources', adminContentForm(post, () => refresh(), ctx)),
     panel('Support Inbox', supportRefresh, inbox));
   loadSupport();
   const panels = [...main.querySelectorAll(':scope > section.panel')];

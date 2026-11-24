@@ -5,9 +5,10 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { PDFDocument } from 'pdf-lib';
 import { createApp } from '../server/app.js';
 import { openDatabase } from '../server/database.js';
-import { importQuestions, pageCount, renderPage } from '../server/documents.js';
+import { importQuestions, pageCount, renderDemoPage, renderPage } from '../server/documents.js';
 
 const source = '1. What is 2 + 2?\nA. 3\nB. 4\nAnswer: B';
 const questions = [{ prompt: 'What is 2 + 2?', options: ['3', '4'], answer: 1, section: 'General' }];
@@ -287,6 +288,103 @@ test('chapter videos upload for admins and stream only through signed links for 
   expired.searchParams.set('expires', '1');
   assert.equal((await fetch(expired)).status, 403);
 });
+test('Current Affairs publishes completed media, protects viewing and enforces download switches', async t => {
+  const db = openDatabase(':memory:');
+  const dataDir = mkdtempSync(join(tmpdir(), 'mock-affairs-'));
+  const videoDir = join(dataDir, '.private');
+  const users = new Map([
+    ['admin', {uid: 'admin', phone: '+919000000091'}],
+    ['admin2', {uid: 'admin2', phone: '+919000000092'}],
+    ['student', {uid: 'student', phone: '+919000000093'}],
+  ]);
+  const server = createApp({db, videoDir, verifyToken: async token => users.get(token), adminUids: ['admin', 'admin2']})
+    .listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  t.after(() => new Promise(resolve => server.close(() => {
+    db.close(); rmSync(dataDir, {recursive: true, force: true}); resolve();
+  })));
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  const request = (path, user = 'admin', method = 'GET', body) => fetch(`${origin}/api${path}`, {
+    method, headers: {...(user ? {Authorization: `Bearer ${user}`} : {}),
+      ...(body === undefined ? {} : {'Content-Type': Buffer.isBuffer(body) ? 'application/octet-stream' : 'application/json'})},
+    body: Buffer.isBuffer(body) ? body : body === undefined ? undefined : JSON.stringify(body),
+  });
+  const pdf = fixturePdf();
+  const video = Buffer.concat([Buffer.from([0, 0, 0, 24]), Buffer.from('ftypisom'), Buffer.alloc(64)]);
+  const files = {pdf: {size: pdf.length, type: 'application/pdf'}, video: {size: video.length, type: 'video/mp4'}};
+  const draftPath = '/admin/current-affairs/uploads';
+  const publishPath = '/admin/content/current-affairs';
+  assert.equal((await request(draftPath, 'student', 'POST', files)).status, 403);
+  for (const invalid of [{}, {pdf: {size: 13 * 1024 * 1024, type: 'application/pdf'}},
+    {video: {size: 301 * 1024 * 1024, type: 'video/mp4'}}, {video: {size: 100, type: 'text/html'}}]) {
+    assert.equal((await request(draftPath, 'admin', 'POST', invalid)).status, 422);
+  }
+  const draft = await request(draftPath, 'admin', 'POST', files);
+  assert.equal(draft.status, 201);
+  const {id} = await draft.json();
+  const input = {uploadId: id, title: 'Daily Affairs', publishedAt: '2026-02-28', downloadsEnabled: false};
+  assert.equal((await request(publishPath, 'admin2', 'POST', input)).status, 404);
+  assert.equal((await request(publishPath, 'admin', 'POST', {...input, publishedAt: '2026-02-30'})).status, 422);
+  assert.equal((await request(publishPath, 'admin', 'POST', input)).status, 409);
+  assert.deepEqual(await (await request('/content/current-affairs', 'student')).json(), []);
+  assert.equal((await request(`${draftPath}/${id}/pdf`, 'admin2', 'PUT', pdf)).status, 404);
+  assert.equal((await request(`${draftPath}/${id}/pdf`, 'admin', 'PUT', pdf)).status, 204);
+  assert.equal((await request(publishPath, 'admin', 'POST', input)).status, 409);
+  assert.equal((await request(`${draftPath}/${id}/video`, 'admin', 'PUT', video)).status, 204);
+  assert.equal((await request(publishPath, 'admin', 'POST', input)).status, 201);
+  assert.equal((await request(publishPath, 'admin', 'POST', input)).status, 404);
+  assert.equal((await request(`/resources/${id}`, null)).status, 401);
+  assert.equal((await request(`/resources/${id}/pdf/pages/1`, null)).status, 401);
+  const list = await (await request('/content/current-affairs', 'student')).json();
+  assert.equal(list[0].publishedAt, '2026-02-28');
+  assert.equal(list[0].media.pdf.pages, 1);
+  assert.equal(list[0].media.video.size, video.length);
+  assert.equal(list[0].downloadsEnabled, false);
+  const page = await request(`/resources/${id}/pdf/pages/1`, 'student');
+  assert.equal(page.status, 200);
+  assert.equal(Buffer.from(await page.arrayBuffer()).subarray(1, 4).toString(), 'PNG');
+  assert.equal((await request(`/resources/${id}/pdf/pages/2`, 'student')).status, 404);
+  assert.equal((await request(`/resources/${id}/pdf/download`, 'student')).status, 403);
+  assert.equal((await request(`/resources/${id}/video/link?download=1`, 'student')).status, 403);
+  const {url} = await (await request(`/resources/${id}/video/link`, 'student')).json();
+  assert.equal((await fetch(origin + url, {headers: {Range: 'bytes=0-3'}})).status, 206);
+  assert.equal((await fetch(origin + url.replace('download=0', 'download=1'))).status, 403);
+  const editPath = `/admin/published/resources/${id}`;
+  const edit = {title: 'Updated Affairs', publishedAt: '2026-03-01', downloadsEnabled: true};
+  assert.equal((await request(editPath, 'admin', 'PUT', edit)).status, 204);
+  const download = await request(`/resources/${id}/pdf/download`, 'student');
+  assert.equal(download.status, 200);
+  assert.equal(Buffer.from(await download.arrayBuffer()).subarray(0, 4).toString(), '%PDF');
+  const {url: downloadUrl} = await (await request(`/resources/${id}/video/link?download=1`, 'student')).json();
+  assert.match((await fetch(origin + downloadUrl)).headers.get('content-disposition'), /attachment/);
+  assert.equal((await request(editPath, 'admin', 'PUT', {...edit, downloadsEnabled: false})).status, 204);
+  assert.equal((await fetch(origin + downloadUrl)).status, 403);
+  const managed = await (await request('/admin/published')).json();
+  assert.equal(managed.resources[0].media.pdf.pages, 1);
+  assert.equal(managed.resources[0].title, 'Updated Affairs');
+  assert.equal((await request(editPath, 'admin', 'DELETE')).status, 200);
+  assert.equal((await request(`/resources/${id}`, 'student')).status, 404);
+
+  const badDraft = await (await request(draftPath, 'admin', 'POST', {video: files.video})).json();
+  assert.equal((await request(`${draftPath}/${badDraft.id}/video`, 'admin', 'PUT', Buffer.alloc(video.length))).status, 204);
+  assert.equal((await request(publishPath, 'admin', 'POST', {...input, uploadId: badDraft.id})).status, 422);
+  db.prepare('UPDATE resource_uploads SET expires=0 WHERE id=?').run(badDraft.id);
+  assert.equal((await request(publishPath, 'admin', 'POST', {...input, uploadId: badDraft.id})).status, 410);
+
+  const text = {title: 'Syllabus', summary: 'Existing summary', body: 'Existing content', publishedAt: '2026-01-02'};
+  for (const kind of ['syllabus', 'current-affairs']) {
+    const created = await request(`/admin/content/${kind}`, 'admin', 'POST', text);
+    assert.equal(created.status, 201);
+    const {id: legacyId} = await created.json();
+    const patch = kind === 'current-affairs' ? {...edit, downloadsEnabled: false} : {...text, title: 'Updated Syllabus'};
+    assert.equal((await request(`/admin/published/resources/${legacyId}`, 'admin', 'PUT', patch)).status, 204);
+    const rows = await (await request(`/content/${kind}`, 'student')).json();
+    assert.equal(rows[0].summary, text.summary);
+    assert.equal(rows[0].body, text.body);
+    if (kind === 'syllabus') assert.equal((await request(`/admin/published/resources/${legacyId}`, 'admin', 'PUT', edit)).status, 422);
+  }
+});
+
 function jsonServer(t, users) {
   const db = openDatabase(':memory:');
   const server = createApp({ db, verifyToken: async token => users.get(token), adminUids: ['admin'] }).listen(0, '127.0.0.1');
@@ -402,6 +500,74 @@ test('standalone e-books unlock after admin payment approval and download as pro
   assert.equal(rejected.reviewNote, 'Transaction could not be verified');
 });
 
+test('e-book demos are separate public page images managed only by admins', async t => {
+  const db = openDatabase(':memory:');
+  const users = new Map([
+    ['buyer', { uid: 'buyer', phone: '+919000000041' }],
+    ['admin', { uid: 'admin', phone: '+919000000042' }],
+  ]);
+  const server = createApp({ db, verifyToken: async token => users.get(token), adminUids: ['admin'] })
+    .listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  t.after(() => new Promise(resolve => server.close(() => { db.close(); resolve(); })));
+  const base = `http://127.0.0.1:${server.address().port}/api`;
+  const request = (path, user, method = 'GET', body) => fetch(base + path, {
+    method,
+    headers: {
+      ...(user ? { Authorization: `Bearer ${user}` } : {}),
+      ...(body === undefined ? {} : { 'Content-Type': 'application/octet-stream' }),
+    },
+    body,
+  });
+  const fullPdf = fixturePdf();
+  const demoDocument = await PDFDocument.create();
+  demoDocument.addPage().drawText('Public demo sample - page one');
+  demoDocument.addPage().drawText('Public demo sample - page two');
+  const demoPdf = Buffer.from(await demoDocument.save());
+  const query = new URLSearchParams({ title: 'Preview Guide', description: 'Full paid book', price: '9900' });
+  const { id } = await (await request(`/admin/ebooks?${query}`, 'admin', 'POST', fullPdf)).json();
+  const path = `/ebooks/${id}/demo`;
+  const adminPath = `/admin/ebooks/${id}/demo`;
+  assert.equal((await request(path)).status, 404);
+  assert.equal((await (await request('/ebooks')).json())[0].demoPages, 0);
+  assert.equal((await request(adminPath, undefined, 'PUT', demoPdf)).status, 401);
+  assert.equal((await request(adminPath, 'buyer', 'PUT', demoPdf)).status, 403);
+  assert.equal((await request('/admin/ebooks/missing/demo', 'admin', 'PUT', demoPdf)).status, 404);
+  const upload = await request(adminPath, 'admin', 'PUT', demoPdf);
+  assert.equal(upload.status, 200);
+  assert.deepEqual(await upload.json(), { pages: 2 });
+  assert.deepEqual(await (await request(path)).json(), { id, title: 'Preview Guide', pages: 2 });
+  const listed = (await (await request('/ebooks')).json())[0];
+  assert.equal(listed.demoPages, 2);
+  assert.equal(listed.pages, 1);
+  assert.equal('pdf' in listed || 'demo_pdf' in listed, false);
+  const page = await request(`${path}/pages/1`);
+  assert.equal(page.status, 200);
+  assert.equal(page.headers.get('content-type'), 'image/png');
+  const png = Buffer.from(await page.arrayBuffer());
+  assert.deepEqual(png, await renderDemoPage(demoPdf, 1));
+  assert.notDeepEqual(png, await renderDemoPage(fullPdf, 1));
+  assert.equal((await request(`${path}/pages/2`)).status, 200);
+  for (const invalid of ['0', '3', '1.5', 'not-a-page']) {
+    assert.equal((await request(`${path}/pages/${invalid}`)).status, 404);
+  }
+  assert.equal((await request(`/ebooks/${id}/pages/1`)).status, 401);
+  assert.equal((await request(`/ebooks/${id}/pages/1`, 'buyer')).status, 403);
+  assert.equal((await request(`/ebooks/${id}/download`, 'buyer')).status, 403);
+  await assert.rejects(renderPage(fullPdf, 1, ''), { status: 403 });
+  assert.equal((await request(adminPath, 'admin', 'PUT', Buffer.from('not a PDF'))).status, 422);
+  assert.equal((await (await request(path)).json()).pages, 2);
+  assert.equal((await request(adminPath, 'admin', 'PUT', fullPdf)).status, 200);
+  assert.equal((await (await request(path)).json()).pages, 1);
+  assert.equal((await request(`${path}/pages/2`)).status, 404);
+  assert.equal((await request(adminPath, 'buyer', 'DELETE')).status, 403);
+  assert.equal((await request(adminPath, 'admin', 'DELETE')).status, 204);
+  assert.equal((await request(path)).status, 404);
+  assert.equal((await request(`${path}/pages/1`)).status, 404);
+  assert.equal((await (await request('/ebooks')).json())[0].demoPages, 0);
+  assert.deepEqual(Buffer.from(db.prepare('SELECT pdf FROM ebooks WHERE id=?').get(id).pdf), fullPdf);
+});
+
 test('live test schedule is stored and returned in a stable IST-derived instant', async t => {
   const users = new Map([['admin', { uid: 'admin', phone: '+919000000041' }]]);
   const { server, request, db } = jsonServer(t, users);
@@ -510,10 +676,11 @@ test('live leaderboard is private, rank ordered, and locked until expiry', async
   assert.equal(JSON.stringify(board).includes('+919000000062'), false);
 });
 
-test('live question paper downloads unlock after one attempt without consuming attempts', async t => {
+test('mock and live question paper switches require a completed attempt and preserve access controls', async t => {
   const db = openDatabase(':memory:');
   const users = new Map([['student', {uid: 'student', phone: '+919000000071'}],
-    ['admin', {uid: 'admin', phone: '+919000000072'}]]);
+    ['admin', {uid: 'admin', phone: '+919000000072'}],
+    ['other', {uid: 'other', phone: '+919000000073'}]]);
   const server = createApp({db, verifyToken: async token => users.get(token), adminUids: ['admin']})
     .listen(0, '127.0.0.1');
   await once(server, 'listening');
@@ -531,23 +698,38 @@ test('live question paper downloads unlock after one attempt without consuming a
   db.prepare('INSERT INTO orders (id,uid,course,amount,payment) VALUES (?,?,?,?,?)')
     .run('download-order', 'student', courseId, 10000, 'paid');
   const question = [{prompt: 'Capital of India?', options: ['Delhi', 'Mumbai'], answer: 0, section: 'General'}];
-  const createdTest = await request(`/admin/courses/${courseId}/tests`, 'admin', 'POST',
-    {title: 'Live Final', questions: question, live: true, startsAt: '2026-01-01T09:00',
+  for (const live of [false, true]) {
+    const input = {title: live ? 'Live Final' : 'Manual Mock', questions: question, live, startsAt: '2026-01-01T09:00',
       expiresAt: '2099-01-01T09:00', durationMinutes: 30, attemptsLimit: 3,
-      marksPerQuestion: 1, negativeMark: 0, questionPaperDownload: true});
-  assert.equal(createdTest.status, 201);
-  const {id: testId} = await createdTest.json();
-  assert.equal((await request(`/tests/${testId}/question-paper.pdf`, 'student')).status, 403);
-  assert.equal((await request(`/tests/${testId}/start`, 'student', 'POST')).status, 201);
-  assert.equal((await request(`/tests/${testId}/submit`, 'student', 'POST', {answers:[0]})).status, 200);
-  const before = db.prepare('SELECT COUNT(*) AS count FROM attempts WHERE uid=? AND test=?').get('student', testId).count;
-  const paper = await request(`/tests/${testId}/question-paper.pdf`, 'student');
-  assert.equal(paper.status, 200);
-  assert.equal(paper.headers.get('content-type'), 'application/pdf');
-  assert.equal(Buffer.from(await paper.arrayBuffer()).subarray(0, 4).toString(), '%PDF');
-  const after = db.prepare('SELECT COUNT(*) AS count FROM attempts WHERE uid=? AND test=?').get('student', testId).count;
-  assert.equal(after, before);
-  assert.equal((await request(`/admin/published/tests/${testId}`, 'admin', 'PUT',
-    {title: 'Live Final', questions: question, questionPaperDownload: false})).status, 204);
-  assert.equal((await request(`/tests/${testId}/question-paper.pdf`, 'student')).status, 403);
+      marksPerQuestion: 1, negativeMark: 0, questionPaperDownload: true};
+    assert.equal((await request(`/admin/courses/${courseId}/tests`, 'student', 'POST', input)).status, 403);
+    assert.equal((await request(`/admin/courses/${courseId}/tests`, 'admin', 'POST',
+      {...input, questionPaperDownload: 'true'})).status, 422);
+    const createdTest = await request(`/admin/courses/${courseId}/tests`, 'admin', 'POST', input);
+    assert.equal(createdTest.status, 201);
+    const {id: testId} = await createdTest.json();
+    const path = `/tests/${testId}`;
+    assert.equal((await request(`${path}/question-paper.pdf`, 'student')).status, 403);
+    assert.equal((await request(`${path}/question-paper.pdf`, 'other')).status, 403);
+    const visible = await (await request(path, 'student')).json();
+    assert.equal(visible.questionPaperDownload, true);
+    assert.equal(visible.questions[0].answer, undefined);
+    assert.equal((await request(`${path}/start`, 'student', 'POST')).status, 201);
+    const result = await request(`${path}/submit`, 'student', 'POST', {answers:[0]});
+    assert.equal(result.status, 200);
+    assert.equal((await result.json()).questionPaperDownload, true);
+    const before = db.prepare('SELECT COUNT(*) AS count FROM attempts WHERE uid=? AND test=?').get('student', testId).count;
+    const paper = await request(`${path}/question-paper.pdf`, 'student');
+    assert.equal(paper.status, 200);
+    assert.equal(paper.headers.get('content-type'), 'application/pdf');
+    assert.equal(Buffer.from(await paper.arrayBuffer()).subarray(0, 4).toString(), '%PDF');
+    const after = db.prepare('SELECT COUNT(*) AS count FROM attempts WHERE uid=? AND test=?').get('student', testId).count;
+    assert.equal(after, before);
+    const edit = {title: input.title, questions: question, questionPaperDownload: false};
+    assert.equal((await request(`/admin/published/tests/${testId}`, 'admin', 'PUT', edit)).status, 204);
+    assert.equal((await request(`${path}/question-paper.pdf`, 'student')).status, 403);
+    assert.equal((await request(`/admin/published/tests/${testId}`, 'admin', 'PUT',
+      {...edit, questionPaperDownload: true})).status, 204);
+    assert.equal((await request(`${path}/question-paper.pdf`, 'student')).status, 200);
+  }
 });

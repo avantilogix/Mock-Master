@@ -114,7 +114,7 @@ export function seedCatalog(databasePath) {
           ]), 'Foundation', 'Chapter 1: Getting Started', now);
       }
       for (const [kind, id, title, summary, body] of resources) {
-        db.prepare(`INSERT INTO resources VALUES (?, ?, ?, ?, ?, ?, ?)
+        db.prepare(`INSERT INTO resources (id,kind,title,summary,body,created_at,published_at) VALUES (?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT (id) DO UPDATE SET title=excluded.title, summary=excluded.summary, body=excluded.body`)
           .run(id, kind, title, summary, body, now, now.slice(0, 10));
       }

@@ -9,8 +9,9 @@ import express from 'express';
 import { rateLimit } from 'express-rate-limit';
 import QRCode from 'qrcode';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
-import { fail, importQuestions, mobile, pageCount, renderPage, validateQuestions } from './documents.js';
+import { fail, importQuestions, mobile, pageCount, renderDemoPage, renderPage, validateQuestions } from './documents.js';
 import { paymentReference, upiDetails, upiPaymentUri } from './manual-payments.js';
+import { currentAffairs } from './current-affairs.js';
 
 function text(value, label, max) {
   if (typeof value !== 'string' || !value.trim() || value.length > max) fail(422, `${label} is required (maximum ${max} characters).`);
@@ -307,6 +308,7 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
   });
   const authLimit = limit(120);
   const paymentLimit = limit(20);
+  const demoLimit = limit(60);
   const one = (sql, ...args) => db.prepare(sql).get(...args);
   const all = (sql, ...args) => db.prepare(sql).all(...args);
   const run = (sql, ...args) => db.prepare(sql).run(...args);
@@ -390,7 +392,19 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
   api.get('/courses', (_req, res) => res.json(all(`SELECT id, title, description, price,
     downloads_enabled AS downloadsEnabled FROM courses ORDER BY rowid DESC`)));
   api.get('/ebooks', (_req, res) => res.json(all(
-    'SELECT id, title, description, price, pages, created_at AS createdAt FROM ebooks ORDER BY rowid DESC')));
+    'SELECT id, title, description, price, pages, demo_pages AS demoPages, created_at AS createdAt FROM ebooks ORDER BY rowid DESC')));
+  api.get('/ebooks/:id/demo', demoLimit, (req, res) => {
+    const book = one('SELECT id, title, demo_pages AS pages FROM ebooks WHERE id=? AND demo_pdf IS NOT NULL', req.params.id);
+    if (!book) fail(404, 'A demo is not available for this e-book.');
+    res.json(book);
+  });
+  api.get('/ebooks/:id/demo/pages/:page', demoLimit, async (req, res) => {
+    const book = one('SELECT demo_pdf, demo_pages FROM ebooks WHERE id=? AND demo_pdf IS NOT NULL', req.params.id);
+    if (!book) fail(404, 'A demo is not available for this e-book.');
+    const page = Number(req.params.page);
+    if (!Number.isInteger(page) || page < 1 || page > book.demo_pages) fail(404, 'Page not found.');
+    res.type('png').send(await processDocument(() => renderDemoPage(Buffer.from(book.demo_pdf), page)));
+  });
   api.get('/courses/:id/payment-qr', async (req, res) => {
     const row = course(req.params.id);
     const payment = runtimePayment();
@@ -443,7 +457,10 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     }
     res.sendFile(videoPath(video.id), { headers: { 'Content-Type': video.type } });
   });
+  const affairs = currentAffairs(api, { db, directory: join(videoDir, 'current-affairs'), text, processDocument,
+    protectedPdf, looksLikeVideo });
   api.use(authLimit, login);
+  affairs.routes();
   api.get('/me', (req, res) => {
     const { uid, phone, admin } = req.user;
     const { name, exam_preference: examPreference } = one('SELECT name, exam_preference FROM students WHERE uid=?', uid);
@@ -728,7 +745,7 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     }, {}));
     const result = { score, total, correct, wrong, unanswered: questions.length - correct - wrong,
       maxMarks: total, negative: penalty, elapsedSeconds: Math.min(elapsed, maxSeconds),
-      sectionScores, timedOut, questionPaperDownload: Boolean(row.live && row.question_paper_download) };
+      sectionScores, timedOut, questionPaperDownload: Boolean(row.question_paper_download) };
     const attemptId = randomUUID();
     run('INSERT INTO attempts (id, uid, course, test, title, score, total, created_at, answers, max_marks, negative, elapsed_seconds, section_scores) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       attemptId, req.user.uid, row.course, row.id, row.title, score, questions.length, new Date().toISOString(),
@@ -772,7 +789,6 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
   api.get('/tests/:id/question-paper.pdf', async (req, res) => {
     const row = test(req.params.id);
     requirePurchase(req, row.course);
-    if (!row.live) fail(404, 'Question paper download is available for live tests only.');
     if (!row.question_paper_download) fail(403, 'Question paper download is disabled by the admin.');
     if (!one('SELECT 1 FROM attempts WHERE uid=? AND test=?', req.user.uid, row.id)) {
       fail(403, 'Complete your first test attempt before downloading the question paper.');
@@ -873,10 +889,9 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
   });
   api.get('/content/:kind', (req, res) => {
     if (!['current-affairs', 'pyqs', 'syllabus', 'free-tests'].includes(req.params.kind)) fail(404, 'Content not found.');
-    res.json(all(`SELECT id, kind, title, summary, body, created_at AS createdAt,
-      published_at AS publishedAt FROM resources WHERE kind=?
+    res.json(all(`SELECT * FROM resources WHERE kind=?
       ORDER BY CASE WHEN published_at='' THEN created_at ELSE published_at END DESC`,
-      req.params.kind));
+      req.params.kind).map(affairs.publicResource));
   });
   api.get('/books/:id/pages/:page', async (req, res) => {
     const book = one(`SELECT b.course, b.pages, c.downloads_enabled FROM books b
@@ -1132,13 +1147,17 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
       order.quantity, order.book, order.quantity);
     res.sendStatus(204);
   });
-  api.post('/admin/content/:kind', (req, res) => {
+  affairs.adminRoutes();
+  api.post('/admin/content/:kind', async (req, res) => {
     const kind = req.params.kind;
     if (!['current-affairs', 'pyqs', 'syllabus', 'free-tests'].includes(kind)) fail(422, 'Choose a valid content section.');
+    if (kind === 'current-affairs' && req.body?.uploadId !== undefined) {
+      return res.status(201).json({ id: await affairs.publish(req) });
+    }
     const id = randomUUID();
     const publishedAt = typeof req.body?.publishedAt === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(req.body.publishedAt)
       ? req.body.publishedAt : new Date().toISOString().slice(0, 10);
-    run('INSERT INTO resources VALUES (?, ?, ?, ?, ?, ?, ?)', id, kind,
+    run('INSERT INTO resources (id,kind,title,summary,body,created_at,published_at) VALUES (?, ?, ?, ?, ?, ?, ?)', id, kind,
       text(req.body?.title, 'Title', 120), text(req.body?.summary, 'Summary', 300),
       text(req.body?.body, 'Content', 10_000), new Date().toISOString(), publishedAt);
     res.status(201).json({ id });
@@ -1183,7 +1202,7 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, id, courseId, text(title, 'Title', 120),
     JSON.stringify(parsedQuestions), new Date().toISOString(), live ? 1 : 0, scheduled, live ? duration : durationMinutes || 90,
     expires, live ? attemptsLimit : 0, marksPerQuestion, negativeMark, JSON.stringify(sections),
-    live && questionPaperDownload ? 1 : 0);
+    questionPaperDownload ? 1 : 0);
     res.status(201).json({ id });
   });
   api.post('/admin/import', raw, async (req, res) => {
@@ -1202,7 +1221,7 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     res.status(201).json({ id, pages });
   });
   api.get('/admin/ebooks', (_req, res) => res.json(all(
-    `SELECT id, title, description, price, pages, created_at AS createdAt,
+    `SELECT id, title, description, price, pages, demo_pages AS demoPages, created_at AS createdAt,
       (SELECT COUNT(*) FROM ebook_orders o WHERE o.ebook=ebooks.id) AS orders
       FROM ebooks ORDER BY rowid DESC`)));
   api.post('/admin/ebooks', raw, async (req, res) => {
@@ -1213,6 +1232,18 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
       id, text(req.query.title, 'E-book title', 120), text(req.query.description, 'Description', 2000),
       priceInput(Number(req.query.price)), pages, req.body, new Date().toISOString());
     res.status(201).json({ id, pages });
+  });
+  api.put('/admin/ebooks/:id/demo', raw, async (req, res) => {
+    if (!one('SELECT 1 FROM ebooks WHERE id=?', req.params.id)) fail(404, 'E-book not found.');
+    if (!Buffer.isBuffer(req.body)) fail(400, 'Upload a demo PDF.');
+    const pages = await processDocument(() => pageCount(req.body));
+    run('UPDATE ebooks SET demo_pdf=?, demo_pages=? WHERE id=?', req.body, pages, req.params.id);
+    res.json({ pages });
+  });
+  api.delete('/admin/ebooks/:id/demo', (req, res) => {
+    if (!one('SELECT 1 FROM ebooks WHERE id=?', req.params.id)) fail(404, 'E-book not found.');
+    run('UPDATE ebooks SET demo_pdf=NULL, demo_pages=0 WHERE id=?', req.params.id);
+    res.sendStatus(204);
   });
   api.delete('/admin/ebooks/:id', (req, res) => {
     const book = one('SELECT 1 FROM ebooks WHERE id=?', req.params.id);
@@ -1326,8 +1357,7 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
         v.created_at AS createdAt FROM chapter_videos v JOIN courses c ON c.id=v.course ORDER BY v.created_at DESC`),
       videos: all(`SELECT v.id, v.title, v.description, v.video_id AS videoId, v.course, c.title AS courseTitle,
         v.created_at AS createdAt FROM videos v LEFT JOIN courses c ON c.id=v.course ORDER BY v.created_at DESC`),
-      resources: all(`SELECT id, kind, title, summary, body, created_at AS createdAt, published_at AS publishedAt
-        FROM resources ORDER BY created_at DESC`),
+      resources: all('SELECT * FROM resources ORDER BY created_at DESC').map(affairs.publicResource),
       physicalBooks: all(`SELECT b.id, b.title, b.description, b.price, b.stock, b.active, b.created_at AS createdAt,
         (SELECT COUNT(*) FROM physical_orders o WHERE o.book=b.id) AS orders FROM physical_books b ORDER BY b.created_at DESC`),
       schedules: all(`SELECT id, title, day, starts_at AS startsAt, duration, description, created_at AS createdAt
@@ -1363,7 +1393,7 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
         negative_mark=?, question_paper_download=?, starts_at=?, expires_at=?, attempts_limit=? WHERE id=?`,
       selectedCourse.id, text(body.title, 'Title', 120), JSON.stringify(validateQuestions(body.questions)),
       body.durationMinutes ?? row.duration_minutes, body.marksPerQuestion ?? row.marks_per_question,
-      body.negativeMark ?? row.negative_mark, row.live && body.questionPaperDownload ? 1 : 0,
+      body.negativeMark ?? row.negative_mark, body.questionPaperDownload ? 1 : 0,
       row.live && body.startsAt !== undefined ? istIso(body.startsAt, 'Live start time') : row.starts_at,
       row.live && body.expiresAt !== undefined ? istIso(body.expiresAt, 'Live expiry time') : row.expires_at,
       row.live ? (body.attemptsLimit ?? row.attempts_limit) : 0, id);
@@ -1397,8 +1427,14 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
       found('resources', id, 'Resource');
       if (typeof body.publishedAt !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(body.publishedAt) ||
           Number.isNaN(Date.parse(body.publishedAt))) fail(422, 'Enter a valid publish date.');
-      run('UPDATE resources SET title=?, summary=?, body=?, published_at=? WHERE id=?', text(body.title, 'Title', 120),
-        text(body.summary, 'Summary', 300), text(body.body, 'Content', 10_000), body.publishedAt, id);
+      if (one('SELECT kind FROM resources WHERE id=?', id).kind === 'current-affairs') {
+        if (typeof body.downloadsEnabled !== 'boolean') fail(422, 'Choose whether downloads are allowed.');
+        run('UPDATE resources SET title=?, published_at=?, downloads_enabled=? WHERE id=?',
+          text(body.title, 'Title', 120), body.publishedAt, Number(body.downloadsEnabled), id);
+      } else {
+        run('UPDATE resources SET title=?, summary=?, body=?, published_at=? WHERE id=?', text(body.title, 'Title', 120),
+          text(body.summary, 'Summary', 300), text(body.body, 'Content', 10_000), body.publishedAt, id);
+      }
     },
     physicalBooks(id, body) {
       found('physical_books', id, 'Physical book');
@@ -1445,7 +1481,7 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
       rmSync(videoPath(id), { force: true });
     },
     videos: id => { found('videos', id, 'Video'); run('DELETE FROM videos WHERE id=?', id); },
-    resources: id => { found('resources', id, 'Resource'); run('DELETE FROM resources WHERE id=?', id); },
+    resources: id => { found('resources', id, 'Resource'); affairs.remove(id); run('DELETE FROM resources WHERE id=?', id); },
     schedules: id => { found('schedules', id, 'Timetable session'); run('DELETE FROM schedules WHERE id=?', id); },
     physicalBooks(id) {
       found('physical_books', id, 'Physical book');

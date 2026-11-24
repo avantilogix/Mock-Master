@@ -64,7 +64,7 @@ export function showDashboard(main, ctx, me) {
       el('span', {}, el('strong', {}, 'Live'), el('small', {}, 'Mock analysis'))),
     el('section', {class: 'section'},
       el('div', {class: 'section-heading'}, el('div', {}, el('span', {class: 'section-kicker'}, 'Your study toolkit'),
-        el('h2', {}, 'Start Learning')), link('View All Missions', '#catalog')),
+        el('h2', {}, 'Start Learning')), link('View All Courses', '#catalog')),
       el('div', {class: 'shortcut-grid'},
         shortcut('courses', 'My Courses', 'Continue purchased learning', '#my-courses', 'mint'),
         shortcut('test', 'Test Series', 'Practice exam questions', '#test-series', 'blue'),
@@ -72,12 +72,10 @@ export function showDashboard(main, ctx, me) {
         shortcut('courses', 'Book Store', 'Find secure study books', '#book-store', 'orange'),
         shortcut('files', 'Study Materials', 'Open your saved PDFs', '#materials', 'purple'),
         shortcut('news', 'Current Affairs', 'Daily exam updates', '#current-affairs', 'rose'),
-        shortcut('progress', 'Progress', 'Accuracy and attempts', '#progress', 'yellow'),
         shortcut('bell', 'Notifications', 'Course and payment updates', '#notifications', 'blue'),
         shortcut('history', 'Previous Year Questions', 'Practice earlier questions', '#pyqs', 'mint'),
         shortcut('news', 'Syllabus', 'View topics and learning plan', '#syllabus', 'purple'),
         shortcut('calendar', 'Timetable', 'Plan your study week', '#timetable', 'blue'),
-        shortcut('download', 'Downloads', 'Save approved content', '#downloads', 'purple'),
         shortcut('play', 'YouTube Videos', 'Watch focused lessons', '#videos', 'rose'),
         shortcut('chat', 'Course Groups', 'Discuss with purchasers', '#groups', 'blue'))),
     el('section', {class: 'section'},
@@ -193,7 +191,7 @@ export function showContentLibrary(main, ctx, me, kind, action) {
            el('div', {class: 'actions test-row-actions'},
              item.live && Date.parse(item.expiresAt) <= Date.now() ?
                link('Leaderboard', `#leaderboard/${idPart(course.id)}/${idPart(item.id)}`, 'button secondary') : null,
-             item.live && item.questionPaperDownload && item.completedAttempt ?
+             item.questionPaperDownload && item.completedAttempt ?
                questionPaperButton(ctx, item) : null,
              iconStartTest(course.id, item.id))))));
     }));
@@ -225,19 +223,8 @@ function questionPaperButton(ctx, test) {
 
 export function showCatalog(main, ctx, me) {
   const list = el('div', {class: 'grid'});
-  main.append(el('section', {class: 'hero'},
-    el('div', {class: 'hero-copy'}, el('p', {class: 'eyebrow'}, 'Your Preparation Partner'),
-      ...heading('Choose Your Mission. Own Your Result.', 'Build exam-day confidence with focused mock tests, secure study books, and a learning community built around your goal.'),
-      el('div', {class: 'hero-actions'}, link('Explore Missions', '#catalog', 'button'),
-        link(me ? 'View Your Profile' : 'Sign In with Mobile', me ? '#profile' : '#signin', 'button secondary')),
-      el('div', {class: 'hero-proof'}, el('span', {}, 'Mobile OTP Access'), el('span', {}, 'Protected Content'), el('span', {}, 'Verified UPI Payments'))),
-    el('div', {class: 'hero-art', 'aria-hidden': 'true'}, el('strong', {}, 'Stay Mission Ready'), el('div', {class: 'progress-ring'}, '01'), el('small', {}, 'Pick a mission. Start practising.'))),
-  el('div', {class: 'stat-strip', 'aria-label': 'Mission Selection benefits'},
-    el('div', {class: 'stat-tile'}, el('strong', {}, 'Practice Tests'), el('span', {}, 'Focused question sets')),
-    el('div', {class: 'stat-tile'}, el('strong', {}, 'Secure E-Books'), el('span', {}, 'Read without downloads')),
-    el('div', {class: 'stat-tile'}, el('strong', {}, 'Course Groups'), el('span', {}, 'Learn with your peers'))),
-  el('section', {class: 'section', id: 'available-courses'},
-    el('div', {class: 'section-heading'}, el('div', {}, el('h2', {}, 'Explore Preparation Courses'), el('p', {}, 'Choose a course and unlock its complete study space.'))),
+  main.append(el('section', {class: 'section', id: 'available-courses'},
+    ...heading('All Courses'),
     list),
   el('section', {class: 'section'}, el('div', {class: 'section-heading'}, el('h2', {}, 'Everything You Need to Prepare')),
     el('div', {class: 'grid feature-grid'},
