@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { rateLimit } from 'express-rate-limit';
 import QRCode from 'qrcode';
-import { PDFDocument, StandardFonts } from 'pdf-lib';
+import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import { fail, importQuestions, mobile, pageCount, renderPage, validateQuestions } from './documents.js';
 import { paymentReference, upiDetails, upiPaymentUri } from './manual-payments.js';
 
@@ -21,9 +21,19 @@ function istIso(value, label) {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/.test(value)) {
     fail(422, `${label} must be a valid date and time in IST.`);
   }
+
   const date = new Date(`${value}${value.length === 16 ? ':00' : ''}+05:30`);
   if (Number.isNaN(date.getTime())) fail(422, `${label} must be a valid date and time in IST.`);
   return date.toISOString();
+}
+
+const examChoices = new Set(['CCE', 'TET 1', 'TET 2', 'TAT S - HS', 'PSI - Constable',
+  'Panchayat Talati - Clerk', 'Technical Exams', 'GPSC STI - Dyso', 'Other Exams']);
+function examPreferences(value) {
+  if (!Array.isArray(value)) fail(422, 'Choose one or more target exams.');
+  const selected = [...new Set(value.filter(item => typeof item === 'string' && examChoices.has(item)))];
+  if (!selected.length || selected.length !== value.length) fail(422, 'Choose valid target exams.');
+  return selected;
 }
 
 const MAX_VIDEO_BYTES = 300 * 1024 * 1024;
@@ -75,6 +85,92 @@ async function questionPaperPdf(test, phone) {
           line = word;
         } else line = candidate;
       }
+
+      async function resultDocument({student, attempt, course, test, rank}) {
+        const pdf = await PDFDocument.create();
+        const regular = await pdf.embedFont(StandardFonts.Helvetica);
+        const bold = await pdf.embedFont(StandardFonts.HelveticaBold);
+        const page = pdf.addPage([595, 842]);
+        const blue = rgb(.05, .34, .72);
+        const light = rgb(.94, .97, 1);
+        const muted = rgb(.35, .42, .52);
+        page.drawRectangle({x: 0, y: 770, width: 595, height: 72, color: blue});
+        page.drawText('MISSION SELECTION', {x: 38, y: 810, size: 17, font: bold, color: rgb(1, 1, 1)});
+        page.drawText('TEST PERFORMANCE REPORT', {x: 38, y: 786, size: 10, font: bold, color: rgb(.82, .92, 1)});
+        page.drawText(test.title, {x: 38, y: 738, size: 20, font: bold, color: rgb(.08, .13, .24)});
+        page.drawText(`${student.name || 'Student'}  •  ${student.phone}`, {x: 38, y: 714, size: 10, font: regular, color: muted});
+        const cards = [
+          ['SCORE', `${attempt.score}/${attempt.max_marks || attempt.maxMarks || 0}`],
+          ['RANK', rank ? `#${rank}` : '—'],
+          ['ACCURACY', `${Math.round((attempt.correct / Math.max(attempt.total, 1)) * 100)}%`],
+        ];
+        cards.forEach(([label, value], index) => {
+          const x = 38 + index * 177;
+          page.drawRectangle({x, y: 630, width: 160, height: 58, color: light, borderColor: rgb(.78, .86, .95), borderWidth: 1});
+          page.drawText(label, {x: x + 14, y: 667, size: 8, font: bold, color: muted});
+          page.drawText(value, {x: x + 14, y: 642, size: 20, font: bold, color: blue});
+        });
+        page.drawText('PERFORMANCE SUMMARY', {x: 38, y: 592, size: 11, font: bold, color: blue});
+        const stats = [['Correct', attempt.correct], ['Incorrect', attempt.wrong], ['Unattempted', attempt.unanswered]];
+        page.drawRectangle({x: 38, y: 492, width: 519, height: 78, color: rgb(1, 1, 1), borderColor: rgb(.82, .88, .94), borderWidth: 1});
+        stats.forEach(([label, value], index) => {
+          const x = 65 + index * 165;
+          page.drawText(String(value), {x, y: 536, size: 19, font: bold, color: blue});
+          page.drawText(label, {x, y: 516, size: 9, font: regular, color: muted});
+        });
+        page.drawText('SECTION BREAKDOWN', {x: 38, y: 462, size: 11, font: bold, color: blue});
+        page.drawRectangle({x: 38, y: 426, width: 519, height: 24, color: blue});
+        [['Section', 52], ['Correct', 278], ['Wrong', 365], ['Unattempted', 438]].forEach(([text, x]) =>
+          page.drawText(text, {x, y: 434, size: 8, font: bold, color: rgb(1, 1, 1)}));
+        let y = 401;
+        for (const section of attempt.sectionScores || []) {
+          if (y < 65) break;
+          page.drawText(String(section.section), {x: 52, y, size: 9, font: regular, color: rgb(.12, .16, .23)});
+          page.drawText(String(section.correct), {x: 292, y, size: 9, font: regular});
+          page.drawText(String(section.wrong), {x: 380, y, size: 9, font: regular});
+          page.drawText(String(section.unanswered), {x: 465, y, size: 9, font: regular});
+          page.drawLine({start: {x: 38, y: y - 7}, end: {x: 557, y: y - 7}, thickness: .5, color: rgb(.86, .9, .94)});
+          y -= 26;
+        }
+        page.drawText(`Course: ${course.title}  •  Submitted: ${new Date(attempt.createdAt || attempt.created_at).toLocaleString('en-IN', {timeZone: 'Asia/Kolkata'})} IST`,
+          {x: 38, y: 32, size: 8, font: regular, color: muted});
+        return Buffer.from(await pdf.save());
+      }
+
+      async function receiptDocument({student, order, course}) {
+        const pdf = await PDFDocument.create();
+        const regular = await pdf.embedFont(StandardFonts.Helvetica);
+        const bold = await pdf.embedFont(StandardFonts.HelveticaBold);
+        const page = pdf.addPage([595, 842]);
+        const blue = rgb(.05, .34, .72);
+        const muted = rgb(.38, .45, .54);
+        page.drawText('MISSION SELECTION', {x: 38, y: 794, size: 17, font: bold, color: blue});
+        page.drawText('Choose • Prepare • Achieve', {x: 38, y: 775, size: 8, font: regular, color: muted});
+        page.drawText('PAYMENT RECEIPT', {x: 382, y: 785, size: 20, font: regular, color: rgb(.08, .13, .24)});
+        page.drawText(`Receipt No.  MS-${order.id.slice(0, 8).toUpperCase()}`, {x: 38, y: 735, size: 10, font: bold});
+        page.drawText(`Date  ${new Date(order.reviewed_at || order.reviewedAt || order.submitted_at || order.submittedAt).toLocaleDateString('en-IN', {timeZone: 'Asia/Kolkata'})}`,
+          {x: 405, y: 735, size: 9, font: regular, color: muted});
+        page.drawText('BILLED TO', {x: 38, y: 690, size: 8, font: bold, color: muted});
+        page.drawText(student.name || 'Student', {x: 38, y: 668, size: 12, font: bold});
+        page.drawText(student.phone, {x: 38, y: 648, size: 10, font: regular, color: muted});
+        page.drawRectangle({x: 38, y: 500, width: 519, height: 104, color: rgb(.96, .98, 1), borderColor: rgb(.78, .86, .95), borderWidth: 1});
+        page.drawText('PARTICULARS', {x: 55, y: 580, size: 8, font: bold, color: muted});
+        page.drawText('AMOUNT', {x: 488, y: 580, size: 8, font: bold, color: muted});
+        page.drawText(course.title, {x: 55, y: 545, size: 12, font: bold, color: rgb(.08, .13, .24)});
+        page.drawText(`INR ${(order.amount / 100).toFixed(2)}`, {x: 470, y: 545, size: 12, font: bold, color: blue});
+        page.drawLine({start: {x: 55, y: 525}, end: {x: 540, y: 525}, thickness: 1, color: rgb(.82, .88, .94)});
+        page.drawText('Total Paid', {x: 410, y: 507, size: 10, font: bold});
+        page.drawText(`INR ${(order.amount / 100).toFixed(2)}`, {x: 470, y: 507, size: 12, font: bold, color: blue});
+        page.drawText('PAYMENT DETAILS', {x: 38, y: 450, size: 9, font: bold, color: muted});
+        page.drawText(`Method  UPI / Manual Approval`, {x: 38, y: 425, size: 10, font: regular});
+        page.drawText(`Transaction  ${order.transaction_ref || order.transactionRef || '—'}`, {x: 38, y: 402, size: 10, font: regular});
+        page.drawText(`Status  APPROVED`, {x: 38, y: 379, size: 10, font: bold, color: rgb(.05, .45, .28)});
+        page.drawText('Thank you for choosing Mission Selection.', {x: 38, y: 105, size: 11, font: bold, color: blue});
+        page.drawText('This receipt is computer generated and valid after admin approval.', {x: 38, y: 85, size: 8, font: regular, color: muted});
+        page.drawRectangle({x: 0, y: 0, width: 595, height: 48, color: blue});
+        page.drawText('Mission Selection • Secure course access • https://mission-selection-ba819.web.app', {x: 38, y: 19, size: 8, font: regular, color: rgb(1,1,1)});
+        return Buffer.from(await pdf.save());
+      }
       if (line) lines.push(line);
       return lines;
     };
@@ -112,6 +208,76 @@ async function questionPaperPdf(test, phone) {
       current.drawText('Mission Selection - Protected Question Paper', {x: 42, y: 812, size: 8, font: regular, opacity: .25});
     }
     return Buffer.from(await pdf.save());
+}
+
+async function buildResultPdf({student, attempt, course, test, rank}) {
+  const pdf = await PDFDocument.create();
+  const regular = await pdf.embedFont(StandardFonts.Helvetica);
+  const bold = await pdf.embedFont(StandardFonts.HelveticaBold);
+  const page = pdf.addPage([595, 842]);
+  const blue = rgb(.05, .34, .72), muted = rgb(.35, .42, .52), light = rgb(.94, .97, 1);
+  page.drawRectangle({x: 0, y: 770, width: 595, height: 72, color: blue});
+  page.drawText('MISSION SELECTION', {x: 38, y: 810, size: 17, font: bold, color: rgb(1,1,1)});
+  page.drawText('TEST PERFORMANCE REPORT', {x: 38, y: 786, size: 10, font: bold, color: rgb(.82,.92,1)});
+  page.drawText(test.title, {x: 38, y: 738, size: 20, font: bold});
+  page.drawText(`${student.name || 'Student'}  •  ${student.phone}`, {x: 38, y: 714, size: 10, font: regular, color: muted});
+  const cards = [['SCORE', `${attempt.score}/${attempt.max_marks || attempt.maxMarks || 0}`],
+    ['RANK', rank ? `#${rank}` : '—'], ['ACCURACY', `${Math.round(attempt.correct / Math.max(attempt.total, 1) * 100)}%`]];
+  cards.forEach(([label, value], index) => {
+    const x = 38 + index * 177;
+    page.drawRectangle({x, y: 630, width: 160, height: 58, color: light, borderColor: rgb(.78,.86,.95), borderWidth: 1});
+    page.drawText(label, {x: x + 14, y: 667, size: 8, font: bold, color: muted});
+    page.drawText(value, {x: x + 14, y: 642, size: 20, font: bold, color: blue});
+  });
+  page.drawText('PERFORMANCE SUMMARY', {x: 38, y: 592, size: 11, font: bold, color: blue});
+  [['Correct', attempt.correct], ['Incorrect', attempt.wrong], ['Unattempted', attempt.unanswered]].forEach(([label, value], index) => {
+    const x = 65 + index * 165;
+    page.drawText(String(value), {x, y: 536, size: 19, font: bold, color: blue});
+    page.drawText(label, {x, y: 516, size: 9, font: regular, color: muted});
+  });
+  page.drawText('SECTION BREAKDOWN', {x: 38, y: 462, size: 11, font: bold, color: blue});
+  page.drawRectangle({x: 38, y: 426, width: 519, height: 24, color: blue});
+  [['Section',52], ['Correct',278], ['Wrong',365], ['Unattempted',438]].forEach(([text,x]) =>
+    page.drawText(text, {x,y:434,size:8,font:bold,color:rgb(1,1,1)}));
+  let y = 401;
+  for (const section of attempt.sectionScores || []) {
+    if (y < 65) break;
+    page.drawText(String(section.section), {x:52,y,size:9,font:regular});
+    page.drawText(String(section.correct), {x:292,y,size:9,font:regular});
+    page.drawText(String(section.wrong), {x:380,y,size:9,font:regular});
+    page.drawText(String(section.unanswered), {x:465,y,size:9,font:regular});
+    y -= 26;
+  }
+  page.drawText(`Course: ${course.title}  •  ${new Date(attempt.createdAt || attempt.created_at).toLocaleString('en-IN', {timeZone:'Asia/Kolkata'})} IST`,
+    {x:38,y:32,size:8,font:regular,color:muted});
+  return Buffer.from(await pdf.save());
+}
+
+async function buildReceiptPdf({student, order, course}) {
+  const pdf = await PDFDocument.create();
+  const regular = await pdf.embedFont(StandardFonts.Helvetica);
+  const bold = await pdf.embedFont(StandardFonts.HelveticaBold);
+  const page = pdf.addPage([595,842]);
+  const blue = rgb(.05,.34,.72), muted = rgb(.38,.45,.54);
+  page.drawText('MISSION SELECTION',{x:38,y:794,size:17,font:bold,color:blue});
+  page.drawText('PAYMENT RECEIPT',{x:382,y:785,size:20,font:regular});
+  page.drawText(`Receipt No.  MS-${order.id.slice(0,8).toUpperCase()}`,{x:38,y:735,size:10,font:bold});
+  page.drawText(`Date  ${new Date(order.reviewed_at || order.reviewedAt || order.submitted_at || order.submittedAt).toLocaleDateString('en-IN',{timeZone:'Asia/Kolkata'})}`,
+    {x:405,y:735,size:9,font:regular,color:muted});
+  page.drawText('BILLED TO',{x:38,y:690,size:8,font:bold,color:muted});
+  page.drawText(student.name || 'Student',{x:38,y:668,size:12,font:bold});
+  page.drawText(student.phone,{x:38,y:648,size:10,font:regular,color:muted});
+  page.drawRectangle({x:38,y:500,width:519,height:104,color:rgb(.96,.98,1),borderColor:rgb(.78,.86,.95),borderWidth:1});
+  page.drawText(course.title,{x:55,y:545,size:12,font:bold});
+  page.drawText(`INR ${(order.amount/100).toFixed(2)}`,{x:470,y:545,size:12,font:bold,color:blue});
+  page.drawText('Total Paid',{x:410,y:507,size:10,font:bold});
+  page.drawText(`INR ${(order.amount/100).toFixed(2)}`,{x:470,y:507,size:12,font:bold,color:blue});
+  page.drawText(`Method  UPI / Manual Approval`,{x:38,y:425,size:10,font:regular});
+  page.drawText(`Transaction  ${order.transaction_ref || order.transactionRef || '—'}`,{x:38,y:402,size:10,font:regular});
+  page.drawText('Status  APPROVED',{x:38,y:379,size:10,font:bold,color:rgb(.05,.45,.28)});
+  page.drawRectangle({x:0,y:0,width:595,height:48,color:blue});
+  page.drawText('Mission Selection • Secure course access',{x:38,y:19,size:8,font:regular,color:rgb(1,1,1)});
+  return Buffer.from(await pdf.save());
 }
 
 export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, adminUids = [], adminPhones = [],
@@ -281,15 +447,18 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     const { uid, phone, admin } = req.user;
     const { name, exam_preference: examPreference } = one('SELECT name, exam_preference FROM students WHERE uid=?', uid);
     res.json({ uid, name, phone, admin, examPreference,
+      examPreferences: examPreference ? examPreference.split(',').map(item => item.trim()).filter(Boolean) : [],
       purchases: all("SELECT course FROM orders WHERE uid=? AND payment IS NOT NULL AND payment!=''", uid).map(p => p.course) });
   });
   api.put('/me', (req, res) => {
     const current = one('SELECT name, exam_preference FROM students WHERE uid=?', req.user.uid);
     const name = req.body?.name === undefined ? current.name : text(req.body.name, 'Name', 100);
-    const examPreference = req.body?.examPreference === undefined ? current.exam_preference :
-      text(req.body.examPreference, 'Target exam', 100);
+    const selectedExams = req.body?.examPreferences === undefined ?
+      (current.exam_preference ? current.exam_preference.split(',').map(item => item.trim()).filter(Boolean) : []) :
+      examPreferences(req.body.examPreferences);
+    const examPreference = selectedExams.join(',');
     run('UPDATE students SET name=?, exam_preference=? WHERE uid=?', name, examPreference, req.user.uid);
-    res.json({name, examPreference});
+    res.json({name, examPreference, examPreferences: selectedExams});
   });
   api.post('/me/disable', (req, res) => {
     run('UPDATE students SET disabled=1 WHERE uid=?', req.user.uid);
@@ -559,11 +728,38 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     const result = { score, total, correct, wrong, unanswered: questions.length - correct - wrong,
       maxMarks: total, negative: penalty, elapsedSeconds: Math.min(elapsed, maxSeconds),
       sectionScores, timedOut, questionPaperDownload: Boolean(row.live && row.question_paper_download) };
+    const attemptId = randomUUID();
     run('INSERT INTO attempts (id, uid, course, test, title, score, total, created_at, answers, max_marks, negative, elapsed_seconds, section_scores) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      randomUUID(), req.user.uid, row.course, row.id, row.title, score, questions.length, new Date().toISOString(),
+      attemptId, req.user.uid, row.course, row.id, row.title, score, questions.length, new Date().toISOString(),
       JSON.stringify(answers), total, wrong * penalty, elapsed, JSON.stringify(sectionScores));
     run('UPDATE exam_sessions SET active=0 WHERE id=?', session.id);
-    res.json(result);
+    res.json({...result, attemptId});
+  });
+  api.get('/attempts/:id/result.pdf', async (req, res) => {
+    const attempt = one(`SELECT a.*, t.title AS testTitle, t.questions, t.duration_minutes, c.title AS courseTitle
+      FROM attempts a JOIN tests t ON t.id=a.test JOIN courses c ON c.id=a.course
+      WHERE a.id=? AND a.uid=?`, req.params.id, req.user.uid);
+    if (!attempt) fail(404, 'Test result not found.');
+    const answers = JSON.parse(attempt.answers || '[]');
+    const questions = JSON.parse(attempt.questions || '[]');
+    attempt.correct = questions.filter((question, index) => answers[index] === question.answer).length;
+    attempt.wrong = questions.filter((question, index) => answers[index] !== null && answers[index] !== question.answer).length;
+    attempt.unanswered = questions.length - attempt.correct - attempt.wrong;
+    attempt.sectionScores = JSON.parse(attempt.section_scores || '[]');
+    const student = one('SELECT name, phone FROM students WHERE uid=?', req.user.uid);
+    const rank = all('SELECT uid, MAX(score) AS score FROM attempts WHERE test=? GROUP BY uid ORDER BY score DESC, MIN(elapsed_seconds) ASC',
+      attempt.test).findIndex(row => row.uid === req.user.uid) + 1;
+    const pdf = await buildResultPdf({student, attempt: {...attempt, createdAt: attempt.created_at},
+      test: {title: attempt.testTitle}, course: {title: attempt.courseTitle}, rank});
+    res.type('pdf').attachment(`${attempt.testTitle}-result.pdf`).send(pdf);
+  });
+  api.get('/courses/:id/receipt.pdf', async (req, res) => {
+    const order = one(`SELECT * FROM orders WHERE uid=? AND course=? AND payment IS NOT NULL AND payment!=''`, req.user.uid, req.params.id);
+    if (!order) fail(404, 'Approved purchase receipt not found.');
+    const selectedCourse = course(req.params.id);
+    const student = one('SELECT name, phone FROM students WHERE uid=?', req.user.uid);
+    const pdf = await buildReceiptPdf({student, order, course: selectedCourse});
+    res.type('pdf').attachment(`${selectedCourse.title}-receipt.pdf`).send(pdf);
   });
   api.get('/tests/:id/question-paper.pdf', async (req, res) => {
     const row = test(req.params.id);

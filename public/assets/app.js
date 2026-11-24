@@ -1,12 +1,13 @@
-import {showAdmin} from './admin.js?v=question-paper-download';
-import {showCatalog, showContentLibrary, showCourse, showDashboard, showMyCourses} from './course.js?v=question-paper-download';
+import {showAdmin} from './admin.js?v=test-editor-fix';
+import {showCatalog, showContentLibrary, showCourse, showDashboard, showMyCourses} from './course.js?v=result-receipt-documents';
 import {api, firebaseAuth} from './services.js?v=ebook-store-final';
-import {showSignIn} from './signin.js';
-import {showBook, showLeaderboard, showTest, showVideo} from './study.js?v=question-paper-download';
-import {showLearningContent, showNotifications, showProgress} from './reports.js?v=manage-20261122';
+import {showSignIn} from './signin.js?v=multi-exam-selection';
+import {showBook, showLeaderboard, showTest, showVideo} from './study.js?v=result-receipt-documents';
+import {showLearningContent, showNotifications, showProgress} from './reports.js?v=result-receipt-documents';
 import {showDownloads, showReferrals, showTimetable, socialFooter} from './features.js?v=course-download-controls';
 import {showCourseGroups, showShareRate, showVideos} from './engagement.js?v=expiry-covers-1';
 import {showEbook, showEbookStore} from './ebooks.js?v=ist-payment-fixes-final';
+import {examPreferenceField, normalizeExamPreferences} from './exam-preferences.js';
 import {bindForm, button, el, field, heading, icon, link, panel, run, say, status, textValue} from './ui.js';
 
 const main = document.querySelector('#main');
@@ -93,10 +94,13 @@ async function refreshProfile(current) {
 async function initializeProfile(current) {
   try {
     await refreshProfile(current);
-    const examPreference = localStorage.getItem('missionExam');
-    if (examPreference && current.me?.examPreference !== examPreference) {
-      const result = await api('/me', {ctx: current, auth: true, method: 'PUT', json: {examPreference}});
-      if (current.current()) current.me.examPreference = result?.examPreference || examPreference;
+    let localExams = [];
+    try { localExams = JSON.parse(localStorage.getItem('missionExams') || '[]'); }
+    catch { localExams = normalizeExamPreferences(localStorage.getItem('missionExam')); }
+    localExams = normalizeExamPreferences(localExams);
+    if (localExams.length && JSON.stringify(current.me?.examPreferences || []) !== JSON.stringify(localExams)) {
+      const result = await api('/me', {ctx: current, auth: true, method: 'PUT', json: {examPreferences: localExams}});
+      if (current.current()) current.me.examPreferences = result?.examPreferences || localExams;
     }
   } catch (error) {
     if (current.current()) current.error = error.message;
@@ -179,14 +183,11 @@ function showProfile(ctx) {
   }
   const input = el('input', {required: '', autocomplete: 'name', maxlength: '100'});
   input.value = session.me.name || '';
-  const exam = el('select', {required: ''},
-    el('option', {value: ''}, 'Choose your target exam'),
-    ['UPSC Civil Services', 'SSC CGL', 'Railway Exams', 'Banking Exams', 'State PSC', 'Police / Defence', 'Other Government Exams']
-      .map(value => el('option', {value}, value)));
-  exam.value = session.me.examPreference || '';
+  const exams = examPreferenceField(session.me.examPreferences || session.me.examPreference);
   const save = button('Save Profile', null, 'submit');
   const cancel = button('Cancel', 'secondary');
-  const form = el('form', {}, field('Display Name', input), field('Target Exam', exam),
+  const form = el('form', {}, field('Display Name', input), field('Target Exams', exams.node,
+    'Choose one or multiple exams to personalize your preparation.'),
     el('div', {class: 'actions'}, save, cancel), feedback);
   const showSavedName = () => {
     const edit = button('', 'icon-button secondary');
@@ -204,21 +205,25 @@ function showProfile(ctx) {
       el('div', {class: 'profile-identity'}, el('div', {class: 'profile-name-row'},
         el('h3', {}, session.me.name || 'Student')),
         el('p', {class: 'muted'}, `Mobile: ${phone || 'Unavailable'}`),
-        el('p', {class: 'profile-exam'}, session.me.examPreference || 'Choose your target exam')));
+        el('p', {class: 'profile-exam'}, normalizeExamPreferences(session.me.examPreferences || session.me.examPreference)
+          .join(' · ') || 'Choose your target exams')));
   };
   cancel.addEventListener('click', () => {
     input.value = session.me.name || '';
-    exam.value = session.me.examPreference || '';
+    exams.set(session.me.examPreferences || session.me.examPreference);
     accountEditor.hidden = true;
     accountSummary.querySelector('.icon-button')?.removeAttribute('hidden');
   });
   bindForm(form, save, feedback, async () => {
     const name = textValue(input, 'Display name');
+    const selectedExams = exams.value();
+    if (!selectedExams.length) throw new Error('Choose at least one target exam.');
     const result = await api('/me', {ctx, auth: true, method: 'PUT',
-      json: {name, examPreference: exam.value}});
+      json: {name, examPreferences: selectedExams}});
     session.me.name = typeof result?.name === 'string' ? result.name : name;
-    session.me.examPreference = typeof result?.examPreference === 'string' ? result.examPreference : exam.value;
-    localStorage.setItem('missionExam', session.me.examPreference);
+    session.me.examPreferences = Array.isArray(result?.examPreferences) ? result.examPreferences : selectedExams;
+    localStorage.setItem('missionExams', JSON.stringify(session.me.examPreferences));
+    localStorage.removeItem('missionExam');
     say(feedback, 'Profile saved.');
     showSavedName();
     accountEditor.hidden = true;

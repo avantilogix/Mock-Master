@@ -154,6 +154,12 @@ test('admin approval grants only the confirmed student access to their course, t
   assert.equal(result.total, 1);
   assert.equal(result.correct, 1);
   assert.equal(result.unanswered, 0);
+  const resultPdf = await request(`/attempts/${result.attemptId}/result.pdf`, 'buyer');
+  assert.equal(resultPdf.headers.get('content-type'), 'application/pdf');
+  assert.equal((await request(`/attempts/${result.attemptId}/result.pdf`, 'other')).status, 404);
+  const receiptPdf = await request(`${path}/receipt.pdf`, 'buyer');
+  assert.equal(receiptPdf.headers.get('content-type'), 'application/pdf');
+  assert.equal(Buffer.from(await receiptPdf.arrayBuffer()).subarray(0, 4).toString(), '%PDF');
   const progress = await (await request('/progress', 'buyer')).json();
   assert.deepEqual(progress.summary, { attempts: 1, questions: 1, correct: 1, accuracy: 100, best: 100, courses: 1 });
   assert.equal(progress.attempts[0].course, id);
@@ -453,6 +459,18 @@ test('configured phone numbers retain admin access across Firebase UID changes',
   });
   assert.equal(response.status, 200);
   assert.equal((await response.json()).admin, true);
+});
+
+test('profile stores and returns multiple validated target exams', async t => {
+  const users = new Map([['student', {uid: 'student', phone: '+919000000081'}]]);
+  const {server, request} = jsonServer(t, users);
+  await once(server, 'listening');
+  const selected = ['CCE', 'TET 1', 'PSI - Constable'];
+  const saved = await request('/me', 'student', 'PUT', {name: 'Asha', examPreferences: selected});
+  assert.equal(saved.status, 200);
+  assert.deepEqual(saved.body.examPreferences, selected);
+  assert.deepEqual((await request('/me', 'student')).body.examPreferences, selected);
+  assert.equal((await request('/me', 'student', 'PUT', {examPreferences: ['Invalid Exam']})).status, 422);
 });
 
 test('live leaderboard is private, rank ordered, and locked until expiry', async t => {

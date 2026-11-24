@@ -68,6 +68,8 @@ function types({rupeeInput, toPaise, questionData, priceHint, courses}) {
       details: item => [plural(item.questions.length, 'question'), plural(item.attempts, 'student attempt')],
       edit(item) {
         const title = input(item.title, 120);
+        const download = el('input', {type: 'checkbox'});
+        download.checked = Boolean(item.questionPaperDownload);
         const questions = rule(area(JSON.stringify(item.questions, null, 2), 200000, 10), value => {
           try { questionData(value); return ''; } catch (error) { return error.message; }
         });
@@ -76,7 +78,8 @@ function types({rupeeInput, toPaise, questionData, priceHint, courses}) {
         return {
           fields: [field('Test Title', title), field('Questions (JSON)', questions,
             'Each question needs a prompt, at least two options, and a zero-based answer.'),
-          item.live ? el('label', {class: 'choice'}, download, 'Enable Question Paper Download after first completed attempt') : null],
+          ...(item.live ? [el('label', {class: 'choice'}, download,
+            'Enable Question Paper Download after first completed attempt')] : [])],
           values: () => ({title: textValue(title, 'Test title'), questions: questionData(questions.value),
             questionPaperDownload: item.live && download.checked}),
         };

@@ -324,6 +324,16 @@ export function showCourse(main, ctx, session, action) {
 function showMaterials(access, ctx, path, id) {
   loadInto(access, ctx, async () => {
     const {tests, books, videos = [], messages} = await api(path, {ctx, auth: true});
+    const receipt = button('Download Purchase Receipt', 'secondary');
+    const receiptFeedback = status();
+    receipt.addEventListener('click', () => run(receipt, receiptFeedback, async () => {
+      const blob = await api(`${path}/receipt.pdf`, {ctx, auth: true, blob: true});
+      const url = URL.createObjectURL(blob);
+      const anchor = el('a', {href: url, download: 'Mission-Selection-course-receipt.pdf'});
+      document.body.append(anchor); anchor.click(); anchor.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      say(receiptFeedback, 'Receipt downloaded.');
+    }, 'Preparing receipt…'));
     const messageList = el('div');
     const refresh = items => messageList.replaceChildren(entries(items,
       'There are no messages yet. Start the discussion with a question or a study tip.', entry => [
@@ -346,7 +356,8 @@ function showMaterials(access, ctx, path, id) {
         say(feedback, 'Message posted. Reopen this course to refresh the discussion.', true);
       }
     }, 'Posting message…');
-    access.replaceChildren(panel('Practice & Live Tests', entries(tests, 'No practice tests have been published for this course yet.', test =>
+    access.replaceChildren(panel('Course Documents', el('div', {class: 'actions'}, receipt), receiptFeedback),
+    panel('Practice & Live Tests', entries(tests, 'No practice tests have been published for this course yet.', test =>
       el('div', {class: 'test-series-row'},
         el('div', {}, link(test.title, `#test/${idPart(id)}/${idPart(test.id)}`, 'material-link'),
           test.live ? el('span', {class: 'badge live-badge'},

@@ -1,4 +1,5 @@
 import {bindForm, button, el, field, heading, rule, say, status} from './ui.js';
+import {examPreferenceField} from './exam-preferences.js';
 
 function authError(error) {
   const messages = {
@@ -58,12 +59,11 @@ export function showSignIn(main, ctx, firebase, startAuth, initState) {
     const digits = phone.value.replace(/\D/g, '').slice(0, 10);
     phone.value = digits.length > 5 ? `${digits.slice(0, 5)} ${digits.slice(5)}` : digits;
   });
-  const exam = el('select', {required: ''},
-    el('option', {value: ''}, 'Choose Your Target Exam'),
-    ['UPSC Civil Services', 'SSC CGL', 'Railway Exams', 'Banking Exams', 'State PSC', 'Police / Defence', 'Other Government Exams']
-      .map(value => el('option', {value}, value)));
-  exam.value = localStorage.getItem('missionExam') || '';
-  exam.addEventListener('change', () => localStorage.setItem('missionExam', exam.value));
+  let savedExams = [];
+  try { savedExams = JSON.parse(localStorage.getItem('missionExams') || '[]'); }
+  catch { savedExams = localStorage.getItem('missionExam') || ''; }
+  const exams = examPreferenceField(savedExams);
+  exams.node.addEventListener('change', () => localStorage.setItem('missionExams', JSON.stringify(exams.value())));
   const captcha = el('div', {id: 'captcha'});
   let verifier;
   const clearVerifier = () => {
@@ -78,8 +78,8 @@ export function showSignIn(main, ctx, firebase, startAuth, initState) {
     const submit = button('Send OTP', null, 'submit');
     const phoneControl = el('div', {class: 'phone-control'},
       el('span', {class: 'country-prefix', 'aria-hidden': 'true'}, '+91'), phone);
-    const form = el('form', {}, field('Exam You Are Preparing For', exam,
-      'We use this to prioritize relevant courses and content.'),
+    const form = el('form', {}, field('Exams You Are Preparing For', exams.node,
+      'Select one or multiple exams. You can change these later from Profile.'),
       field('Mobile Number', phoneControl, 'Enter your 10-digit Indian mobile number. Standard SMS rates may apply.'),
       captcha, submit, feedback);
     if (auth.dummy) form.prepend(el('p', {class: 'dummy-login-note'},
@@ -87,6 +87,7 @@ export function showSignIn(main, ctx, firebase, startAuth, initState) {
     section.replaceChildren(form);
     if (focus) phone.focus();
     bindForm(form, submit, feedback, async () => {
+      if (!exams.value().length) throw new Error('Choose at least one exam to continue.');
       const localNumber = phone.value.replace(/\D/g, '');
       if (!/^[6-9]\d{9}$/.test(localNumber)) throw new Error('Enter a 10-digit Indian mobile number starting with 6, 7, 8, or 9.');
       const number = `+91${localNumber}`;

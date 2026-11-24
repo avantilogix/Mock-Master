@@ -1,5 +1,5 @@
 import {api} from './services.js';
-import {publishedManager, weekdays} from './admin-manage.js?v=ist-payment-fixes-final';
+import {publishedManager, weekdays} from './admin-manage.js?v=test-editor-fix';
 import {adminContentForm} from './reports.js';
 import {coverPicker} from './publishing-media.js';
 import {bindForm, button, el, entries, field, fieldError, formatDate, heading, idPart, loadInto, panel, rule, run, say, status, textValue} from './ui.js';

@@ -1,5 +1,5 @@
 import {api} from './services.js';
-import {bindForm, button, el, entries, field, heading, link, loadInto, panel, say, status, textValue} from './ui.js';
+import {bindForm, button, el, entries, field, heading, link, loadInto, panel, run, say, status, textValue} from './ui.js';
 
 export const contentKinds = {
   'free-tests': {title: 'Free Tests', icon: '✓', description: 'Try selected practice resources without purchasing a mission.'},
@@ -65,11 +65,26 @@ export function showProgress(main, ctx, action) {
           el('div', {}, el('strong', {}, attempt.title), el('p', {class: 'muted'}, attempt.courseTitle),
             el('small', {class: 'muted'}, new Date(attempt.createdAt).toLocaleString('en-IN'))),
           el('div', {}, el('div', {class: 'attempt-score'}, `${attempt.score}/${attempt.total}`),
-            el('small', {class: 'attempt-percent'}, `${percent(attempt)}%`)))));
+            el('small', {class: 'attempt-percent'}, `${percent(attempt)}%`),
+            resultDownloadButton(ctx, attempt)))));
     };
     filter.addEventListener('change', () => render(filter.value));
     render('');
   });
+}
+
+function resultDownloadButton(ctx, attempt) {
+  const control = button('Download Result', 'secondary');
+  const feedback = status();
+  control.addEventListener('click', () => run(control, feedback, async () => {
+    const blob = await api(`/attempts/${attempt.id}/result.pdf`, {ctx, auth: true, blob: true});
+    const url = URL.createObjectURL(blob);
+    const anchor = el('a', {href: url, download: `${attempt.title}-result.pdf`});
+    document.body.append(anchor); anchor.click(); anchor.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    say(feedback, 'Result PDF downloaded.');
+  }, 'Preparing result…'));
+  return el('div', {class: 'attempt-download'}, control, feedback);
 }
 
 export function showNotifications(main, ctx, action) {
