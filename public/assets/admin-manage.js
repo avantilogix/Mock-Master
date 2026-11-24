@@ -1,7 +1,8 @@
 import {api} from './services.js';
 import {contentKinds} from './reports.js?v=current-affairs-media';
 import {coverPicker} from './publishing-media.js';
-import {bindForm, button, confirmDelete, el, field, formatDate, idPart, loadInto, rule, run, say, status, textValue} from './ui.js';
+import {subjectQuestionManager} from './question-sections.js?v=sectionwise-test-ui';
+import {bindForm, button, confirmDelete, el, field, formatDate, icon, idPart, loadInto, rule, run, say, status, textValue} from './ui.js';
 
 const rupees = paise => new Intl.NumberFormat('en-IN', {style: 'currency', currency: 'INR'}).format(paise / 100);
 const plural = (count, word) => `${count} ${word}${count === 1 ? '' : 's'}`;
@@ -63,12 +64,24 @@ function types({ctx, rupeeInput, toPaise, questionData, priceHint, courses}) {
     },
     tests: {
       label: 'Tests', noun: 'test', course: true, empty: 'No tests published yet.',
-      details: item => [plural(item.questions.length, 'question'), plural(item.attempts, 'student attempt')],
+      details: item => [
+        item.live ? 'Live test' : 'Mock test',
+        ...[...item.questions.reduce((counts, question) => {
+          const section = question.section || 'General';
+          counts.set(section, (counts.get(section) || 0) + 1);
+          return counts;
+        }, new Map())].map(([section, count]) => `${section}: ${plural(count, 'question')}`),
+        plural(item.attempts, 'student attempt'),
+      ],
       edit(item) {
         const title = input(item.title, 120);
         const course = el('select', {required: ''},
           courses().map(entry => el('option', {value: entry.id}, entry.title)));
         course.value = item.course || '';
+        const testType = el('select', {required: ''},
+          el('option', {value: 'mock'}, 'Mock Test — Unlimited Attempts'),
+          el('option', {value: 'live'}, 'Live Test — Scheduled Window'));
+        testType.value = item.live ? 'live' : 'mock';
         const duration = el('input', {type: 'number', min: '10', max: '300', step: '1',
           required: '', value: String(item.durationMinutes || 90)});
         const marks = el('input', {type: 'number', min: '0.25', max: '100', step: '0.25',
@@ -81,10 +94,17 @@ function types({ctx, rupeeInput, toPaise, questionData, priceHint, courses}) {
           new Date(Date.parse(item.expiresAt) + 330 * 60_000).toISOString().slice(0,16) : ''});
         const attempts = el('input', {type: 'number', min: '1', max: '100', step: '1',
           value: String(item.attemptsLimit || 2)});
-        if (item.live) startsAt.required = expiresAt.required = attempts.required = true;
-        const questionFile = el('input', {type: 'file', accept: '.pdf,.docx,.txt'});
-        const importStatus = status();
-        const importButton = button('Import Question File', 'secondary');
+        const liveFields = el('div', {class: 'live-test-fields', ...(!item.live ? {hidden: ''} : {})},
+          field('Live Start Date and Time (IST)', startsAt),
+          field('Attempts Allowed Until Expiry', attempts),
+          field('Live Window Expiry Date and Time (IST)', expiresAt));
+        const updateTestType = () => {
+          const isLive = testType.value === 'live';
+          liveFields.hidden = !isLive;
+          startsAt.required = expiresAt.required = attempts.required = isLive;
+        };
+        testType.addEventListener('change', updateTestType);
+        updateTestType();
         const download = el('input', {type: 'checkbox'});
         download.checked = Boolean(item.questionPaperDownload);
         const questions = rule(area(JSON.stringify(item.questions, null, 2), 200000, 10), value => {
@@ -92,23 +112,16 @@ function types({ctx, rupeeInput, toPaise, questionData, priceHint, courses}) {
         });
         questions.classList.add('json');
         questions.spellcheck = false;
-        importButton.addEventListener('click', () => run(importButton, importStatus, async () => {
-          const file = questionFile.files[0];
-          if (!file) throw new Error('Choose a PDF, DOCX, or TXT file.');
-          const format = file.name.split('.').pop().toLowerCase();
-          const result = await api(`/admin/import?format=${format}`, {ctx, auth: true, binary: file});
-          if (!Array.isArray(result?.questions) || !result.questions.length) throw new Error('No questions were imported.');
-          questions.value = JSON.stringify(result.questions, null, 2);
-          say(importStatus, `Imported ${result.questions.length} questions.`);
-        }, 'Importing questions…'));
+        const subjectManager = subjectQuestionManager(questions, (file, format) =>
+          api(`/admin/import?format=${format}`, {ctx, auth: true, method: 'POST', binary: file}));
         return {
           fields: [field('Course', course), field('Test Title', title),
+            field('Test Type', testType,
+              'Mock tests allow unlimited attempts. Live tests use a scheduled window and attempt limit.'),
+            liveFields,
             field('Duration (minutes)', duration), field('Marks Per Correct Answer', marks),
             field('Negative Mark Per Wrong Answer', negative),
-            ...(item.live ? [field('Live Start Date and Time (IST)', startsAt),
-              field('Live Expiry Date and Time (IST)', expiresAt),
-              field('Attempts Allowed Until Expiry', attempts)] : []),
-            field('Replace Questions from PDF/DOCX/TXT', questionFile), importButton, importStatus,
+            subjectManager.node,
             field('Questions (JSON)', questions,
             'Each question needs a prompt, at least two options, and a zero-based answer.'),
           el('label', {class: 'choice'}, download,
@@ -116,9 +129,10 @@ function types({ctx, rupeeInput, toPaise, questionData, priceHint, courses}) {
           values: () => ({course: course.value, title: textValue(title, 'Test title'),
             questions: questionData(questions.value), durationMinutes: duration.valueAsNumber,
             marksPerQuestion: marks.valueAsNumber, negativeMark: negative.valueAsNumber,
-            startsAt: item.live ? startsAt.value : undefined,
-            expiresAt: item.live ? expiresAt.value : undefined,
-            attemptsLimit: item.live ? attempts.valueAsNumber : undefined,
+            live: testType.value === 'live',
+            startsAt: testType.value === 'live' ? startsAt.value : undefined,
+            expiresAt: testType.value === 'live' ? expiresAt.value : undefined,
+            attemptsLimit: testType.value === 'live' ? attempts.valueAsNumber : 0,
             questionPaperDownload: download.checked}),
         };
       },
@@ -321,18 +335,27 @@ export function publishedManager({ctx, onChange, ...helpers}) {
         await reload();
         onChange?.(key);
       }, {label: removal.label || 'Delete', question: removal.question});
-    const article = el('article', {class: 'manage-item'},
+    const isTest = active === 'tests';
+    const manageActions = el('div', {class: 'actions manage-actions'}, edit,
+      isTest && removal.blocked ? null : remove);
+    const article = el('article', {class: `manage-item${isTest ? ' manage-test-item' : ''}`},
       el('div', {class: 'manage-main'},
         el('div', {class: 'manage-title'}, el('h3', {}, item.title),
-          item.courseTitle ? el('span', {class: 'badge'}, item.courseTitle) : null),
-        el('p', {class: 'manage-date'}, el('span', {class: 'manage-date-label'}, 'Published'), ' ',
+          item.courseTitle ? el('span', {class: 'badge'}, item.courseTitle) : null,
+          isTest ? el('span', {class: `badge test-mode-badge${item.live ? ' live' : ''}`},
+            icon('test', 'line-icon'), item.live ? 'Live Test' : 'Mock Test') : null),
+        el('p', {class: 'manage-date'}, isTest ? icon('calendar', 'line-icon') : null,
+          el('span', {class: 'manage-date-label'}, 'Published'), ' ',
           el('time', {datetime: (type.date || (row => row.createdAt))(item) || ''}, formatDate((type.date || (row => row.createdAt))(item)))),
-        el('ul', {class: 'manage-details'}, type.details(item).map(detail => el('li', {}, detail))),
+        el('ul', {class: 'manage-details'}, type.details(item).map((detail, index) => el('li', {},
+          isTest ? icon(index === 0 ? 'test' : 'profile', 'line-icon') : null, detail))),
         type.text?.(item) ? el('p', {class: 'manage-text muted'}, type.text(item)) : null),
-      el('div', {class: 'actions manage-actions'}, edit, remove), rowFeedback);
+      manageActions, isTest && removal.blocked ? remove : null, rowFeedback);
     if (active === 'tests') {
       const results = button('View Results', 'secondary');
       const pdf = button('Export PDF', 'secondary');
+      results.prepend(icon('progress', 'line-icon'));
+      pdf.prepend(icon('download', 'line-icon'));
       results.addEventListener('click', () => run(results, rowFeedback, async () => {
         const result = await api(`/admin/tests/${idPart(item.id)}/results`, {ctx, auth: true});
         const summary = el('div', {class: 'result-table'}, el('h4', {}, `${result.results.length} submissions`),

@@ -1,6 +1,6 @@
 import {coverGallery} from './publishing-media.js';
 import {api} from './services.js';
-import {button, el, empty, heading, idPart, link, loadInto, run, say, status} from './ui.js';
+import {button, el, empty, heading, icon, idPart, link, loadInto, run, say, status} from './ui.js';
 
 const protectedGet = (ctx, path, image = false) => api(path, {ctx, auth: true, image});
 
@@ -21,22 +21,35 @@ export function showTest(main, ctx, courseId, testId, phone) {
       Number.isInteger(session.answers?.[index]) ? session.answers[index] : null);
     const marked = new Set((session.marked || []).filter(index => Number.isInteger(index)));
     const sections = [...new Set(test.questions.map(question => question.section || 'General'))];
+    const subjectTabs = el('div', {
+      class: 'exam-subject-tabs', role: 'tablist', 'aria-label': 'Subject sections',
+    });
+    const marksPerQuestion = test.marksPerQuestion || 1;
+    const markText = value => `${value} ${Number(value) === 1 ? 'mark' : 'marks'}`;
+    const scoringInfo = el('div', {class: 'exam-scoring'},
+      el('span', {class: 'score-chip score-correct'},
+        el('span', {}, 'Correct answer'), el('strong', {}, `+${markText(marksPerQuestion)}`)),
+      test.negativeMark ?
+        el('span', {class: 'score-chip score-penalty'},
+          el('span', {}, 'Wrong answer'), el('strong', {}, `−${markText(test.negativeMark)}`)) :
+        el('span', {class: 'score-chip score-neutral'},
+          el('span', {}, 'Wrong answer'), el('strong', {}, 'No penalty')));
     let submitted = false;
     const questionArea = el('div', {class: 'exam-question'});
+    questionArea.id = 'exam-question-panel';
     const palette = el('div', {class: 'question-palette'});
+    const paletteHeading = el('h3', {}, 'Question Navigator');
     const counters = el('div', {class: 'exam-counters'});
     const timer = el('strong', {class: 'exam-timer', role: 'timer'});
     const feedback = status();
-    const previous = button('', 'secondary icon-button');
-    const next = button('', 'secondary icon-button');
-    previous.textContent = '‹';
-    next.textContent = '›';
+    const previous = button('← Previous', 'secondary exam-nav-button exam-prev-button');
+    const next = button('Next →', 'exam-nav-button exam-next-button');
     previous.setAttribute('aria-label', 'Previous question');
     previous.title = 'Previous question';
     next.setAttribute('aria-label', 'Next question');
     next.title = 'Next question';
-    const mark = button('Mark for Review', 'secondary');
-    const submit = button('Submit Exam');
+    const mark = button('Mark for Review', 'secondary exam-mark-button');
+    const submit = button('Submit Exam', 'exam-submit-button');
 
     const save = () => api(`${path}/progress`, {
       ctx, auth: true, method: 'PUT', json: {answers, marked: [...marked]},
@@ -46,35 +59,85 @@ export function showTest(main, ctx, courseId, testId, phone) {
       return marked.has(index) ? 'answered-marked' : 'answered';
     };
     const renderPalette = () => {
-      const answered = answers.filter(answer => answer !== null).length;
+      const activeSection = test.questions[current].section || 'General';
+      const sectionIndices = test.questions.reduce((indices, question, index) => {
+        if ((question.section || 'General') === activeSection) indices.push(index);
+        return indices;
+      }, []);
+      const answered = sectionIndices.filter(index => answers[index] !== null).length;
+      const markedInSection = sectionIndices.filter(index => marked.has(index)).length;
+      paletteHeading.textContent = `Question Navigator — ${activeSection}`;
       counters.replaceChildren(
-        el('span', {}, el('strong', {}, String(answered)), ' Answered'),
-        el('span', {}, el('strong', {}, String(marked.size)), ' Marked'),
-        el('span', {}, el('strong', {}, String(test.questions.length - answered)), ' Unanswered'));
-      palette.replaceChildren(...test.questions.map((question, index) => {
-        const tile = button(String(index + 1), `question-tile ${scoreState(index)}`);
-        tile.setAttribute('aria-label', `Question ${index + 1}, ${scoreState(index).replace('-', ' ')}`);
+        el('span', {class: 'counter-answered'}, el('strong', {}, String(answered)), ' Answered'),
+        el('span', {class: 'counter-marked'}, el('strong', {}, String(markedInSection)), ' Marked'),
+        el('span', {class: 'counter-unanswered'},
+          el('strong', {}, String(sectionIndices.length - answered)), ' Unanswered'));
+      palette.replaceChildren(...sectionIndices.map((index, sectionQuestion) => {
+        const questionNumber = test.questions[index].questionNumber ?? String(sectionQuestion + 1);
+        const tile = button(String(questionNumber), `question-tile ${scoreState(index)}`);
+        tile.setAttribute('aria-label',
+          `${activeSection} question ${questionNumber}, overall question ${index + 1}, ${scoreState(index).replace('-', ' ')}`);
+        tile.title = `${activeSection} question ${questionNumber} · Overall question ${index + 1}`;
+        if (index === current) tile.setAttribute('aria-current', 'step');
         tile.addEventListener('click', () => { current = index; renderQuestion(); });
         return tile;
       }));
     };
+    const renderSubjectTabs = () => {
+      const activeSection = test.questions[current].section || 'General';
+      subjectTabs.replaceChildren(...sections.map((section, index) => {
+        const tab = button('', 'exam-subject-tab');
+        const questionCount = test.questions.filter(question => (question.section || 'General') === section).length;
+        tab.setAttribute('role', 'tab');
+        tab.setAttribute('aria-selected', String(section === activeSection));
+        tab.setAttribute('aria-controls', questionArea.id);
+        tab.setAttribute('tabindex', section === activeSection ? '0' : '-1');
+        tab.replaceChildren(el('span', {}, section),
+          el('small', {}, `${questionCount} ${questionCount === 1 ? 'question' : 'questions'}`));
+        const selectSection = focusTab => {
+          current = test.questions.findIndex(question => (question.section || 'General') === section);
+          renderQuestion();
+          if (focusTab) subjectTabs.querySelectorAll('[role="tab"]')[index]?.focus();
+        };
+        tab.addEventListener('click', () => selectSection(false));
+        tab.addEventListener('keydown', event => {
+          let nextIndex = index;
+          if (event.key === 'ArrowRight') nextIndex = (index + 1) % sections.length;
+          else if (event.key === 'ArrowLeft') nextIndex = (index - 1 + sections.length) % sections.length;
+          else if (event.key === 'Home') nextIndex = 0;
+          else if (event.key === 'End') nextIndex = sections.length - 1;
+          else return;
+          event.preventDefault();
+          const nextSection = sections[nextIndex];
+          current = test.questions.findIndex(question => (question.section || 'General') === nextSection);
+          renderQuestion();
+          subjectTabs.querySelectorAll('[role="tab"]')[nextIndex]?.focus();
+        });
+        return tab;
+      }));
+    };
     const renderQuestion = () => {
       const question = test.questions[current];
-      const sectionIndex = sections.indexOf(question.section || 'General') + 1;
       questionArea.replaceChildren(
         el('div', {class: 'exam-question-head'},
-          el('span', {class: 'badge'}, `${question.section || 'General'} · ${sectionIndex}/${sections.length}`),
-          el('span', {class: 'muted'}, `Question ${current + 1} of ${test.questions.length}`)),
+          el('span', {class: 'badge'}, question.section || 'General'),
+          el('span', {class: 'muted'}, question.questionNumber === undefined ?
+            `Question ${current + 1} of ${test.questions.length}` :
+            `PDF question ${question.questionNumber} · ${current + 1} of ${test.questions.length}`)),
         el('h2', {}, question.prompt),
         ...question.options.map((option, index) => {
           const input = el('input', {type: 'radio', name: `question-${current}`, value: index});
           input.checked = answers[current] === index;
           input.addEventListener('change', () => { answers[current] = index; renderPalette(); save(); });
-          return el('label', {class: 'exam-option'}, input, el('span', {}, `${String.fromCharCode(65 + index)}. ${option}`));
+          return el('label', {class: 'exam-option'}, input,
+            el('span', {class: 'option-letter'}, String.fromCharCode(65 + index)),
+            el('span', {class: 'option-text'}, option));
         }));
       previous.disabled = current === 0;
       next.disabled = current === test.questions.length - 1;
       mark.textContent = marked.has(current) ? 'Unmark Review' : 'Mark for Review';
+      mark.classList.toggle('is-marked', marked.has(current));
+      renderSubjectTabs();
       renderPalette();
       questionArea.querySelector('input:checked, input')?.focus();
     };
@@ -94,22 +157,40 @@ export function showTest(main, ctx, courseId, testId, phone) {
       try {
         const result = await api(`${path}/submit`, {ctx, auth: true, method: 'POST', json: {answers}});
         const resultTitle = el('h2', {tabindex: '-1'}, 'Your Result');
+        const score = Number(result.score) || 0;
+        const maxMarks = Number(result.maxMarks || result.total) || 0;
+        const scoreProgress = maxMarks > 0 ? Math.max(0, Math.min(1, score / maxMarks)) : 0;
+        const scoreCircle = el('div', {
+          class: 'result-score',
+          role: 'img',
+          'aria-label': `Score ${score} out of ${maxMarks} marks`,
+        }, el('strong', {}, String(result.score)), el('span', {}, `/ ${maxMarks}`));
+        scoreCircle.style.setProperty('--score-progress', `${scoreProgress * 100}%`);
         const sectionResults = el('div', {class: 'section-results'},
           ...(result.sectionScores || []).map(section => el('article', {},
             el('strong', {}, section.section), el('span', {}, `${section.score}/${section.total}`),
-            el('small', {}, `${section.correct} correct · ${section.wrong} wrong · ${section.unanswered} unattempted`))));
-        const returnButton = button('Return to Course', 'secondary');
-        const resultButton = result.attemptId ? button('Download Result PDF', 'secondary') : null;
-        const paperButton = result.questionPaperDownload ? button('Download Question Paper', 'secondary') : null;
-        const resultActions = el('div', {class: 'actions'}, returnButton, resultButton, paperButton,
-          test.live ? link('View Leaderboard', `#leaderboard/${idPart(courseId)}/${idPart(testId)}`, 'button secondary') : null);
+            el('small', {}, `${section.correct} correct · ${section.wrong} incorrect · ${section.unanswered} unattempted`))));
+        const resultAction = (label, iconName, className, href) => {
+          const control = href ? link('', href, className) : button('', className);
+          control.replaceChildren(icon(iconName, 'line-icon'), el('span', {}, label));
+          return control;
+        };
+        const returnButton = resultAction('Return to Course', 'back', 'result-action-back');
+        const resultButton = result.attemptId ?
+          resultAction('Download Result PDF', 'download', 'secondary result-action-download') : null;
+        const paperButton = result.questionPaperDownload ?
+          resultAction('Download Question Paper', 'files', 'secondary result-action-paper') : null;
+        const leaderboardButton = test.live ?
+          resultAction('View Leaderboard', 'progress', 'button secondary result-action-leaderboard',
+            `#leaderboard/${idPart(courseId)}/${idPart(testId)}`) : null;
+        const resultActions = el('div', {class: 'result-actions'},
+          returnButton, resultButton, paperButton, leaderboardButton);
         content.replaceChildren(el('section', {class: 'exam-result'},
-          resultTitle, el('div', {class: 'result-score'}, el('strong', {}, `${result.score}`),
-            el('span', {}, ` / ${result.maxMarks || result.total}`)),
+          resultTitle, scoreCircle,
           el('div', {class: 'result-stats'},
-            el('span', {}, `Correct ${result.correct ?? result.score}`),
-            el('span', {}, `Wrong ${result.wrong ?? 0}`),
-            el('span', {}, `Unattempted ${result.unanswered ?? 0}`)),
+            el('span', {class: 'result-stat-correct'}, el('strong', {}, String(result.correct ?? result.score)), el('small', {}, 'Correct')),
+            el('span', {class: 'result-stat-incorrect'}, el('strong', {}, String(result.wrong ?? 0)), el('small', {}, 'Incorrect')),
+            el('span', {class: 'result-stat-unattempted'}, el('strong', {}, String(result.unanswered ?? 0)), el('small', {}, 'Unattempted'))),
           sectionResults,
           test.live && Date.now() < Date.parse(test.expiresAt) ?
             el('p', {class: 'leaderboard-locked'}, `Leaderboard unlocks ${new Date(test.expiresAt).toLocaleString('en-IN', {
@@ -159,13 +240,11 @@ export function showTest(main, ctx, courseId, testId, phone) {
     main.replaceChildren(back(), ...heading(test.title, test.live ?
       `Live attempt ${test.attempts + 1}${test.limited ? ` of ${test.attemptsLimit}` : ' · unlimited window'}` :
       'Practice attempt · unlimited'), content);
-    content.replaceChildren(el('div', {class: 'exam-topbar'},
-      el('span', {}, `${test.marksPerQuestion || 1} mark(s) per question${test.negativeMark ? ` · −${test.negativeMark} for wrong answer` : ''}`),
-      timer),
+    content.replaceChildren(subjectTabs, el('div', {class: 'exam-topbar'},
+      scoringInfo, timer),
       el('div', {class: 'exam-layout'}, questionArea,
-        el('aside', {class: 'exam-sidebar'}, el('h3', {}, 'Question Navigator'), counters, palette,
-          el('div', {class: 'palette-legend'}, el('span', {}, 'Answered'), el('span', {}, 'Marked'), el('span', {}, 'Unanswered')))),
-      el('div', {class: 'exam-actions'}, previous, mark, next, submit), feedback);
+        el('aside', {class: 'exam-sidebar'}, paletteHeading, counters, palette)),
+      el('div', {class: 'exam-actions'}, previous, next, mark, submit), feedback);
     renderQuestion();
   });
 }

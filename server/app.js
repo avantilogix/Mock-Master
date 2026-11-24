@@ -679,7 +679,10 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
       durationMinutes: row.duration_minutes || 90, attempts, attemptsLimit: row.live ? (row.attempts_limit || 2) : 0,
       limited: Boolean(limited), marksPerQuestion: row.marks_per_question || 1, negativeMark: row.negative_mark || 0, sections,
       questionPaperDownload: Boolean(row.question_paper_download), completedAttempt: attempts > 0,
-      questions: JSON.parse(row.questions).map(({ prompt, options, section }) => ({ prompt, options, section: section || 'General' })),
+      questions: JSON.parse(row.questions).map(({ prompt, options, section, questionNumber }) => ({
+        prompt, options, section: section || 'General',
+        ...(questionNumber === undefined ? {} : {questionNumber}),
+      })),
     });
   });
   api.post('/tests/:id/start', (req, res) => {
@@ -1339,6 +1342,7 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     const tests = all(`SELECT t.id, t.course, c.title AS courseTitle, t.title, t.questions, t.created_at AS createdAt,
       t.duration_minutes AS durationMinutes, t.marks_per_question AS marksPerQuestion, t.negative_mark AS negativeMark,
       (SELECT COUNT(*) FROM attempts a WHERE a.test=t.id) AS attempts, t.live,
+      t.starts_at AS startsAt, t.expires_at AS expiresAt, t.attempts_limit AS attemptsLimit,
       t.question_paper_download AS questionPaperDownload
       FROM tests t JOIN courses c ON c.id=t.course ORDER BY t.created_at DESC, t.rowid DESC`)
       .map(test => ({ ...test, questions: JSON.parse(test.questions) }));
@@ -1381,6 +1385,7 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     tests(id, body) {
       found('tests', id, 'Test');
       const row = found('tests', id, 'Test');
+      if (body.live !== undefined && typeof body.live !== 'boolean') fail(422, 'Choose a valid test type.');
       if (typeof body.questionPaperDownload !== 'boolean') fail(422, 'Choose a valid question paper download option.');
       const selectedCourse = course(body.course || row.course);
       if ((body.durationMinutes !== undefined && (!Number.isInteger(body.durationMinutes) || body.durationMinutes < 10 || body.durationMinutes > 300)) ||
@@ -1389,14 +1394,35 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
             body.negativeMark > (body.marksPerQuestion ?? row.marks_per_question)))) {
         fail(422, 'Enter valid duration and marking values.');
       }
-      run(`UPDATE tests SET course=?, title=?, questions=?, duration_minutes=?, marks_per_question=?,
+      const live = body.live === undefined ? Boolean(row.live) : body.live;
+      let startsAt = row.starts_at;
+      let expiresAt = row.expires_at;
+      let attemptsLimit = row.attempts_limit || 2;
+      if (!live) {
+        startsAt = '';
+        expiresAt = '';
+        attemptsLimit = 0;
+      } else {
+        if (body.live === true && (body.startsAt === undefined || body.expiresAt === undefined ||
+            body.attemptsLimit === undefined)) {
+          fail(422, 'Live tests need a start time, expiry time, and attempt limit.');
+        }
+        if (body.startsAt !== undefined) startsAt = istIso(body.startsAt, 'Live start time');
+        if (body.expiresAt !== undefined) expiresAt = istIso(body.expiresAt, 'Live expiry time');
+        if (body.attemptsLimit !== undefined) attemptsLimit = body.attemptsLimit;
+        if (!Number.isFinite(Date.parse(startsAt)) || !Number.isFinite(Date.parse(expiresAt)) ||
+            Date.parse(expiresAt) <= Date.parse(startsAt) ||
+            !Number.isInteger(attemptsLimit) || attemptsLimit < 1 || attemptsLimit > 100) {
+          fail(422, 'Live expiry must be after the start time, with 1–100 attempts allowed.');
+        }
+      }
+      run(`UPDATE tests SET course=?, title=?, questions=?, live=?, duration_minutes=?, marks_per_question=?,
         negative_mark=?, question_paper_download=?, starts_at=?, expires_at=?, attempts_limit=? WHERE id=?`,
       selectedCourse.id, text(body.title, 'Title', 120), JSON.stringify(validateQuestions(body.questions)),
+      live ? 1 : 0,
       body.durationMinutes ?? row.duration_minutes, body.marksPerQuestion ?? row.marks_per_question,
       body.negativeMark ?? row.negative_mark, body.questionPaperDownload ? 1 : 0,
-      row.live && body.startsAt !== undefined ? istIso(body.startsAt, 'Live start time') : row.starts_at,
-      row.live && body.expiresAt !== undefined ? istIso(body.expiresAt, 'Live expiry time') : row.expires_at,
-      row.live ? (body.attemptsLimit ?? row.attempts_limit) : 0, id);
+      startsAt, expiresAt, attemptsLimit, id);
     },
     books(id, body) {
       found('books', id, 'Study book');

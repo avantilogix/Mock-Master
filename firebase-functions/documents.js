@@ -134,14 +134,18 @@ export function validateQuestions(questions) {
   if (!Array.isArray(questions) || !questions.length || questions.length > 200 ||
       questions.some(q => !isText(q?.prompt, 2000) || !Array.isArray(q.options) ||
         q.options.length < 2 || q.options.length > 6 || q.options.some(o => !isText(o, 500)) ||
-        !Number.isInteger(q.answer) || q.answer < 0 || q.answer >= q.options.length)) {
+        !Number.isInteger(q.answer) || q.answer < 0 || q.answer >= q.options.length ||
+        (q.questionNumber !== undefined &&
+          !((typeof q.questionNumber === 'string' && /^\d{1,10}$/.test(q.questionNumber) && Number(q.questionNumber) > 0) ||
+            (Number.isSafeInteger(q.questionNumber) && q.questionNumber > 0))))) {
     fail(422, 'Provide 1–200 questions, each with 2–6 options and a valid answer index.');
   }
-  return questions.map(({ prompt, options, answer, section }) => ({
+  return questions.map(({ prompt, options, answer, section, questionNumber }) => ({
     prompt: prompt.trim(),
     options: options.map(o => o.trim()),
     answer,
     section: typeof section === 'string' && section.trim() ? section.trim().slice(0, 100) : 'General',
+    ...(questionNumber === undefined ? {} : {questionNumber: String(questionNumber)}),
   }));
 }
 
@@ -150,12 +154,12 @@ export function parseQuestions(text) {
   let current;
   const lines = text.split(/[\n\f]/).map(line => line.trim()).filter(Boolean);
   for (const line of lines) {
-    const prompt = line.match(/^(?:Q\s*)?\d+[.)](.+)$/i);
+    const prompt = line.match(/^(?:Q\s*)?(\d+)[.)](.+)$/i);
     const option = line.match(/^([A-F])[.)](.+)$/i);
     const answer = line.match(/^Answer:\s*([A-F])(?:[.)])?$/i);
     if (prompt) {
       if (current) fail(422, 'Each numbered question must end with an Answer: A–F line.');
-      current = { prompt: prompt[1], options: [] };
+      current = { questionNumber: prompt[1], prompt: prompt[2], options: [] };
     } else if (current && option) {
       if (option[1].toUpperCase().charCodeAt(0) - 65 !== current.options.length) {
         fail(422, 'Options must be labeled A, B, C and so on, in order.');

@@ -30,6 +30,7 @@ export function registerPublishedRoutes(api, { db, bucket, value, text, byNewest
         ...(body.expiresOn !== undefined ? { expiresOn: expiryInput(body.expiresOn) } : {}) };
     },
     tests: body => {
+      if (body.live !== undefined && typeof body.live !== 'boolean') fail(422, 'Choose a valid test type.');
       if (typeof body.questionPaperDownload !== 'boolean') fail(422, 'Choose a valid question paper download option.');
       if ((body.durationMinutes !== undefined && (!Number.isInteger(body.durationMinutes) || body.durationMinutes < 10 || body.durationMinutes > 300)) ||
           (body.marksPerQuestion !== undefined && (!Number.isFinite(body.marksPerQuestion) || body.marksPerQuestion <= 0 || body.marksPerQuestion > 100)) ||
@@ -43,6 +44,7 @@ export function registerPublishedRoutes(api, { db, bucket, value, text, byNewest
         ...(body.durationMinutes !== undefined ? {durationMinutes: body.durationMinutes} : {}),
         ...(body.marksPerQuestion !== undefined ? {marksPerQuestion: body.marksPerQuestion} : {}),
         ...(body.negativeMark !== undefined ? {negativeMark: body.negativeMark} : {}),
+        ...(body.live !== undefined ? {live: body.live} : {}),
         ...(body.startsAt !== undefined ? {startsAt: body.startsAt} : {}),
         ...(body.expiresAt !== undefined ? {expiresAt: body.expiresAt} : {}),
         ...(body.attemptsLimit !== undefined ? {attemptsLimit: body.attemptsLimit} : {})};
@@ -134,11 +136,26 @@ export function registerPublishedRoutes(api, { db, bucket, value, text, byNewest
       const existing = value(await tx.get(ref));
       if (!existing) fail(404, 'Published item not found.');
       if (type === 'resources') Object.assign(patch, editors.resources(req.body ?? {}, existing));
-      if (type === 'tests' && existing.live && patch.startsAt !== undefined) {
+      if (type === 'tests' && patch.live === false) {
+        Object.assign(patch, {startsAt: '', expiresAt: '', attemptsLimit: 0});
+      }
+      if (type === 'tests' && patch.live === true) {
+        if (patch.startsAt === undefined || patch.expiresAt === undefined || patch.attemptsLimit === undefined) {
+          fail(422, 'Live tests need a start time, expiry time, and attempt limit.');
+        }
         patch.startsAt = istIso(patch.startsAt, 'Live start time');
         patch.expiresAt = istIso(patch.expiresAt, 'Live expiry time');
-        if (!Number.isInteger(patch.attemptsLimit) || patch.attemptsLimit < 1 || patch.attemptsLimit > 100) {
-          fail(422, 'Attempt limit must be from 1–100.');
+        if (Date.parse(patch.expiresAt) <= Date.parse(patch.startsAt) ||
+            !Number.isInteger(patch.attemptsLimit) || patch.attemptsLimit < 1 || patch.attemptsLimit > 100) {
+          fail(422, 'Live expiry must be after the start time, with 1–100 attempts allowed.');
+        }
+      }
+      if (type === 'tests' && patch.live === undefined && existing.live && patch.startsAt !== undefined) {
+        patch.startsAt = istIso(patch.startsAt, 'Live start time');
+        patch.expiresAt = istIso(patch.expiresAt, 'Live expiry time');
+        if (Date.parse(patch.expiresAt) <= Date.parse(patch.startsAt) ||
+            !Number.isInteger(patch.attemptsLimit) || patch.attemptsLimit < 1 || patch.attemptsLimit > 100) {
+          fail(422, 'Live expiry must be after the start time, with 1–100 attempts allowed.');
         }
       }
       if (['videos', 'tests'].includes(type) && patch.course && !(await tx.get(collection('courses').doc(patch.course))).exists) {

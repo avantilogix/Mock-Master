@@ -12,6 +12,7 @@ import { importQuestions, pageCount, renderDemoPage, renderPage } from '../serve
 
 const source = '1. What is 2 + 2?\nA. 3\nB. 4\nAnswer: B';
 const questions = [{ prompt: 'What is 2 + 2?', options: ['3', '4'], answer: 1, section: 'General' }];
+const importedQuestions = [{...questions[0], questionNumber: '1'}];
 const has = command => {
   try { execFileSync('which', [command]); return true; } catch { return false; }
 };
@@ -35,7 +36,8 @@ function fixturePdf(mediaBox = '0 0 612 792') {
 }
 
 test('imports formatted text and rejects questions without a valid answer', async () => {
-  assert.deepEqual(await importQuestions(Buffer.from(source), 'txt'), questions);
+  assert.deepEqual(await importQuestions(Buffer.from(source), 'txt'), importedQuestions);
+  assert.equal((await importQuestions(Buffer.from(source.replace('1.', '23.')), 'txt'))[0].questionNumber, '23');
   await assert.rejects(importQuestions(Buffer.from(source.replace('Answer: B', 'Answer: F')), 'txt'), { status: 422 });
   await assert.rejects(importQuestions(Buffer.from('not a test'), 'txt'), { status: 422 });
 });
@@ -47,14 +49,14 @@ test('extracts Word paragraphs from a DOCX', { skip: !has('zip') || !has('unzip'
   const lines = source.split('\n').map(line => `<w:p><w:r><w:t>${line}</w:t></w:r></w:p>`);
   writeFileSync(join(path, 'word/document.xml'), `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${lines.join('')}</w:body></w:document>`);
   execFileSync('zip', ['-q', 'test.docx', 'word/document.xml'], { cwd: path });
-  assert.deepEqual(await importQuestions(readFileSync(join(path, 'test.docx')), 'docx'), questions);
+  assert.deepEqual(await importQuestions(readFileSync(join(path, 'test.docx')), 'docx'), importedQuestions);
 });
 
 test('extracts PDF questions and bakes a viewer-specific watermark into pages', {
   skip: !has('pdftotext') || !has('pdftoppm'),
 }, async () => {
   const pdf = fixturePdf();
-  assert.deepEqual(await importQuestions(pdf, 'pdf'), questions);
+  assert.deepEqual(await importQuestions(pdf, 'pdf'), importedQuestions);
   const [first, second] = await Promise.all([renderPage(pdf, 1, '+919000000001'), renderPage(pdf, 1, '+919000000002')]);
   assert.equal(first.subarray(1, 4).toString(), 'PNG');
   assert.notDeepEqual(first, second);
@@ -104,7 +106,9 @@ test('admin approval grants only the confirmed student access to their course, t
   const { id } = await created.json();
   const path = `/courses/${id}`;
   assert.deepEqual(await (await request('/courses')).json(), [{ id, ...course, downloadsEnabled: 0 }]);
-  const createdTest = await request(`/admin${path}/tests`, 'admin', 'POST', { title: 'Practice test', questions });
+  const numberedQuestions = [{...questions[0], questionNumber: '15'}];
+  const createdTest = await request(`/admin${path}/tests`, 'admin', 'POST',
+    { title: 'Practice test', questions: numberedQuestions });
   assert.equal(createdTest.status, 201);
   const testPath = `/tests/${(await createdTest.json()).id}`;
   const withPdf = true;
@@ -148,7 +152,7 @@ test('admin approval grants only the confirmed student access to their course, t
   assert.equal((await request(path, 'buyer')).status, 200);
   assert.equal((await request(testPath, 'other')).status, 403);
   assert.deepEqual((await (await request(testPath, 'buyer')).json()).questions,
-    [{ prompt: questions[0].prompt, options: questions[0].options, section: 'General' }]);
+    [{ prompt: questions[0].prompt, options: questions[0].options, section: 'General', questionNumber: '15' }]);
   assert.equal((await request(`${testPath}/start`, 'buyer', 'POST')).status, 201);
   const result = await (await request(`${testPath}/submit`, 'buyer', 'POST', { answers: [1] })).json();
   assert.equal(result.score, 1);
@@ -444,6 +448,20 @@ test('admins list published content with dates, edit it, and delete it safely', 
   assert.equal((await request(`/admin/published/courses/${id}`, 'student', 'PUT', course)).status, 403);
   assert.equal((await request(`/admin/published/courses/${id}`, 'admin', 'PUT', { ...course, title: 'Reasoning Pro' })).status, 204);
   assert.equal((await request(`/admin/published/tests/${testId}`, 'admin', 'PUT', { title: 'Mock 1', questions: [] })).status, 422);
+  const liveEdit = {title: 'Mock 1', questions, live: true, startsAt: '2099-01-01T10:00',
+    expiresAt: '2099-01-01T11:00', attemptsLimit: 3, questionPaperDownload: true};
+  assert.equal((await request(`/admin/published/tests/${testId}`, 'admin', 'PUT', liveEdit)).status, 204);
+  const liveTest = (await request('/admin/published', 'admin')).body.tests.find(item => item.id === testId);
+  assert.equal(liveTest.live, 1);
+  assert.equal(liveTest.attemptsLimit, 3);
+  assert.ok(Date.parse(liveTest.expiresAt) > Date.parse(liveTest.startsAt));
+  assert.equal((await request(`/admin/published/tests/${testId}`, 'admin', 'PUT',
+    {...liveEdit, live: false})).status, 204);
+  const mockTest = (await request('/admin/published', 'admin')).body.tests.find(item => item.id === testId);
+  assert.equal(mockTest.live, 0);
+  assert.equal(mockTest.startsAt, '');
+  assert.equal(mockTest.attemptsLimit, 0);
+  assert.equal(mockTest.questionPaperDownload, 1);
   assert.equal((await request('/admin/published/unknown/x', 'admin', 'DELETE')).status, 404);
 
   db.prepare('INSERT INTO orders (id, uid, course, amount) VALUES (?, ?, ?, ?)').run('order-1', 'admin', id, 50000);

@@ -129,7 +129,8 @@ export function subjectQuestionManager(questionsEditor, importFile) {
       subjects.splice(0, subjects.length);
       nextSubject = 1;
       addSubject('General');
-      updateQuestions([]);
+      questionsEditor.value = '';
+      questionsEditor.dispatchEvent(new Event('input', {bubbles: true}));
     },
   };
 }

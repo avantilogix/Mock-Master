@@ -879,8 +879,9 @@ function createApp() {
       negativeMark: item.negativeMark || 0,
       questionPaperDownload: Boolean(item.questionPaperDownload), completedAttempt: attempts > 0,
       sections,
-      questions: item.questions.map(({ prompt, options, section }) => ({
+      questions: item.questions.map(({ prompt, options, section, questionNumber }) => ({
         prompt, options, section: section || 'General',
+        ...(questionNumber === undefined ? {} : {questionNumber}),
       })),
     });
   });

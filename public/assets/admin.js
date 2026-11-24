@@ -1,8 +1,9 @@
 import {api} from './services.js';
-import {publishedManager, weekdays} from './admin-manage.js?v=manual-tests';
+import {publishedManager, weekdays} from './admin-manage.js?v=sectionwise-test-ui';
 import {adminContentForm} from './reports.js?v=current-affairs-media';
 import {coverPicker} from './publishing-media.js';
 import {manualQuestions} from './manual-questions.js';
+import {subjectQuestionManager} from './question-sections.js?v=sectionwise-test-ui';
 import {bindForm, button, el, entries, field, fieldError, formatDate, heading, icon, idPart, loadInto, panel, rule, run, say, status, textValue} from './ui.js';
 
 const pdfAccept = '.pdf,application/pdf';
@@ -45,13 +46,19 @@ function questionData(source) {
   try { data = JSON.parse(source); } catch { throw new Error('Questions must be valid JSON. Check commas, quotes, and brackets.'); }
   if (!Array.isArray(data) || !data.length) throw new Error('Add at least one question in a JSON array.');
   return data.map((item, index) => {
-    const {prompt, options, answer, section} = item || {};
+    const {prompt, options, answer, section, questionNumber} = item || {};
+    if (questionNumber !== undefined &&
+        !(typeof questionNumber === 'string' && /^\d{1,10}$/.test(questionNumber) && Number(questionNumber) > 0) &&
+        !(Number.isSafeInteger(questionNumber) && questionNumber > 0)) {
+      throw new Error(`Question ${index + 1} needs a positive source question number.`);
+    }
     if (typeof prompt !== 'string' || !prompt.trim() || !Array.isArray(options) || options.length < 2 ||
         options.some(value => typeof value !== 'string' || !value.trim()) ||
         !Number.isInteger(answer) || answer < 0 || answer >= options.length) {
       throw new Error(`Question ${index + 1} needs a prompt, at least two options, and a valid zero-based answer.`);
     }
     return {prompt: prompt.trim(), options: options.map(value => value.trim()), answer,
+      ...(questionNumber === undefined ? {} : {questionNumber: String(questionNumber)}),
       section: typeof section === 'string' && section.trim() ? section.trim() : 'General'};
   });
 }
@@ -501,9 +508,12 @@ export function showAdmin(main, ctx) {
     if (!Array.isArray(result?.questions) || !result.questions.length) throw new Error('No questions were found. Try a different file or enter questions manually.');
     if (editor.value !== original) throw new Error('The JSON draft changed during import. Import again when you are ready to replace it.');
     editor.value = JSON.stringify(result.questions, null, 2);
+    editor.dispatchEvent(new Event('input', {bubbles: true}));
     say(importStatus, `Imported ${result.questions.length} questions. Review and edit the JSON before publishing.`);
   }, 'Importing questions…');
 
+  const subjectManager = subjectQuestionManager(editor, (file, format) =>
+    post(`/admin/import?format=${format}`, {binary: file}));
   const [testCourse, testField] = courseField();
   const testTitle = el('input', {required: '', maxlength: '120'});
   rule(editor, value => {
@@ -537,6 +547,8 @@ export function showAdmin(main, ctx) {
     const isManual = creationMethod.value === 'manual';
     manual.node.hidden = manual.node.disabled = !isManual;
     jsonField.hidden = editor.disabled = isManual;
+    subjectManager.node.hidden = isManual;
+    subjectManager.node.querySelectorAll('input, button').forEach(control => { control.disabled = isManual; });
     importSection.hidden = isManual;
     importFile.disabled = importButton.disabled = isManual;
   };
@@ -549,7 +561,7 @@ export function showAdmin(main, ctx) {
     field('Marks Per Correct Answer', marksPerQuestion),
     field('Negative Mark Per Wrong Answer', negativeMark),
     el('label', {class: 'choice'}, questionPaperDownload, 'Enable Question Paper Download after first completed attempt'),
-    jsonField, manual.node);
+    subjectManager.node, jsonField, manual.node);
   const testForm = el('form', {}, testFields, publish, testStatus);
   bindForm(testForm, publish, testStatus, async () => {
     const questions = questionData(creationMethod.value === 'manual' ? JSON.stringify(manual.values()) : editor.value);
@@ -566,6 +578,7 @@ export function showAdmin(main, ctx) {
       }});
       testForm.reset();
       manual.reset();
+      subjectManager.reset();
       updateTestType();
       say(testStatus, 'Test published.');
     } finally {

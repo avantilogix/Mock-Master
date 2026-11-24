@@ -142,10 +142,11 @@ function chapterFolders(subjects, courseId) {
 
 export function showContentLibrary(main, ctx, me, kind, action) {
   const config = {
-    'test-series': { title: 'Test Series', icon: '✓', description: 'Choose a purchased mission and start a published mock test.', empty: 'Tests become available after you purchase a mission.', item: 'tests' },
+    'test-series': { title: 'Test Series', icon: 'test', description: 'Choose a purchased mission and start a published mock test.', empty: 'Tests become available after you purchase a mission.', item: 'tests' },
     'book-store': { title: 'Book Store', icon: '▤', description: 'Browse missions that include protected digital study books.', empty: 'No digital books are currently listed.', item: 'books' },
     'materials': { title: 'Study Materials', icon: '⌑', description: 'Open secure PDF books and chapter videos from your purchased missions.', empty: 'No purchased study materials yet.', item: 'books' },
   }[kind];
+  const libraryIcon = () => config.icon === 'test' ? icon('test', 'line-icon') : config.icon;
   main.append(...heading(config.title, config.description));
   const content = el('div');
   main.append(el('section', {class: 'library-panel'}, content));
@@ -165,7 +166,7 @@ export function showContentLibrary(main, ctx, me, kind, action) {
     const folders = await Promise.all(selected.map(async course => {
       if (kind === 'book-store' || !owns(me, course.id) || course.expired) {
         return el('article', {class: 'library-folder'},
-          el('span', {class: 'folder-icon', 'aria-hidden': 'true'}, config.icon),
+          el('span', {class: 'folder-icon', 'aria-hidden': 'true'}, libraryIcon()),
           el('div', {}, el('h2', {}, course.title), expiryLabel(course), el('p', {class: 'muted'}, course.description)),
           link(course.expired ? 'View Details' : owns(me, course.id) ? 'Open Mission' : `View at ${priceText(course.price)}`,
             `#course/${idPart(course.id)}`, 'button secondary'));
@@ -176,39 +177,44 @@ export function showContentLibrary(main, ctx, me, kind, action) {
         const chapterCount = [...subjects.values()].reduce((sum, chapters) => sum + chapters.size, 0);
         return el('article', {class: 'course-material'},
           el('div', {class: 'course-material-head'},
-            el('span', {class: 'folder-icon', 'aria-hidden': 'true'}, config.icon),
+            el('span', {class: 'folder-icon', 'aria-hidden': 'true'}, libraryIcon()),
             el('div', {}, el('h2', {}, course.title), el('p', {class: 'muted'},
               `${subjects.size} subjects · ${chapterCount} chapters`))),
           chapterFolders(subjects, course.id));
       }
       return el('article', {class: 'library-folder'},
-        el('span', {class: 'folder-icon', 'aria-hidden': 'true'}, config.icon),
+        el('span', {class: 'folder-icon', 'aria-hidden': 'true'}, libraryIcon()),
         el('div', {class: 'library-folder-content'},
           el('h2', {}, course.title),
-          entries(material[config.item], config.empty, item => el('div', {class: 'test-series-row'},
-           el('div', {}, el('strong', {}, item.title), item.live ? el('span', {class: 'badge live-badge'},
-             `Live · ${formatDate(item.startsAt)} IST · ${item.durationMinutes} min`) : null),
-           el('div', {class: 'actions test-row-actions'},
-             item.live && Date.parse(item.expiresAt) <= Date.now() ?
-               link('Leaderboard', `#leaderboard/${idPart(course.id)}/${idPart(item.id)}`, 'button secondary') : null,
-             item.questionPaperDownload && item.completedAttempt ?
-               questionPaperButton(ctx, item) : null,
-             iconStartTest(course.id, item.id))))));
+          entries(material[config.item], config.empty, item => {
+            const leaderboard = item.live && Date.parse(item.expiresAt) <= Date.now() ?
+              link('Leaderboard', `#leaderboard/${idPart(course.id)}/${idPart(item.id)}`,
+                'button secondary test-series-action test-series-leaderboard') : null;
+            leaderboard?.prepend(icon('leaderboard', 'line-icon'));
+            return el('div', {class: 'test-series-row'},
+              el('div', {}, el('strong', {}, item.title), item.live ? el('span', {class: 'badge live-badge'},
+                `Live · ${formatDate(item.startsAt)} IST · ${item.durationMinutes} min`) : null),
+              el('div', {class: 'actions test-row-actions'},
+                leaderboard,
+                item.questionPaperDownload && item.completedAttempt ?
+                  questionPaperButton(ctx, item) : null,
+                iconStartTest(course.id, item.id)));
+          })));
     }));
     content.replaceChildren(...folders);
   });
 }
 
 function iconStartTest(courseId, testId) {
-  const start = link('', `#test/${idPart(courseId)}/${idPart(testId)}`, 'icon-button secondary test-start-icon');
-  start.append(icon('play', 'line-icon'));
+  const start = link('Start test', `#test/${idPart(courseId)}/${idPart(testId)}`, 'button test-start-button');
+  start.append(icon('arrow-right', 'line-icon'));
   start.setAttribute('aria-label', 'Start test');
-  start.title = 'Start Test';
   return start;
 }
 
 function questionPaperButton(ctx, test) {
-  const control = button('Download Question Paper', 'secondary');
+  const control = button('Download Question Paper', 'secondary test-series-action test-series-paper');
+  control.prepend(icon('download', 'line-icon'));
   const feedback = status();
   control.addEventListener('click', () => run(control, feedback, async () => {
     const blob = await api(`/tests/${idPart(test.id)}/question-paper.pdf`, {ctx, auth: true, blob: true});

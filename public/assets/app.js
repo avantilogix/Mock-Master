@@ -1,8 +1,8 @@
-import {showAdmin} from './admin.js?v=manual-tests';
-import {showCatalog, showContentLibrary, showCourse, showDashboard, showMyCourses} from './course.js?v=manual-tests';
+import {showAdmin} from './admin.js?v=sectionwise-test-ui';
+import {showCatalog, showContentLibrary, showCourse, showDashboard, showMyCourses} from './course.js?v=mock-test-ui';
 import {api, firebaseAuth} from './services.js?v=ebook-store-final';
 import {showSignIn} from './signin.js?v=multi-exam-selection';
-import {showBook, showLeaderboard, showTest, showVideo} from './study.js?v=manual-tests';
+import {showBook, showLeaderboard, showTest, showVideo} from './study.js?v=sectionwise-test-ui';
 import {showLearningContent, showNotifications, showProgress, showResource} from './reports.js?v=current-affairs-media';
 import {showDownloads, showReferrals, showTimetable, socialFooter} from './features.js?v=stable-mobile-admin-downloads';
 import {showCourseGroups, showShareRate, showVideos} from './engagement.js?v=youtube-fullscreen';
