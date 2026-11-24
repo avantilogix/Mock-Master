@@ -322,7 +322,8 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     }
   }
   const admins = new Set(adminUids);
-  const adminMobiles = new Set(adminPhones);
+  const normalizePhone = value => String(value || '').replace(/\D/g, '').replace(/^91(?=\d{10}$)/, '');
+  const adminMobiles = new Set(adminPhones.map(normalizePhone));
   const linkSecret = randomBytes(32);
   const videoSignature = (id, uid, expires) => createHmac('sha256', linkSecret).update(`${id}|${uid}|${expires}`).digest('base64url');
   const videoPath = id => resolve(videoDir, id.replace(/[^A-Za-z0-9-]/g, ''));
@@ -349,7 +350,7 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
       WHERE students.phone != excluded.phone`, user.uid, user.phone);
     const student = one('SELECT disabled FROM students WHERE uid=?', user.uid);
     if (student?.disabled) fail(403, 'This account is disabled. Contact support to request reactivation.');
-    req.user = { ...user, admin: admins.has(user.uid) || adminMobiles.has(user.phone) };
+    req.user = { ...user, admin: admins.has(user.uid) || adminMobiles.has(normalizePhone(user.phone)) };
     next();
   };
   const admin = (req, res, next) => {

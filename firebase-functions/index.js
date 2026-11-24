@@ -23,6 +23,10 @@ const bucket = getStorage().bucket();
 const auth = getAuth();
 const adminUidsParameter = defineString('ADMIN_UIDS', { default: '' });
 const adminPhonesParameter = defineString('ADMIN_PHONES', { default: '' });
+const normalizedAdminPhones = new Set([
+  '9131463747', '9499772876', '7016660896', '9664651421',
+]);
+const normalizePhone = value => String(value || '').replace(/\D/g, '').replace(/^91(?=\d{10}$)/, '');
 const upiIdParameter = defineString('UPI_ID', { default: '' });
 const upiPayeeNameParameter = defineString('UPI_PAYEE_NAME', { default: '' });
 const firebaseProjectIdParameter = defineString('PUBLIC_PROJECT_ID', { default: '' });
@@ -351,9 +355,10 @@ function createApp() {
       fail(403, 'This account is disabled. Contact support to request reactivation.');
     }
     const admins = new Set(parameterValue(adminUidsParameter).split(',').map(uid => uid.trim()).filter(Boolean));
-    const adminPhones = new Set(parameterValue(adminPhonesParameter).split(',')
-      .map(phone => phone.trim()).filter(Boolean));
-    req.user = { uid: user.uid, phone: user.phone, admin: admins.has(user.uid) || adminPhones.has(user.phone) };
+    const configuredAdminPhones = parameterValue(adminPhonesParameter).split(',').map(normalizePhone);
+    const admin = admins.has(user.uid) || normalizedAdminPhones.has(normalizePhone(user.phone)) ||
+      configuredAdminPhones.includes(normalizePhone(user.phone));
+    req.user = { uid: user.uid, phone: user.phone, admin };
     next();
   };
   const admin = (req, _res, next) => {
