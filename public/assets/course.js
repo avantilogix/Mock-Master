@@ -79,8 +79,7 @@ export function showDashboard(main, ctx, me) {
         shortcut('calendar', 'Timetable', 'Plan your study week', '#timetable', 'blue'),
         shortcut('download', 'Downloads', 'Save approved content', '#downloads', 'purple'),
         shortcut('play', 'YouTube Videos', 'Watch focused lessons', '#videos', 'rose'),
-        shortcut('chat', 'Course Groups', 'Discuss with purchasers', '#groups', 'blue'),
-        shortcut('profile', me ? 'Profile' : 'Sign In', me ? 'Manage your account' : 'Use your mobile number', me ? '#profile' : '#signin', 'yellow'))),
+        shortcut('chat', 'Course Groups', 'Discuss with purchasers', '#groups', 'blue'))),
     el('section', {class: 'section'},
       el('div', {class: 'section-heading'}, el('div', {}, el('span', {class: 'section-kicker'}, 'Recommended for you'),
         el('h2', {}, me?.purchases?.length ? 'Continue Learning' : 'Popular Missions')),
@@ -191,15 +190,23 @@ export function showContentLibrary(main, ctx, me, kind, action) {
           entries(material[config.item], config.empty, item => el('div', {class: 'test-series-row'},
            el('div', {}, el('strong', {}, item.title), item.live ? el('span', {class: 'badge live-badge'},
              `Live · ${formatDate(item.startsAt)} IST · ${item.durationMinutes} min`) : null),
-           el('div', {class: 'actions'},
+           el('div', {class: 'actions test-row-actions'},
              item.live && Date.parse(item.expiresAt) <= Date.now() ?
                link('Leaderboard', `#leaderboard/${idPart(course.id)}/${idPart(item.id)}`, 'button secondary') : null,
              item.live && item.questionPaperDownload && item.completedAttempt ?
                questionPaperButton(ctx, item) : null,
-             link('Start Test', `#test/${idPart(course.id)}/${idPart(item.id)}`, 'button secondary'))))));
+             iconStartTest(course.id, item.id))))));
     }));
     content.replaceChildren(...folders);
   });
+}
+
+function iconStartTest(courseId, testId) {
+  const start = link('', `#test/${idPart(courseId)}/${idPart(testId)}`, 'icon-button secondary test-start-icon');
+  start.append(icon('play', 'line-icon'));
+  start.setAttribute('aria-label', 'Start test');
+  start.title = 'Start Test';
+  return start;
 }
 
 function questionPaperButton(ctx, test) {

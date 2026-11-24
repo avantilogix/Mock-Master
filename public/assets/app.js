@@ -1,12 +1,12 @@
-import {showAdmin} from './admin.js?v=stable-mobile-admin-downloads';
-import {showCatalog, showContentLibrary, showCourse, showDashboard, showMyCourses} from './course.js?v=stable-mobile-admin-downloads';
+import {showAdmin} from './admin.js?v=admin-kpi-dashboard';
+import {showCatalog, showContentLibrary, showCourse, showDashboard, showMyCourses} from './course.js?v=video-edit-actions';
 import {api, firebaseAuth} from './services.js?v=ebook-store-final';
 import {showSignIn} from './signin.js?v=multi-exam-selection';
 import {showBook, showLeaderboard, showTest, showVideo} from './study.js?v=result-receipt-documents';
-import {showLearningContent, showNotifications, showProgress} from './reports.js?v=stable-mobile-admin-downloads';
+import {showLearningContent, showNotifications, showProgress} from './reports.js?v=result-download-icon';
 import {showDownloads, showReferrals, showTimetable, socialFooter} from './features.js?v=stable-mobile-admin-downloads';
 import {showCourseGroups, showShareRate, showVideos} from './engagement.js?v=expiry-covers-1';
-import {showEbook, showEbookStore} from './ebooks.js?v=ist-payment-fixes-final';
+import {showEbook, showEbookStore} from './ebooks.js?v=ebook-payment-methods';
 import {examPreferenceField, normalizeExamPreferences} from './exam-preferences.js';
 import {bindForm, button, el, field, heading, icon, idPart, link, loadInto, panel, run, say, status, textValue} from './ui.js';
 

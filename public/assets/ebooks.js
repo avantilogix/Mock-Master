@@ -75,17 +75,35 @@ function paymentPanel(target, ctx, book, action) {
       say(feedback, 'Payment submitted for admin approval.');
       paymentPanel(target, ctx, book, action);
     }, 'Submitting payment…');
-    target.replaceChildren(el('section', {class: 'manual-payment'},
+    const methodButtons = el('div', {class: 'payment-methods', role: 'group', 'aria-label': 'Choose payment method'});
+    const methodPanel = el('div');
+    const methods = payment.method === 'both' ? ['upi', 'qr'] : [payment.method];
+    const renderMethod = method => {
+      methodButtons.querySelectorAll('button').forEach(button =>
+        button.setAttribute('aria-pressed', String(button.dataset.method === method)));
+      methodPanel.replaceChildren(method === 'upi' ?
+        el('div', {class: 'upi-details'}, el('span', {}, 'UPI ID'),
+          el('strong', {}, payment.upiId), el('small', {}, `Payee: ${payment.payeeName}`)) :
+        el('div', {class: 'qr-card'}, el('img', {src: payment.qr, alt: 'E-Book payment QR code'}),
+          el('strong', {}, payment.payeeName || 'Mission Selection'),
+          el('small', {}, payment.customQr ? 'Scan using any UPI application' : payment.upiId)));
+    };
+    methods.forEach(method => {
+      const control = button(method === 'upi' ? 'Pay by UPI ID' : 'Scan QR Code', 'secondary');
+      control.dataset.method = method;
+      control.addEventListener('click', () => renderMethod(method));
+      methodButtons.append(control);
+    });
+    target.replaceChildren(el('section', {class: 'manual-payment ebook-payment'},
       el('div', {class: 'payment-steps'}, el('span', {}, '1'),
         el('div', {}, el('h2', {}, `Pay ${priceText(amount)}`),
           el('p', {class: 'muted'}, `Send payment to ${payment.payeeName}.`))),
-      el('div', {class: 'qr-card'}, payment.method !== 'upi' ?
-        el('img', {src: payment.qr, alt: 'Payment QR code'}) : null,
-        payment.method !== 'qr' ? el('strong', {}, payment.upiId) : null),
+      el('div', {class: 'payment-choice'}, methodButtons, methodPanel),
       el('div', {class: 'payment-form-panel'}, el('span', {}, '2'),
         el('div', {}, el('h3', {}, 'Submit Payment Proof'), form)),
       order?.status === 'rejected' ? el('div', {class: 'rejection'},
         el('strong', {}, 'Payment Not Approved'), el('p', {}, order.reviewNote || 'Please submit correct payment details.')) : null));
+    renderMethod(methods[0]);
   });
 }
 

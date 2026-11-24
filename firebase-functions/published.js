@@ -49,8 +49,18 @@ export function registerPublishedRoutes(api, { db, bucket, value, text, byNewest
     },
     books: chapterFields,
     chapterVideos: chapterFields,
-    videos: body => ({ title: text(body.title, 'Title', 120), description: text(body.description, 'Description', 1000),
-      course: typeof body.course === 'string' ? body.course : '' }),
+    videos: body => {
+      let videoId = '';
+      try {
+        const parsed = new URL(body.url);
+        videoId = parsed.hostname === 'youtu.be' ? parsed.pathname.slice(1).split('/')[0] :
+          parsed.hostname.endsWith('youtube.com') ? parsed.searchParams.get('v') ||
+            parsed.pathname.split('/').filter(Boolean).at(-1) : '';
+      } catch { /* validated below */ }
+      if (!/^[A-Za-z0-9_-]{11}$/.test(videoId || '')) fail(422, 'Enter a valid YouTube video URL.');
+      return {title: text(body.title, 'Title', 120), description: text(body.description, 'Description', 1000),
+        course: typeof body.course === 'string' ? body.course : '', videoId};
+    },
     resources(body) {
       const { publishedAt } = body;
       if (typeof publishedAt !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(publishedAt) ||

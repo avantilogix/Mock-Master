@@ -244,7 +244,16 @@ body { background: linear-gradient(180deg, #edf6ff 0, var(--bg) 17rem, var(--bg)
   color: white;
   background: linear-gradient(145deg, #197de0, #35a9ea);
 }
-.admin-stat { background: linear-gradient(145deg, white, #eef7ff); }
+.admin-analytics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .7rem; margin-bottom: 1rem; }
+.admin-stat { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: .7rem; padding: .9rem; background: linear-gradient(145deg, white, #eef7ff); }
+.admin-stat-icon { display: grid; place-items: center; width: 2.6rem; height: 2.6rem; border-radius: .8rem; color: white; background: linear-gradient(145deg, #1779df, #2fa9eb); }
+.admin-stat-icon svg { width: 1.25rem; height: 1.25rem; }
+.admin-stat-copy { display: grid; gap: .05rem; min-width: 0; }
+.admin-stat-copy > span { color: var(--muted); font-size: .72rem; font-weight: 750; }
+.admin-stat-copy > strong { color: var(--accent-dark); font-size: 1.5rem; line-height: 1.1; overflow-wrap: anywhere; }
+.admin-stat-copy small { color: var(--muted); font-size: .64rem; line-height: 1.25; }
+.admin-stat.stat-share { grid-column: span 1; background: linear-gradient(145deg, #effff8, #e4f8f0); }
+.admin-stat.stat-share .admin-stat-icon { background: linear-gradient(145deg, #12865c, #28ad7a); }
 .admin-stat strong, .result-value { color: var(--accent-dark); }
 .manage-item { border-left: 4px solid var(--accent); }
 .admin-section-toolbar h2 { color: var(--ink); }
@@ -270,11 +279,24 @@ body { background: linear-gradient(180deg, #edf6ff 0, var(--bg) 17rem, var(--bg)
 .test-series-row { display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: center; gap: .7rem; }
 .test-series-row .actions { justify-content: end; max-width: 12rem; }
 .test-series-row .button, .test-series-row button { min-height: 2.7rem; padding: .55rem .9rem; white-space: normal; text-align: center; }
+.test-row-actions { flex-wrap: wrap; }
+.test-start-icon { display: inline-grid; place-items: center; width: 2.85rem; min-width: 2.85rem; height: 2.85rem; padding: 0; border-radius: .85rem; }
+.test-start-icon svg { width: 1.2rem; height: 1.2rem; }
 .download-row { grid-template-columns: minmax(0,1fr) auto; }
 .download-row > button { width: auto; white-space: nowrap; }
 .notification-list { display: grid; gap: .55rem; padding: .8rem; }
 .notification-card { padding: .85rem; border: 1px solid var(--line); border-radius: .9rem; background: white; }
+.admin-area-grid { display: grid; grid-template-columns: 1fr; gap: 1rem; }
+.admin-area-group { display: grid; gap: .55rem; }
+.admin-area-group h2 { margin: 0; padding-left: .2rem; color: var(--accent-dark); font-size: 1rem; letter-spacing: .01em; }
+.admin-area-group-grid { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: .65rem; }
+.admin-area-card { min-height: 5.25rem; }
 @media (max-width: 700px) {
+  .admin-analytics { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .55rem; }
+  .admin-stat { padding: .75rem; gap: .55rem; }
+  .admin-stat-icon { width: 2.25rem; height: 2.25rem; border-radius: .7rem; }
+  .admin-stat-copy > strong { font-size: clamp(1.1rem, 5vw, 1.45rem); }
+  .admin-area-group-grid { grid-template-columns: 1fr; }
   .test-series-row { grid-template-columns: 1fr; }
   .test-series-row .actions { justify-content: flex-start; max-width: none; }
   .test-series-row .actions .button { min-width: 7rem; }
@@ -369,10 +391,16 @@ body { background: linear-gradient(180deg, #edf6ff 0, var(--bg) 17rem, var(--bg)
 .section-results article small { grid-column: 1 / -1; color: var(--muted); }
 .attempt-download { display: grid; justify-items: end; gap: .1rem; margin-top: .35rem; }
 .attempt-download .button, .attempt-download button { min-height: 2.4rem; padding: .4rem .75rem; font-size: .78rem; }
+.attempt-download .result-download-icon { display: inline-grid; place-items: center; width: 2.75rem; min-width: 2.75rem; height: 2.75rem; padding: 0; border-radius: .85rem; color: white; background: var(--accent); }
+.attempt-download .result-download-icon svg { width: 1.15rem; height: 1.15rem; }
 .receipt-list { display: grid; gap: .65rem; }
 .receipt-row { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: .5rem .8rem; align-items: center; padding: .8rem; border: 1px solid var(--line); border-radius: .9rem; background: var(--surface-raised); }
 .receipt-row > div:first-child { display: grid; gap: .15rem; min-width: 0; }
 .receipt-row .status { grid-column: 1 / -1; }
+.ebook-payment .payment-choice { display: grid; justify-content: center; gap: .75rem; }
+.ebook-payment .payment-choice .payment-methods { justify-content: center; }
+.ebook-payment .payment-choice > div:last-child { width: min(100%, 20rem); margin-inline: auto; }
+.ebook-payment .qr-card img { width: min(100%, 14rem); }
 @media (max-width: 640px) {
   .receipt-row { grid-template-columns: 1fr; }
   .receipt-row button { justify-self: start; }

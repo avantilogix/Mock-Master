@@ -2,7 +2,7 @@ import {api} from './services.js';
 import {publishedManager, weekdays} from './admin-manage.js?v=stable-mobile-admin-downloads';
 import {adminContentForm} from './reports.js';
 import {coverPicker} from './publishing-media.js';
-import {bindForm, button, el, entries, field, fieldError, formatDate, heading, idPart, loadInto, panel, rule, run, say, status, textValue} from './ui.js';
+import {bindForm, button, el, entries, field, fieldError, formatDate, heading, icon, idPart, loadInto, panel, rule, run, say, status, textValue} from './ui.js';
 
 const pdfAccept = '.pdf,application/pdf';
 const videoAccept = '.mp4,.m4v,.webm,.mov,video/mp4,video/webm,video/quicktime';
@@ -62,14 +62,16 @@ export function showAdmin(main, ctx) {
   loadInto(analytics, ctx, async () => {
     const result = await api('/admin/analytics', {ctx, auth: true});
     analytics.replaceChildren(...[
-      ['Students', result.students],
-      ['Courses', result.courses],
-      ['Purchases', result.purchases],
-      ['Revenue', `₹${(result.revenue / 100).toLocaleString('en-IN')}`],
-      ['Tests / 24h', result.attempts24h],
-      ['All Attempts', result.attempts],
-    ].map(([label, value]) => el('article', {class: 'admin-stat'},
-      el('span', {}, label), el('strong', {}, String(value)))));
+      ['Students', result.students, 'profile', 'Active learners'],
+      ['Courses', result.courses, 'courses', 'Published missions'],
+      ['Purchases', result.purchases, 'missions', 'Approved access'],
+      ['Revenue', `₹${(result.revenue / 100).toLocaleString('en-IN')}`, 'share', 'Total collected'],
+      ['Tests / 24h', result.attempts24h, 'test', 'Recent submissions'],
+      ['All Attempts', result.attempts, 'progress', 'Total submissions'],
+    ].map(([label, value, glyph, hint]) => el('article', {class: `admin-stat stat-${glyph}`},
+      el('span', {class: 'admin-stat-icon'}, icon(glyph, 'line-icon')),
+      el('div', {class: 'admin-stat-copy'}, el('span', {}, label),
+        el('strong', {}, String(value)), el('small', {}, hint)))));
   });
   const get = path => api(path, {ctx, auth: true});
   let manager;
@@ -742,13 +744,20 @@ export function showAdmin(main, ctx) {
       open: () => openList({label: 'Social Links', list: findPanel('Social Media Links')})},
   ];
   const showOverview = () => {
-    menu.replaceChildren(...areas.map(area => {
+    const groups = [
+      ['Learning', ['Courses', 'Mock Tests', 'Study Materials', 'Learning Resources']],
+      ['Commerce', ['Course Payments', 'E-Books', 'Physical Books', 'Book Orders', 'Payment Settings']],
+      ['Operations', ['YouTube Videos', 'Timetable', 'Students', 'Support', 'Social Links']],
+    ];
+    menu.replaceChildren(...groups.map(([label, names]) => el('section', {class: 'admin-area-group'},
+      el('h2', {}, label),
+      el('div', {class: 'admin-area-group-grid'}, ...areas.filter(area => names.includes(area.label)).map(area => {
       const card = el('button', {type: 'button', class: 'admin-area-card'},
         el('span', {class: 'admin-area-icon', 'aria-hidden': 'true'}, area.icon),
         el('strong', {}, area.label), el('small', {}, area.description), el('span', {class: 'admin-area-arrow'}, '→'));
       card.addEventListener('click', area.open);
       return card;
-    }));
+      })))));
     workspace.replaceChildren(menu);
   };
   for (const section of panels) {

@@ -1381,8 +1381,16 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
       found('videos', id, 'Video');
       const selected = typeof body.course === 'string' ? body.course : '';
       if (selected) course(selected);
-      run('UPDATE videos SET title=?, description=?, course=? WHERE id=?', text(body.title, 'Video title', 120),
-        text(body.description, 'Description', 1000), selected, id);
+      let videoId = '';
+      try {
+        const parsed = new URL(body.url);
+        videoId = parsed.hostname === 'youtu.be' ? parsed.pathname.slice(1).split('/')[0] :
+          parsed.hostname.endsWith('youtube.com') ? parsed.searchParams.get('v') ||
+            parsed.pathname.split('/').filter(Boolean).at(-1) : '';
+      } catch { /* validated below */ }
+      if (!/^[A-Za-z0-9_-]{11}$/.test(videoId || '')) fail(422, 'Enter a valid YouTube video URL.');
+      run('UPDATE videos SET title=?, description=?, course=?, video_id=? WHERE id=?', text(body.title, 'Video title', 120),
+        text(body.description, 'Description', 1000), selected, videoId, id);
     },
     resources(id, body) {
       found('resources', id, 'Resource');

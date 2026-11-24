@@ -44,27 +44,6 @@ function types({ctx, rupeeInput, toPaise, questionData, priceHint, courses}) {
       text: item => item.description,
       edit(item) {
         const title = input(item.title, 120);
-        const course = el('select', {required: ''},
-          courses().map(entry => el('option', {value: entry.id}, entry.title)));
-        course.value = item.course || '';
-        const duration = el('input', {type: 'number', min: '10', max: '300', step: '1',
-          required: '', value: String(item.durationMinutes || 90)});
-        const marks = el('input', {type: 'number', min: '0.25', max: '100', step: '0.25',
-          required: '', value: String(item.marksPerQuestion || 1)});
-        const negative = el('input', {type: 'number', min: '0', max: '100', step: '0.25',
-          required: '', value: String(item.negativeMark || 0)});
-        const startsAt = el('input', {type: 'datetime-local', value: item.startsAt ?
-          new Date(Date.parse(item.startsAt) + 330 * 60_000).toISOString().slice(0,16) : ''});
-        const expiresAt = el('input', {type: 'datetime-local', value: item.expiresAt ?
-          new Date(Date.parse(item.expiresAt) + 330 * 60_000).toISOString().slice(0,16) : ''});
-        const attempts = el('input', {type: 'number', min: '1', max: '100', step: '1',
-          value: String(item.attemptsLimit || 2)});
-        if (item.live) startsAt.required = expiresAt.required = attempts.required = true;
-        const questionFile = el('input', {type: 'file', accept: '.pdf,.docx,.txt'});
-        const importStatus = status();
-        const importButton = button('Import Question File', 'secondary');
-        const download = el('input', {type: 'checkbox'});
-        download.checked = Boolean(item.questionPaperDownload);
         const description = area(item.description, 2000);
         const amount = price(item.price);
         const downloads = el('input', {type: 'checkbox'});
@@ -87,6 +66,27 @@ function types({ctx, rupeeInput, toPaise, questionData, priceHint, courses}) {
       details: item => [plural(item.questions.length, 'question'), plural(item.attempts, 'student attempt')],
       edit(item) {
         const title = input(item.title, 120);
+        const course = el('select', {required: ''},
+          courses().map(entry => el('option', {value: entry.id}, entry.title)));
+        course.value = item.course || '';
+        const duration = el('input', {type: 'number', min: '10', max: '300', step: '1',
+          required: '', value: String(item.durationMinutes || 90)});
+        const marks = el('input', {type: 'number', min: '0.25', max: '100', step: '0.25',
+          required: '', value: String(item.marksPerQuestion || 1)});
+        const negative = el('input', {type: 'number', min: '0', max: '100', step: '0.25',
+          required: '', value: String(item.negativeMark || 0)});
+        const startsAt = el('input', {type: 'datetime-local', value: item.startsAt ?
+          new Date(Date.parse(item.startsAt) + 330 * 60_000).toISOString().slice(0,16) : ''});
+        const expiresAt = el('input', {type: 'datetime-local', value: item.expiresAt ?
+          new Date(Date.parse(item.expiresAt) + 330 * 60_000).toISOString().slice(0,16) : ''});
+        const attempts = el('input', {type: 'number', min: '1', max: '100', step: '1',
+          value: String(item.attemptsLimit || 2)});
+        if (item.live) startsAt.required = expiresAt.required = attempts.required = true;
+        const questionFile = el('input', {type: 'file', accept: '.pdf,.docx,.txt'});
+        const importStatus = status();
+        const importButton = button('Import Question File', 'secondary');
+        const download = el('input', {type: 'checkbox'});
+        download.checked = Boolean(item.questionPaperDownload);
         const questions = rule(area(JSON.stringify(item.questions, null, 2), 200000, 10), value => {
           try { questionData(value); return ''; } catch (error) { return error.message; }
         });
@@ -139,17 +139,27 @@ function types({ctx, rupeeInput, toPaise, questionData, priceHint, courses}) {
     },
     videos: {
       label: 'YouTube Videos', noun: 'video', course: true, empty: 'No YouTube videos published yet.',
-      details: item => [item.courseTitle ? '' : 'All students', `youtu.be/${item.videoId}`].filter(Boolean),
+      details: item => [item.courseTitle ? item.courseTitle : 'All students'],
       text: item => item.description,
       edit(item) {
         const title = input(item.title, 120);
         const description = area(item.description, 1000);
+        const url = rule(input(`https://youtu.be/${item.videoId}`, 500, {type: 'url'}), value => {
+          try {
+            const parsed = new URL(value);
+            const id = parsed.hostname === 'youtu.be' ? parsed.pathname.slice(1).split('/')[0] :
+              parsed.hostname.endsWith('youtube.com') ? parsed.searchParams.get('v') ||
+                parsed.pathname.split('/').filter(Boolean).at(-1) : '';
+            return /^[A-Za-z0-9_-]{11}$/.test(id || '') ? '' : 'Enter a valid YouTube video URL.';
+          } catch { return 'Enter a valid YouTube video URL.'; }
+        });
         const course = el('select', {}, el('option', {value: ''}, 'All Students (No Specific Course)'),
           courses().map(entry => el('option', {value: entry.id}, entry.title)));
         course.value = item.course || '';
         return {
-          fields: [field('Course', course), field('Video Title', title), field('Description', description)],
-          values: () => ({course: course.value, title: textValue(title, 'Video title'), description: textValue(description, 'Description')}),
+          fields: [field('Course', course), field('Video Link', url), field('Video Title', title), field('Description', description)],
+          values: () => ({course: course.value, url: textValue(url, 'YouTube video link'),
+            title: textValue(title, 'Video title'), description: textValue(description, 'Description')}),
         };
       },
       remove: () => ({question: 'Delete this YouTube video from the library?'}),

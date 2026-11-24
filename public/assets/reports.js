@@ -1,5 +1,5 @@
 import {api} from './services.js';
-import {bindForm, button, el, entries, field, heading, link, loadInto, panel, run, say, status, textValue} from './ui.js';
+import {bindForm, button, el, entries, field, heading, icon, link, loadInto, panel, run, say, status, textValue} from './ui.js';
 
 export const contentKinds = {
   'free-tests': {title: 'Free Tests', icon: '✓', description: 'Try selected practice resources without purchasing a mission.'},
@@ -74,7 +74,10 @@ export function showProgress(main, ctx, action) {
 }
 
 function resultDownloadButton(ctx, attempt) {
-  const control = button('Download Result', 'secondary');
+  const control = button('', 'secondary icon-button result-download-icon');
+  control.append(icon('download', 'line-icon'));
+  control.setAttribute('aria-label', `Download ${attempt.title} result`);
+  control.title = 'Download Result PDF';
   const feedback = status();
   control.addEventListener('click', () => run(control, feedback, async () => {
     const blob = await api(`/attempts/${attempt.id}/result.pdf`, {ctx, auth: true, blob: true});

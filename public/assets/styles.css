@@ -278,6 +278,7 @@ fieldset { margin: 0; min-width: 0; border-radius: .7rem; }
 .progress-tile strong { font-size: clamp(1.6rem, 7vw, 2.3rem); color: var(--accent); }
 .progress-tile small { color: var(--muted); }
 .attempt-row { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+.attempt-row > div:last-child { display: grid; justify-items: end; }
 .attempt-row p { margin: .1rem 0; }
 .attempt-score { display: grid; place-items: center; flex: none; min-width: 4rem; min-height: 3rem; border-radius: .85rem; color: var(--accent-dark); background: var(--accent-soft); font-size: 1.2rem; font-weight: 850; }
 .attempt-percent { display: block; color: var(--muted); text-align: center; font-weight: 750; }
