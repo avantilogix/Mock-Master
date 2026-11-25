@@ -82,3 +82,114 @@ test('cloud Current Affairs signs private uploads and publishes only matching co
   await service.remove(id);
   assert.equal(objects.size, 0);
 });
+
+function editFixture() {
+  const media = {
+    pdf: {type: 'application/pdf', size: 20, pages: 1, generation: '1'},
+    video: {type: 'video/mp4', size: 12, generation: '2'},
+  };
+  const documents = new Map([['resources/resource', {
+    kind: 'current-affairs', title: 'Original', publishedAt: '2026-01-01',
+    downloadsEnabled: false, media,
+  }]]);
+  const objects = new Map([
+    ['current-affairs/resource/pdf', {bytes: Buffer.from('old pdf'), metadata: {generation: '1'}}],
+    ['current-affairs/resource/video', {bytes: Buffer.from('old video'), metadata: {generation: '2'}}],
+  ]);
+  const ref = path => ({
+    path,
+    get: async () => ({id: path.split('/').at(-1), exists: documents.has(path), data: () => documents.get(path)}),
+  });
+  const db = {
+    collection: name => ({doc: id => ref(`${name}/${id}`)}),
+    runTransaction: async action => action({
+      get: item => item.get(),
+      update: (item, patch) => documents.set(item.path, {...documents.get(item.path), ...patch}),
+      delete: item => documents.delete(item.path),
+    }),
+  };
+  let generation = 10;
+  const bucket = {file: (path, options = {}) => ({
+    path,
+    getMetadata: async () => {
+      if (!objects.has(path)) throw Object.assign(new Error('Missing object'), {code: 404});
+      return [objects.get(path).metadata];
+    },
+    download: async () => [objects.get(path).bytes],
+    copy: async (destination, copyOptions) => {
+      const source = objects.get(path);
+      assert.equal(options.generation, source.metadata.generation);
+      assert.equal(copyOptions.preconditionOpts.ifGenerationMatch, 0);
+      objects.set(destination.path, {bytes: source.bytes,
+        metadata: {...source.metadata, generation: String(++generation)}});
+    },
+    delete: async () => {
+      if (objects.has(path) && options.generation !== undefined) {
+        assert.equal(options.generation, objects.get(path).metadata.generation);
+      }
+      objects.delete(path);
+    },
+  })};
+  const service = currentAffairs({}, {
+    db, bucket, value: snapshot => snapshot.exists ? {id: snapshot.id, ...snapshot.data()} : null,
+    text: input => input.trim(), processDocument: operation => operation(),
+  });
+  const request = {user: {uid: 'admin'}, body: {
+    title: 'Updated', publishedAt: '2026-02-28', downloadsEnabled: true,
+  }};
+  const uploadPdf = bytes => {
+    documents.set('resourceUploads/draft', {uid: 'admin', expires: Date.now() + 60_000,
+      files: {pdf: {size: bytes.length, type: 'application/pdf'}}});
+    objects.set('current-affairs/draft/pdf', {bytes, metadata: {size: String(bytes.length),
+      contentType: 'application/pdf', generation: '3', metadata: {'upload-id': 'draft'}}});
+    request.body.uploadId = 'draft';
+  };
+  return {service, request, uploadPdf, documents, objects, media};
+}
+
+test('cloud Current Affairs edit replaces selected media without changing resource ID or other media', async () => {
+  const {service, request, uploadPdf, documents, objects, media} = editFixture();
+  const pdf = await PDFDocument.create();
+  pdf.addPage();
+  pdf.addPage();
+  uploadPdf(Buffer.from(await pdf.save()));
+
+  assert.deepEqual(await service.edit('resource', request), {id: 'resource'});
+  const item = documents.get('resources/resource');
+  assert.equal(item.title, 'Updated');
+  assert.equal(item.publishedAt, '2026-02-28');
+  assert.equal(item.downloadsEnabled, true);
+  assert.deepEqual(item.media.video, media.video);
+  assert.equal(item.media.pdf.pages, 2);
+  assert.notEqual(item.media.pdf.generation, media.pdf.generation);
+  assert.ok(objects.has(`current-affairs/resource/${item.media.pdf.file}`));
+  assert.ok(objects.has('current-affairs/resource/video'));
+  assert.ok(!objects.has('current-affairs/resource/pdf'));
+  assert.ok(!objects.has('current-affairs/draft/pdf'));
+  assert.ok(!documents.has('resourceUploads/draft'));
+});
+
+test('cloud Current Affairs edit rejects invalid replacement without changing existing resource or media', async () => {
+  const {service, request, uploadPdf, documents, objects} = editFixture();
+  const original = structuredClone(documents.get('resources/resource'));
+  uploadPdf(Buffer.from('not a pdf'));
+  const originalObjects = [...objects.keys()].sort();
+
+  await assert.rejects(service.edit('resource', request), {status: 422});
+  assert.deepEqual(documents.get('resources/resource'), original);
+  assert.deepEqual([...objects.keys()].sort(), originalObjects);
+  assert.ok(documents.has('resourceUploads/draft'));
+});
+
+test('cloud Current Affairs metadata-only edit retains both media references', async () => {
+  const {service, request, documents, objects, media} = editFixture();
+  const originalObjects = [...objects.keys()].sort();
+
+  assert.deepEqual(await service.edit('resource', request), {id: 'resource'});
+  const item = documents.get('resources/resource');
+  assert.equal(item.title, 'Updated');
+  assert.equal(item.publishedAt, '2026-02-28');
+  assert.equal(item.downloadsEnabled, true);
+  assert.deepEqual(item.media, media);
+  assert.deepEqual([...objects.keys()].sort(), originalObjects);
+});
