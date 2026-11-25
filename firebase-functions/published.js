@@ -127,6 +127,11 @@ export function registerPublishedRoutes(api, { db, bucket, value, text, byNewest
 
   api.put('/admin/published/:type/:id', async (req, res) => {
     const type = managed(req.params.type);
+    if (type === 'resources') {
+      const resource = value(await collection(type).doc(req.params.id).get());
+      if (!resource) fail(404, 'Resource not found.');
+      if (resource.kind === 'current-affairs') return res.json(await affairs.edit(req.params.id, req));
+    }
     const ref = collection(type).doc(req.params.id);
     const patch = type === 'resources' ? {} : editors[type](req.body ?? {});
     if (['courses', 'books', 'physicalBooks'].includes(type) && req.body?.images !== undefined) {
@@ -171,8 +176,12 @@ export function registerPublishedRoutes(api, { db, bucket, value, text, byNewest
     const type = managed(req.params.type);
     const { id } = req.params;
     const ref = collection(type).doc(id);
+    let object = '';
     const archived = await db.runTransaction(async tx => {
-      if (!value(await tx.get(ref))) fail(404, 'Published item not found.');
+      const existing = value(await tx.get(ref));
+      if (!existing) fail(404, 'Published item not found.');
+      if (type === 'books') object = existing.pdfFile || `books/${id}.pdf`;
+      if (type === 'chapterVideos') object = existing.mediaFile || `chapter-videos/${id}`;
       const has = async (name, field) => !(await tx.get(at(name, field, id).limit(1))).empty;
       if (type === 'courses') {
         const dependents = await Promise.all(['orders', 'tests', 'books', 'chapterVideos', 'videos'].map(name => has(name, 'course')));
@@ -191,7 +200,6 @@ export function registerPublishedRoutes(api, { db, bucket, value, text, byNewest
       tx.delete(ref);
       return false;
     });
-    const object = type === 'books' ? `books/${id}.pdf` : type === 'chapterVideos' ? `chapter-videos/${id}` : '';
     if (type === 'resources') {
       try {
         await affairs.remove(id);

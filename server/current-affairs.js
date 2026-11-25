@@ -1,5 +1,5 @@
 import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
-import { createWriteStream, existsSync, mkdirSync, readFileSync, rmdirSync, rmSync, statSync } from 'node:fs';
+import { constants, copyFileSync, createWriteStream, existsSync, mkdirSync, readFileSync, readdirSync, rmdirSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
@@ -11,6 +11,12 @@ const limits = { pdf: 12 * 1024 * 1024, video: 300 * 1024 * 1024 };
 export function currentAffairs(api, { db, directory, text, processDocument, looksLikeVideo }) {
   const one = (sql, ...args) => db.prepare(sql).get(...args);
   const filePath = (id, kind) => join(directory, id, kind);
+  const mediaPath = (id, kind, item) => filePath(id, item?.file || kind);
+  const removeFile = (id, name) => {
+    rmSync(filePath(id, name), { force: true });
+    const dir = join(directory, id);
+    if (existsSync(dir) && !readdirSync(dir).length) rmdirSync(dir);
+  };
   const secret = randomBytes(32);
   const signature = (id, uid, expires, download) => createHmac('sha256', secret)
     .update(`${id}|${uid}|${expires}|${download}`).digest('base64url');
@@ -45,7 +51,7 @@ export function currentAffairs(api, { db, directory, text, processDocument, look
     const video = JSON.parse(item.media).video;
     if (!video) fail(404, 'Video not found.');
     if (download === '1') fail(403, 'Save this video inside the app instead.');
-    res.sendFile('video', { root: join(directory, item.id), headers: { 'Content-Type': video.type } });
+    res.sendFile(video.file || 'video', { root: join(directory, item.id), headers: { 'Content-Type': video.type } });
   });
   return {
     publicResource,
@@ -56,7 +62,7 @@ export function currentAffairs(api, { db, directory, text, processDocument, look
         const pdf = JSON.parse(item.media).pdf;
         const page = Number(req.params.page);
         if (!pdf || !Number.isInteger(page) || page < 1 || page > pdf.pages) fail(404, 'Page not found.');
-        res.type('png').send(await processDocument(() => renderPage(readFileSync(filePath(item.id, 'pdf')), page, req.user.phone)));
+        res.type('png').send(await processDocument(() => renderPage(readFileSync(mediaPath(item.id, 'pdf', pdf)), page, req.user.phone)));
       });
       api.get('/resources/:id/pdf/download', () => fail(403, 'Save this resource inside the app instead.'));
       api.get('/resources/:id/video/link', (req, res) => {
@@ -146,9 +152,82 @@ export function currentAffairs(api, { db, directory, text, processDocument, look
       }
       return draft.id;
     },
+    async edit(id, req) {
+      const { uploadId, publishedAt, downloadsEnabled } = req.body;
+      const title = text(req.body.title, 'Resource title', 120);
+      if (typeof publishedAt !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(publishedAt) ||
+          Number.isNaN(Date.parse(publishedAt)) || new Date(publishedAt).toISOString().slice(0, 10) !== publishedAt) {
+        fail(422, 'Enter a valid publish date.');
+      }
+      if (typeof downloadsEnabled !== 'boolean') fail(422, 'Choose whether downloads are allowed.');
+      resource(id);
+      if (uploadId !== undefined && uploadId !== null && uploadId !== '' && typeof uploadId !== 'string') {
+        fail(422, 'Choose files to upload.');
+      }
+      const draft = uploadId ? checkDraft(uploadId, req.user.uid) : null;
+      const files = draft ? JSON.parse(draft.files) : {};
+      const staged = [];
+      const replacements = {};
+      let superseded = [];
+      try {
+        for (const [kind, item] of Object.entries(files)) {
+          if (!['pdf', 'video'].includes(kind)) fail(422, 'Invalid upload file.');
+          const source = filePath(draft.id, kind);
+          if (!existsSync(source) || statSync(source).size !== item.size) fail(409, 'Wait for all files to finish uploading.');
+          const name = `${kind}-${randomUUID()}`;
+          mkdirSync(join(directory, id), { recursive: true, mode: 0o700 });
+          staged.push(name);
+          try { copyFileSync(source, filePath(id, name), constants.COPYFILE_EXCL); } catch (error) {
+            if (error.code === 'EEXIST') staged.pop();
+            throw error;
+          }
+          const path = filePath(id, name);
+          if (statSync(path).size !== item.size) fail(409, 'Wait for all files to finish uploading.');
+          if (kind === 'pdf') replacements.pdf = { ...item, file: name, pages: await processDocument(() => pageCount(readFileSync(path))) };
+          else {
+            if (!looksLikeVideo(path, item.type)) fail(422, 'The selected file is not a valid video.');
+            replacements.video = { ...item, file: name };
+          }
+        }
+        db.exec('BEGIN');
+        try {
+          if (draft) checkDraft(uploadId, req.user.uid);
+          const existing = resource(id);
+          const media = JSON.parse(existing.media);
+          superseded = Object.keys(replacements).filter(kind => media[kind])
+            .map(kind => media[kind].file || kind);
+          Object.assign(media, replacements);
+          db.prepare('UPDATE resources SET title=?, published_at=?, downloads_enabled=?, media=? WHERE id=?')
+            .run(title, publishedAt, Number(downloadsEnabled), JSON.stringify(media), id);
+          if (draft) db.prepare('DELETE FROM resource_uploads WHERE id=?').run(draft.id);
+          db.exec('COMMIT');
+        } catch (error) {
+          db.exec('ROLLBACK');
+          throw error;
+        }
+      } catch (error) {
+        for (const name of staged) {
+          try { removeFile(id, name); } catch (cleanupError) {
+            console.error('Resource media cleanup failed:', id, cleanupError.code);
+            error.warning = 'Some staged resource files could not be removed.';
+          }
+        }
+        throw error;
+      }
+      let warning;
+      for (const [cleanupId, name] of [
+        ...superseded.map(name => [id, name]),
+        ...Object.keys(files).map(kind => [draft.id, kind]),
+      ]) {
+        try { removeFile(cleanupId, name); } catch (error) {
+          console.error('Resource media cleanup failed:', cleanupId, error.code);
+          warning = 'The resource was updated, but some stored files could not be removed.';
+        }
+      }
+      return { id, ...(warning ? { warning } : {}) };
+    },
     remove(id) {
-      for (const kind of ['pdf', 'video']) rmSync(filePath(id, kind), { force: true });
-      if (existsSync(join(directory, id))) rmdirSync(join(directory, id));
+      rmSync(join(directory, id), { recursive: true, force: true });
     },
   };
 }

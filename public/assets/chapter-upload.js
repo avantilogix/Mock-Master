@@ -11,12 +11,11 @@ export async function uploadChapterVideo({ctx, post, coursePath, placement, file
   const {id, url, headers, direct} = await post(`${coursePath}/videos/upload`,
     {json: {...placement, type, size: file.size}});
   if (direct) {
-    await post(`${coursePath}/videos?${new URLSearchParams(placement)}`, {binary: file, imageUpload: type});
-    return;
+    return post(`${coursePath}/videos?${new URLSearchParams(placement)}`, {binary: file, imageUpload: type});
   }
   const response = await fetch(url, {method: 'PUT', headers: {...headers, 'Content-Type': type},
     body: file, signal: ctx.signal, credentials: 'omit', redirect: 'error'});
   if (!response.ok) throw new Error(`The video could not be uploaded (${response.status}). Please try again.`);
   onPublish?.();
-  await post(`${coursePath}/videos/${idPart(id)}/publish`, {json: {}});
+  return post(`${coursePath}/videos/${idPart(id)}/publish`, {json: {}});
 }

@@ -75,4 +75,22 @@ test('Firebase chapter uploads validate and retain their course folder', async (
   assert.equal(published.code, 201);
   assert.equal(documents.get(`chapterVideos/${id}`).folderId, 'content');
   assert.equal(documents.has(`chapterVideoUploads/${id}`), false);
+
+  const replacementBytes = Buffer.concat([Buffer.from([0, 0, 0, 24]), Buffer.from('ftypisom'), Buffer.alloc(12, 2)]);
+  const replacementDraft = response();
+  await upload({...req, body: {...req.body, title: 'Updated Video', size: replacementBytes.length, replaceId: id}}, replacementDraft);
+  const replacementId = replacementDraft.body.id;
+  objects.set(`chapter-videos/${replacementId}`, {bytes: replacementBytes, metadata: {
+    size: String(replacementBytes.length), contentType: 'video/mp4',
+    generation: '2', metadata: {'upload-id': replacementId},
+  }});
+  const replaced = response();
+  await publish({...req, params: {id: 'c', video: replacementId}}, replaced);
+  assert.equal(replaced.code, 201);
+  assert.equal(replaced.body.id, id);
+  assert.equal(documents.get(`chapterVideos/${id}`).title, 'Updated Video');
+  assert.equal(documents.get(`chapterVideos/${id}`).mediaFile, `chapter-videos/${replacementId}`);
+  assert.equal(documents.get(`chapterVideos/${id}`).folderId, 'content');
+  assert.equal(objects.has(`chapter-videos/${id}`), false);
+  assert.equal(objects.has(`chapter-videos/${replacementId}`), true);
 });

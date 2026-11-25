@@ -115,6 +115,7 @@ test('admin approval grants only the confirmed student access to their course, t
   const withPdf = true;
   let pagePath;
   let bookDownloadPath;
+  let bookId;
   if (withPdf) {
     const folderResponse = await request(`/admin${path}/folders`, 'admin', 'POST', {kind: 'content', name: 'Guides'});
     const folder = await folderResponse.json();
@@ -126,9 +127,21 @@ test('admin approval grants only the confirmed student access to their course, t
     const upload = await request(`/admin${path}/books?title=Guide&folderId=${folder.id}`, 'admin', 'POST', fixturePdf(),
       { 'Content-Type': 'application/octet-stream' });
     assert.equal(upload.status, 201);
-    const bookId = (await upload.json()).id;
+    bookId = (await upload.json()).id;
     pagePath = `/books/${bookId}/pages/1`;
     bookDownloadPath = `/books/${bookId}/download`;
+    const replacementPdf = await PDFDocument.create();
+    replacementPdf.addPage();
+    replacementPdf.addPage();
+    const replacementQuery = new URLSearchParams({
+      title: 'Updated Guide', subject: 'Mathematics', chapter: 'Chapter 2',
+    });
+    const replaced = await request(`/admin${path}/books/${bookId}?${replacementQuery}`, 'admin', 'PUT',
+      Buffer.from(await replacementPdf.save()), {'Content-Type': 'application/octet-stream'});
+    assert.equal(replaced.status, 200);
+    const managedBook = (await (await request('/admin/published', 'admin')).json()).books[0];
+    assert.deepEqual([managedBook.title, managedBook.subject, managedBook.chapter, managedBook.pages],
+      ['Updated Guide', 'Mathematics', 'Chapter 2', 2]);
     const workspace = await (await request(`/admin${path}/workspace?kind=content`, 'admin')).json();
     assert.equal(workspace.items.find(item => item.id === bookId).folderId, folder.id);
     assert.equal((await request(pagePath, 'buyer')).status, 403);
@@ -164,6 +177,7 @@ test('admin approval grants only the confirmed student access to their course, t
   assert.equal((await request(`/admin/payments/${requestId}/approve`, 'admin', 'POST')).status, 204);
   assert.deepEqual((await (await request('/me', 'buyer')).json()).purchases, [id]);
   assert.equal((await request(path, 'buyer')).status, 200);
+  if (bookId) assert.equal((await request(`/books/${bookId}/pages/2`, 'buyer')).status, 200);
   assert.equal((await (await request(path, 'buyer')).json()).tests[0].folderId, testFolder.id);
   assert.equal((await (await request(path, 'buyer')).json()).books[0].folderId,
     (await (await request(`/admin${path}/workspace?kind=content`, 'admin')).json()).folders[0].id);
@@ -338,10 +352,17 @@ test('chapter videos upload for admins and stream only through signed links for 
   const upload = await request(uploadPath, 'admin', 'POST', mp4, 'video/mp4');
   assert.equal(upload.status, 201);
   const { id: videoId } = await upload.json();
+  const replacementVideo = Buffer.concat([Buffer.from([0, 0, 0, 24]), Buffer.from('ftypisom'), Buffer.alloc(80, 2)]);
+  const replacementPath = `/admin/courses/${id}/videos?${new URLSearchParams({
+    title: 'Updated Algebra Lesson', subject: 'Mathematics', chapter: 'Chapter 5', replaceId: videoId,
+  })}`;
+  const replacement = await request(replacementPath, 'admin', 'POST', replacementVideo, 'video/mp4');
+  assert.equal(replacement.status, 201);
+  assert.equal((await replacement.json()).id, videoId);
 
   const material = await (await request(`/courses/${id}`, 'admin')).json();
-  assert.deepEqual(material.videos, [{ id: videoId, title: 'Algebra Lesson', subject: 'Maths', chapter: 'Chapter 4',
-    type: 'video/mp4', size: mp4.length, folderId: folder.id }]);
+  assert.deepEqual(material.videos, [{ id: videoId, title: 'Updated Algebra Lesson', subject: 'Mathematics', chapter: 'Chapter 5',
+    type: 'video/mp4', size: replacementVideo.length, folderId: folder.id }]);
   assert.equal((await request(`/videos/${videoId}/link`, 'buyer')).status, 403);
 
   for (const uid of ['buyer', 'other']) db.prepare('INSERT OR IGNORE INTO students (uid, phone) VALUES (?, ?)').run(uid, users.get(uid).phone);
@@ -352,7 +373,7 @@ test('chapter videos upload for admins and stream only through signed links for 
   const file = await fetch(origin + url);
   assert.equal(file.status, 200);
   assert.equal(file.headers.get('content-type'), 'video/mp4');
-  assert.deepEqual(Buffer.from(await file.arrayBuffer()), mp4);
+  assert.deepEqual(Buffer.from(await file.arrayBuffer()), replacementVideo);
   assert.equal((await fetch(`${origin}${url}&download=1`)).status, 403);
   assert.equal((await request(`/admin/published/courses/${id}`, 'admin', 'PUT',
     JSON.stringify({title: 'Video Course', description: 'Secure videos', price: 14900, downloadsEnabled: true}),
@@ -429,12 +450,27 @@ test('Current Affairs publishes completed media, protects viewing and enforces d
   assert.equal((await fetch(origin + url.replace('download=0', 'download=1'))).status, 403);
   const editPath = `/admin/published/resources/${id}`;
   const edit = {title: 'Updated Affairs', publishedAt: '2026-03-01', downloadsEnabled: true};
-  assert.equal((await request(editPath, 'admin', 'PUT', edit)).status, 204);
+  assert.equal((await request(editPath, 'admin', 'PUT', edit)).status, 200);
+  const replacementPdf = await PDFDocument.create();
+  replacementPdf.addPage();
+  replacementPdf.addPage();
+  const replacementBytes = Buffer.from(await replacementPdf.save());
+  const replacementDraft = await request(draftPath, 'admin', 'POST',
+    {pdf: {size: replacementBytes.length, type: 'application/pdf'}});
+  const replacementId = (await replacementDraft.json()).id;
+  assert.equal((await request(`${draftPath}/${replacementId}/pdf`, 'admin', 'PUT', replacementBytes)).status, 204);
+  const replacementEdit = await request(editPath, 'admin', 'PUT', {...edit, uploadId: replacementId});
+  assert.equal(replacementEdit.status, 200);
+  const replacedResource = await (await request(`/resources/${id}`, 'student')).json();
+  assert.equal(replacedResource.id, id);
+  assert.equal(replacedResource.media.pdf.pages, 2);
+  assert.equal(replacedResource.media.video.size, video.length);
+  assert.equal((await request(`/resources/${id}/pdf/pages/2`, 'student')).status, 200);
   assert.equal((await request(`/resources/${id}/pdf/download`, 'student')).status, 403);
   assert.equal((await request(`/resources/${id}/video/link?download=1`, 'student')).status, 403);
-  assert.equal((await request(editPath, 'admin', 'PUT', {...edit, downloadsEnabled: false})).status, 204);
+  assert.equal((await request(editPath, 'admin', 'PUT', {...edit, downloadsEnabled: false})).status, 200);
   const managed = await (await request('/admin/published')).json();
-  assert.equal(managed.resources[0].media.pdf.pages, 1);
+  assert.equal(managed.resources[0].media.pdf.pages, 2);
   assert.equal(managed.resources[0].title, 'Updated Affairs');
   assert.equal((await request(editPath, 'admin', 'DELETE')).status, 200);
   assert.equal((await request(`/resources/${id}`, 'student')).status, 404);
@@ -451,7 +487,8 @@ test('Current Affairs publishes completed media, protects viewing and enforces d
     assert.equal(created.status, 201);
     const {id: legacyId} = await created.json();
     const patch = kind === 'current-affairs' ? {...edit, downloadsEnabled: false} : {...text, title: 'Updated Syllabus'};
-    assert.equal((await request(`/admin/published/resources/${legacyId}`, 'admin', 'PUT', patch)).status, 204);
+    assert.equal((await request(`/admin/published/resources/${legacyId}`, 'admin', 'PUT', patch)).status,
+      kind === 'current-affairs' ? 200 : 204);
     const rows = await (await request(`/content/${kind}`, 'student')).json();
     assert.equal(rows[0].summary, text.summary);
     assert.equal(rows[0].body, text.body);
@@ -502,7 +539,7 @@ test('admins list published content with dates, edit it, and delete it safely', 
   const users = new Map([['admin', { uid: 'admin', phone: '+919000000021' }], ['student', { uid: 'student', phone: '+919000000022' }]]);
   const { db, server, request } = jsonServer(t, users);
   await once(server, 'listening');
-  const course = { title: 'Reasoning', description: 'Daily practice', price: 50000 };
+  const course = { title: 'Reasoning', description: 'Daily practice', price: 50000, downloadsEnabled: true };
   const { body: { id } } = await request('/admin/courses', 'admin', 'POST', course);
   const questions = [{ prompt: '2 + 2?', options: ['3', '4'], answer: 1, section: 'General' }];
   const { body: { id: testId } } = await request(`/admin/courses/${id}/tests`, 'admin', 'POST', { title: 'Mock 1', questions });
@@ -510,6 +547,7 @@ test('admins list published content with dates, edit it, and delete it safely', 
   assert.equal((await request('/admin/published', 'student')).status, 403);
   const listed = (await request('/admin/published', 'admin')).body;
   assert.equal(listed.courses[0].title, 'Reasoning');
+  assert.equal(listed.courses[0].downloadsEnabled, true);
   assert.ok(!Number.isNaN(Date.parse(listed.courses[0].createdAt)));
   assert.equal(listed.tests[0].courseTitle, 'Reasoning');
   assert.deepEqual(listed.tests[0].questions, questions);
@@ -577,6 +615,21 @@ test('standalone e-books unlock after admin payment approval and cannot be expor
   assert.equal((await request(`/admin/payments/${orderId}/approve`, 'admin', 'POST', {})).status, 204);
   assert.equal((await request(`/ebooks/${id}/pages/1`, 'buyer')).headers.get('content-type'), 'image/png');
   assert.equal((await request(`/ebooks/${id}/download`, 'buyer')).status, 403);
+  const updated = {title: 'Complete Guide Updated', description: 'Updated revision book', price: 10900};
+  assert.equal((await request(`/admin/ebooks/${id}`, 'buyer', 'PUT', updated)).status, 403);
+  assert.equal((await request(`/admin/ebooks/${id}`, 'admin', 'PUT', updated)).status, 200);
+  const metadata = (await (await request('/admin/ebooks', 'admin')).json())[0];
+  assert.deepEqual([metadata.title, metadata.description, metadata.price, metadata.pages],
+    [updated.title, updated.description, updated.price, 1]);
+  const replacementPdf = await PDFDocument.create();
+  replacementPdf.addPage();
+  replacementPdf.addPage();
+  const replacementQuery = new URLSearchParams({...updated, price: '10900'});
+  const replaced = await request(`/admin/ebooks/${id}?${replacementQuery}`, 'admin', 'PUT',
+    Buffer.from(await replacementPdf.save()));
+  assert.equal(replaced.status, 200);
+  assert.deepEqual(await replaced.json(), {pages: 2});
+  assert.equal((await request(`/ebooks/${id}/pages/2`, 'buyer')).status, 200);
   assert.equal((await request(`/admin/payments/${orderId}/reject`, 'admin', 'POST',
     {note: 'Transaction could not be verified'})).status, 204);
   assert.equal((await request(`/ebooks/${id}/pages/1`, 'buyer')).status, 403);

@@ -223,6 +223,45 @@ export function showResource(main, ctx, id, action) {
   });
 }
 
+export async function uploadCurrentAffairsMedia(ctx, files, {required = true, onStatus} = {}) {
+  const descriptors = {};
+  const media = {};
+  for (const [kind, file] of Object.entries(files)) {
+    if (!file) continue;
+    const extension = file.name.split('.').pop().toLowerCase();
+    const type = kind === 'pdf' ?
+      (file.type === 'application/pdf' || /\.pdf$/i.test(file.name)) && 'application/pdf' :
+      ['video/mp4', 'video/webm', 'video/quicktime'].includes(file.type) ? file.type :
+        ({mp4: 'video/mp4', m4v: 'video/mp4', mov: 'video/quicktime', webm: 'video/webm'})[extension];
+    if (!type || file.size < (kind === 'pdf' ? 1 : 12) ||
+        file.size > (kind === 'pdf' ? 12 : 300) * 1024 * 1024) {
+      throw new Error(kind === 'pdf' ? 'Choose a PDF up to 12 MB.' : 'Choose an MP4, WebM, or MOV video up to 300 MB.');
+    }
+    descriptors[kind] = {type, size: file.size};
+    media[kind] = file;
+  }
+  if (!Object.keys(descriptors).length) {
+    if (required) throw new Error('Choose a PDF or video to publish.');
+    return null;
+  }
+  const draft = await api('/admin/current-affairs/uploads', {ctx, auth: true, method: 'POST', json: descriptors});
+  for (const [kind, descriptor] of Object.entries(descriptors)) {
+    onStatus?.(`Uploading ${kind === 'pdf' ? 'PDF' : 'video'}… Keep this screen open.`);
+    if (draft.direct) {
+      await api(`/admin/current-affairs/uploads/${idPart(draft.id)}/${kind}`, {
+        ctx, auth: true, method: 'PUT', binary: media[kind], imageUpload: descriptor.type,
+      });
+    } else {
+      const upload = draft.files[kind];
+      const response = await fetch(upload.url, {method: 'PUT', signal: ctx.signal,
+        headers: {'Content-Type': descriptor.type, ...upload.headers}, body: media[kind]});
+      if (!response.ok) throw new Error(`The ${kind} upload failed (${response.status}). Choose the file and try again.`);
+    }
+  }
+  onStatus?.('Processing files…');
+  return draft.id;
+}
+
 export function adminContentForm(post, refresh, ctx) {
   const kind = el('select', {required: ''},
     Object.entries(contentKinds).map(([value, config]) => el('option', {value}, config.title)));
@@ -266,33 +305,8 @@ export function adminContentForm(post, refresh, ctx) {
     try {
       if (section === 'current-affairs') {
         const files = {pdf: pdf.files[0], video: video.files[0]};
-        const descriptors = {};
-        for (const [name, file] of Object.entries(files)) {
-          if (!file) continue;
-          const type = name === 'pdf' ? (file.type === 'application/pdf' || /\.pdf$/i.test(file.name)) && 'application/pdf' :
-            ['video/mp4', 'video/webm', 'video/quicktime'].includes(file.type) ? file.type :
-              ({mp4: 'video/mp4', m4v: 'video/mp4', mov: 'video/quicktime', webm: 'video/webm'})[file.name.split('.').pop().toLowerCase()];
-          if (!type || file.size < (name === 'pdf' ? 1 : 12) || file.size > (name === 'pdf' ? 12 : 300) * 1024 * 1024) {
-            throw new Error(name === 'pdf' ? 'Choose a PDF up to 12 MB.' : 'Choose an MP4, WebM, or MOV video up to 300 MB.');
-          }
-          descriptors[name] = {type, size: file.size};
-        }
-        if (!Object.keys(descriptors).length) throw new Error('Choose a PDF or video to publish.');
-        const draft = await post('/admin/current-affairs/uploads', {json: descriptors});
-        for (const [name, descriptor] of Object.entries(descriptors)) {
-          say(feedback, `Uploading ${name === 'pdf' ? 'PDF' : 'video'}… Keep this screen open.`);
-          if (draft.direct) {
-            await api(`/admin/current-affairs/uploads/${idPart(draft.id)}/${name}`, {ctx, auth: true,
-              method: 'PUT', binary: files[name], imageUpload: descriptor.type});
-          } else {
-            const upload = draft.files[name];
-            const response = await fetch(upload.url, {method: 'PUT', signal: ctx.signal,
-              headers: {'Content-Type': descriptor.type, ...upload.headers}, body: files[name]});
-            if (!response.ok) throw new Error(`The ${name} upload failed (${response.status}). Choose the file and try again.`);
-          }
-        }
-        Object.assign(json, {uploadId: draft.id, downloadsEnabled: downloads.checked});
-        say(feedback, 'Processing files and publishing…');
+        const uploadId = await uploadCurrentAffairsMedia(ctx, files, {onStatus: message => say(feedback, message)});
+        Object.assign(json, {uploadId, downloadsEnabled: downloads.checked});
       }
       await post(`/admin/content/${section}`, {json});
       form.reset();

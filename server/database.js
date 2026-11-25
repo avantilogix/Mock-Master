@@ -131,6 +131,8 @@ export function openDatabase(path) {
   const bookColumns = new Set(db.prepare('PRAGMA table_info(books)').all().map(column => column.name));
   if (!bookColumns.has('subject')) db.exec("ALTER TABLE books ADD COLUMN subject TEXT NOT NULL DEFAULT 'General'");
   if (!bookColumns.has('chapter')) db.exec("ALTER TABLE books ADD COLUMN chapter TEXT NOT NULL DEFAULT 'Chapter 1'");
+  const chapterVideoColumns = new Set(db.prepare('PRAGMA table_info(chapter_videos)').all().map(column => column.name));
+  if (!chapterVideoColumns.has('file_id')) db.exec("ALTER TABLE chapter_videos ADD COLUMN file_id TEXT NOT NULL DEFAULT ''");
   const ebookColumns = new Set(db.prepare('PRAGMA table_info(ebooks)').all().map(column => column.name));
   if (!ebookColumns.has('demo_pdf')) db.exec('ALTER TABLE ebooks ADD COLUMN demo_pdf BLOB');
   if (!ebookColumns.has('demo_pages')) db.exec('ALTER TABLE ebooks ADD COLUMN demo_pages INTEGER NOT NULL DEFAULT 0');

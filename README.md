@@ -14,6 +14,23 @@ npm start
 
 Open `http://127.0.0.1:3000`. Sign-in and app access require the Firebase configuration below. `npm test` runs the Node integration tests; document tests skip when their OS tools are unavailable.
 
+Local browser workflows use `npm run test:e2e`; to focus on the admin course Add/Edit flow, use `npm run test:e2e:admin-course`. Playwright runs the dummy app on `127.0.0.1:3011` with data under `data/playwright-admin-audit-tests`, separate from the local app on port 3010. The test runner reuses one browser worker and creates isolated contexts per test. For repeated focused runs, start the isolated server once in a PowerShell terminal and opt into reusing it in another:
+
+```powershell
+$env:DATA_DIR = '.\data\playwright-admin-audit-tests'
+$env:HOST = '127.0.0.1'
+$env:PORT = '3011'
+$env:UPI_ID = 'missionselection@upi'
+$env:UPI_PAYEE_NAME = 'Mission Selection'
+npm run seed
+npm run start:dummy
+```
+
+```powershell
+$env:PLAYWRIGHT_REUSE_SERVER = '1'
+npm run test:e2e:admin-course
+```
+
 Run `npm run seed` to add or refresh three sample preparation missions, each with a practice test and protected starter e-book. The seed is idempotent and does not create users, purchases, fake reviews, or admin permissions.
 
 The Phase 2 and Phase 3 student experience includes persisted test reports, notifications, current affairs, PYQs, syllabus resources, a student timetable, referral codes, protected page downloads, and physical-book UPI/shipping orders. Admins can publish timetable entries and learning resources, manage physical-book inventory and fulfillment, configure social links, and disable or reactivate student accounts from the Admin workspace. Physical-book stock is reduced only when the admin approves the payment; course access remains separate.

@@ -439,7 +439,7 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     if (one('SELECT 1 FROM students WHERE uid=? AND disabled', uid)) fail(403, 'This account is disabled. Contact support to request reactivation.');
     if (!admins.has(uid) && !owns(uid, video.course)) fail(403, 'Purchase this course to unlock it.');
     if (req.query.download === '1') fail(403, 'Save this video inside the app instead.');
-    res.sendFile(videoPath(video.id), { headers: { 'Content-Type': video.type } });
+    res.sendFile(videoPath(video.file_id || video.id), { headers: { 'Content-Type': video.type } });
   });
   const affairs = currentAffairs(api, { db, directory: join(videoDir, 'current-affairs'), text, processDocument,
     looksLikeVideo });
@@ -1135,12 +1135,15 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
   api.get('/admin/physical-books', (_req, res) => res.json(all('SELECT * FROM physical_books ORDER BY rowid DESC')));
   api.post('/admin/physical-books', (req, res) => {
     const { price, stock } = req.body ?? {};
+    const active = req.body?.active ?? true;
     if (!Number.isInteger(price) || price < 100 || price > 10_000_000 || !Number.isInteger(stock) || stock < 0 || stock > 10000) {
       fail(422, 'Enter valid stock and a price from ₹1 to ₹100,000, in paise.');
     }
+    if (typeof active !== 'boolean') fail(422, 'Choose whether the book is visible in the store.');
     const id = randomUUID();
-    run('INSERT INTO physical_books VALUES (?, ?, ?, ?, ?, 1, ?)', id, text(req.body?.title, 'Title', 120),
-      text(req.body?.description, 'Description', 2000), price, stock, new Date().toISOString());
+    run('INSERT INTO physical_books (id, title, description, price, stock, active, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      id, text(req.body?.title, 'Title', 120), text(req.body?.description, 'Description', 2000), price, stock,
+      Number(active), new Date().toISOString());
     res.status(201).json({ id });
   });
   api.get('/admin/physical-orders', (_req, res) => res.json(all(`SELECT o.*, COALESCE(NULLIF(s.name, ''), 'Student') AS name,
@@ -1177,9 +1180,12 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
   api.post('/admin/courses', (req, res) => {
     const { title, description, price } = req.body ?? {};
     if (!Number.isInteger(price) || price < 100 || price > 10_000_000) fail(422, 'Price must be ₹1–₹100,000, in whole paise.');
+    const downloadsEnabled = req.body?.downloadsEnabled ?? false;
+    if (typeof downloadsEnabled !== 'boolean') fail(422, 'Choose whether course downloads are allowed.');
     const id = randomUUID();
-    run('INSERT INTO courses (id, title, description, price, created_at) VALUES (?, ?, ?, ?, ?)', id, text(title, 'Title', 120),
-      text(description, 'Description', 2000), price, new Date().toISOString());
+    run('INSERT INTO courses (id, title, description, price, created_at, downloads_enabled) VALUES (?, ?, ?, ?, ?, ?)',
+      id, text(title, 'Title', 120), text(description, 'Description', 2000), price, new Date().toISOString(),
+      Number(downloadsEnabled));
     res.status(201).json({ id });
   });
   api.post('/admin/courses/:id/tests', (req, res) => {
@@ -1242,6 +1248,20 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     });
     res.status(201).json({ id, pages });
   });
+  api.put('/admin/courses/:id/books/:bookId', raw, async (req, res) => {
+    const { id: courseId } = course(req.params.id);
+    const book = one('SELECT id, course, folder_id AS folderId FROM books WHERE id=? AND course=?',
+      req.params.bookId, courseId);
+    if (!book) fail(404, 'Study book not found.');
+    if (!Buffer.isBuffer(req.body)) fail(400, 'Upload a replacement PDF.');
+    const pages = await processDocument(() => pageCount(req.body));
+    const title = text(req.query.title, 'Title', 120);
+    const subject = text(req.query.subject, 'Subject', 100);
+    const chapter = text(req.query.chapter, 'Chapter', 120);
+    run('UPDATE books SET title=?, subject=?, chapter=?, pages=?, pdf=? WHERE id=? AND course=?',
+      title, subject, chapter, pages, req.body, book.id, courseId);
+    res.json({ pages });
+  });
   api.get('/admin/ebooks', (_req, res) => res.json(all(
     `SELECT id, title, description, price, pages, demo_pages AS demoPages, created_at AS createdAt,
       (SELECT COUNT(*) FROM ebook_orders o WHERE o.ebook=ebooks.id) AS orders
@@ -1254,6 +1274,20 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
       id, text(req.query.title, 'E-book title', 120), text(req.query.description, 'Description', 2000),
       priceInput(Number(req.query.price)), pages, req.body, new Date().toISOString());
     res.status(201).json({ id, pages });
+  });
+  api.put('/admin/ebooks/:id', raw, async (req, res) => {
+    const book = one('SELECT id, pages FROM ebooks WHERE id=?', req.params.id);
+    if (!book) fail(404, 'E-book not found.');
+    const input = Buffer.isBuffer(req.body) ? req.query : req.body ?? {};
+    const title = text(input.title, 'E-book title', 120);
+    const description = text(input.description, 'Description', 2000);
+    const price = priceInput(Number(input.price));
+    const pages = Buffer.isBuffer(req.body) ? await processDocument(() => pageCount(req.body)) : book.pages;
+    run(`UPDATE ebooks SET title=?, description=?, price=?, pages=?,
+      pdf=CASE WHEN ? IS NULL THEN pdf ELSE ? END WHERE id=?`,
+    title, description, price, pages, Buffer.isBuffer(req.body) ? req.body : null,
+    Buffer.isBuffer(req.body) ? req.body : null, book.id);
+    res.json({ pages });
   });
   api.put('/admin/ebooks/:id/demo', raw, async (req, res) => {
     if (!one('SELECT 1 FROM ebooks WHERE id=?', req.params.id)) fail(404, 'E-book not found.');
@@ -1282,7 +1316,12 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
   });
   api.post('/admin/courses/:id/videos', async (req, res) => {
     const { id: courseId } = course(req.params.id);
-    const folderId = idInput(req.query.folderId === undefined ? null : req.query.folderId);
+    const replacement = req.query.replaceId ?
+      one('SELECT id, folder_id AS folderId, file_id AS fileId FROM chapter_videos WHERE id=? AND course=?',
+        req.query.replaceId, courseId) : null;
+    if (req.query.replaceId && !replacement) fail(404, 'Chapter video not found.');
+    const folderId = replacement ? replacement.folderId :
+      idInput(req.query.folderId === undefined ? null : req.query.folderId);
     validateItemFolder(workspaceFolders(courseId), folderId, 'content');
     const title = text(req.query.title, 'Title', 120);
     const subject = text(req.query.subject || 'General', 'Subject', 100);
@@ -1290,8 +1329,9 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     const type = (req.get('Content-Type') || '').split(';')[0].trim().toLowerCase();
     if (!videoTypes[type]) fail(415, 'Upload an MP4, WebM, or MOV video.');
     if (Number(req.get('Content-Length')) > MAX_VIDEO_BYTES) fail(413, 'Videos can be at most 300 MB.');
-    const id = randomUUID();
-    const path = videoPath(id);
+    const id = replacement?.id || randomUUID();
+    const fileId = randomUUID();
+    const path = videoPath(fileId);
     mkdirSync(videoDir, { recursive: true, mode: 0o700 });
     let size = 0;
     try {
@@ -1305,13 +1345,20 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
       transaction(() => {
         course(courseId);
         validateItemFolder(workspaceFolders(courseId), folderId, 'content');
-        run('INSERT INTO chapter_videos (id, course, title, subject, chapter, type, size, created_at, folder_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', id, courseId, title, subject, chapter, type, size,
-          new Date().toISOString(), folderId);
+        if (replacement) {
+          run(`UPDATE chapter_videos SET title=?, subject=?, chapter=?, type=?, size=?, file_id=?
+            WHERE id=? AND course=?`, title, subject, chapter, type, size, fileId, id, courseId);
+        } else {
+          run(`INSERT INTO chapter_videos (id, course, title, subject, chapter, type, size, created_at, folder_id, file_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, id, courseId, title, subject, chapter, type, size,
+          new Date().toISOString(), folderId, fileId);
+        }
       });
     } catch (error) {
       rmSync(path, { force: true });
       throw error;
     }
+    if (replacement) rmSync(videoPath(replacement.fileId || replacement.id), { force: true });
     res.status(201).json({ id, size });
   });
   api.get('/admin/payments', (req, res) => {
@@ -1378,7 +1425,9 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
         (SELECT COUNT(*) FROM tests t WHERE t.course=c.id) AS tests,
         (SELECT COUNT(*) FROM books b WHERE b.course=c.id) + (SELECT COUNT(*) FROM chapter_videos v WHERE v.course=c.id) AS materials,
         (SELECT COUNT(*) FROM videos v WHERE v.course=c.id) AS linkedVideos
-        FROM courses c ORDER BY c.created_at DESC, c.rowid DESC`),
+        FROM courses c ORDER BY c.created_at DESC, c.rowid DESC`).map(item => ({
+          ...item, downloadsEnabled: Boolean(item.downloadsEnabled),
+        })),
       tests,
       books: all(`SELECT b.id, b.course, c.title AS courseTitle, b.title, b.pages, b.subject, b.chapter, b.created_at AS createdAt
         FROM books b JOIN courses c ON c.id=b.course ORDER BY b.created_at DESC, b.rowid DESC`),
@@ -1508,7 +1557,7 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
       if (one('SELECT 1 FROM orders WHERE course=?', id)) {
         fail(409, 'Students have purchased or requested this course, so it cannot be deleted. Edit it instead.');
       }
-      const files = all('SELECT id FROM chapter_videos WHERE course=?', id);
+      const files = all('SELECT id, file_id AS fileId FROM chapter_videos WHERE course=?', id);
       transaction(() => {
         for (const table of ['attempts', 'messages', 'reviews', 'tests', 'books', 'chapter_videos', 'course_folders']) {
           run(`DELETE FROM ${table} WHERE course=?`, id);
@@ -1516,7 +1565,7 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
         run("UPDATE videos SET course='' WHERE course=?", id);
         run('DELETE FROM courses WHERE id=?', id);
       });
-      for (const file of files) rmSync(videoPath(file.id), { force: true });
+      for (const file of files) rmSync(videoPath(file.fileId || file.id), { force: true });
     },
     tests(id) {
       found('tests', id, 'Test');
@@ -1527,9 +1576,10 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     },
     books: id => { found('books', id, 'Study book'); run('DELETE FROM books WHERE id=?', id); },
     chapterVideos(id) {
-      found('chapter_videos', id, 'Chapter video');
+      const video = one('SELECT id, file_id AS fileId FROM chapter_videos WHERE id=?', id);
+      if (!video) fail(404, 'Chapter video not found.');
       run('DELETE FROM chapter_videos WHERE id=?', id);
-      rmSync(videoPath(id), { force: true });
+      rmSync(videoPath(video.fileId || video.id), { force: true });
     },
     videos: id => { found('videos', id, 'Video'); run('DELETE FROM videos WHERE id=?', id); },
     resources: id => { found('resources', id, 'Resource'); affairs.remove(id); run('DELETE FROM resources WHERE id=?', id); },
@@ -1545,8 +1595,14 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     },
   };
   const managedType = type => Object.hasOwn(editors, type) ? type : fail(404, 'Content type not found.');
-  api.put('/admin/published/:type/:id', (req, res) => {
-    editors[managedType(req.params.type)](req.params.id, req.body ?? {});
+  api.put('/admin/published/:type/:id', async (req, res) => {
+    const type = managedType(req.params.type);
+    if (type === 'resources') {
+      const resource = one('SELECT kind FROM resources WHERE id=?', req.params.id);
+      if (!resource) fail(404, 'Resource not found.');
+      if (resource.kind === 'current-affairs') return res.json(await affairs.edit(req.params.id, req));
+    }
+    editors[type](req.params.id, req.body ?? {});
     res.sendStatus(204);
   });
   api.delete('/admin/published/:type/:id', (req, res) => {

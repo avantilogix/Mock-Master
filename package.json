@@ -3,6 +3,8 @@
   "version": "1.0.0",
   "scripts": {
     "test": "node --test",
+    "test:e2e": "playwright test",
+    "test:e2e:admin-course": "playwright test --grep \"admin can create and edit course details locally\"",
     "seed": "node --env-file-if-exists=.env server/seed.js",
     "start": "node --env-file-if-exists=.env server/index.js",
     "start:dummy": "node --env-file-if-exists=.env server/index.js --dummy-login"
@@ -24,6 +26,7 @@
   },
   "private": true,
   "devDependencies": {
-    "@bubblewrap/cli": "^1.27.0"
+    "@bubblewrap/cli": "^1.27.0",
+    "@playwright/test": "^1.65.1"
   }
 }

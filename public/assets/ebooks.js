@@ -60,6 +60,14 @@ function paymentPanel(target, ctx, book, action) {
           el('dt', {}, 'Reference'), el('dd', {}, order.reference))));
       return;
     }
+    if (order?.status === 'rejected') {
+      target.replaceChildren(el('div', {class: 'payment-status rejected', role: 'alert'},
+        el('h2', {}, 'Payment Not Approved'),
+        el('p', {}, order.reviewNote || 'The admin rejected this request. Review the payment and submit again.'),
+        el('dl', {class: 'payment-summary'}, el('dt', {}, 'Amount'), el('dd', {}, priceText(amount)),
+          el('dt', {}, 'Reference'), el('dd', {}, order.reference))));
+      return;
+    }
     if (!payment.configured) {
       target.replaceChildren(el('div', {class: 'payment-status'},
         el('h2', {}, 'Payment Is Being Configured'), link('Contact Support', '#support', 'button secondary')));

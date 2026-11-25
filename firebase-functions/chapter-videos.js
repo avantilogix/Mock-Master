@@ -17,7 +17,7 @@ export function registerVideoRoutes(api, { db, bucket, value, text, course, requ
     const download = req.query.download === '1';
     if (download) fail(403, 'Save this video inside the app instead.');
     const filename = item.title.replace(/[^\w .-]+/g, '_').trim() || 'chapter-video';
-    const [url] = await bucket.file(pathFor(item.id)).getSignedUrl({
+    const [url] = await bucket.file(item.mediaFile || pathFor(item.id)).getSignedUrl({
       version: 'v4', action: 'read', expires: Math.min(Date.now() + 60 * 60_000, cutoff ?? Infinity),
       responseDisposition: `inline; filename="${filename}.${types.get(item.type)}"`,
     });
@@ -27,7 +27,11 @@ export function registerVideoRoutes(api, { db, bucket, value, text, course, requ
   api.post('/admin/courses/:id/videos/upload', async (req, res) => {
     const { id: courseId } = await course(req.params.id);
     const { title, subject, chapter, type, size } = req.body ?? {};
-    const folderId = idInput(req.body?.folderId === undefined ? null : req.body.folderId);
+    const replaceId = req.body?.replaceId ? idInput(req.body.replaceId) : null;
+    const replacement = replaceId ? value(await videos.doc(replaceId).get()) : null;
+    if (replaceId && (!replacement || replacement.course !== courseId)) fail(404, 'Chapter video not found.');
+    const folderId = replacement ? replacement.folderId || null :
+      idInput(req.body?.folderId === undefined ? null : req.body.folderId);
     if (folderId !== null) {
       const folder = await db.collection('courseFolders').doc(folderId).get();
       validateFolderSnapshot(folder, courseId, folderId, 'content', value);
@@ -37,7 +41,7 @@ export function registerVideoRoutes(api, { db, bucket, value, text, course, requ
     const id = randomUUID();
     const expires = Date.now() + 30 * 60_000;
     const item = { course: courseId, title: text(title, 'Title', 120), subject: text(subject, 'Subject', 100),
-      chapter: text(chapter, 'Chapter', 120), type, size, folderId, uid: req.user.uid, expires };
+      chapter: text(chapter, 'Chapter', 120), type, size, folderId, replaceId, uid: req.user.uid, expires };
     const headers = { 'x-goog-if-generation-match': '0', 'x-goog-meta-upload-id': id,
       'cache-control': 'private, no-store' };
     const [url] = await bucket.file(pathFor(id)).getSignedUrl({
@@ -70,20 +74,40 @@ export function registerVideoRoutes(api, { db, bucket, value, text, course, requ
       fail(422, 'This file is not a valid video of the selected type.');
     }
     const { title, subject, chapter, type, size } = draft;
+    let previousFile;
     await db.runTransaction(async tx => {
       const courseRef = db.collection('courses').doc(courseId);
       const folderId = idInput(draft.folderId === undefined ? null : draft.folderId);
       const folderRef = folderId === null ? null : db.collection('courseFolders').doc(folderId);
-      const [pending, currentCourse, folder] = await Promise.all([
+      const videoRef = draft.replaceId ? videos.doc(draft.replaceId) : null;
+      const [pending, currentCourse, folder, existingVideo] = await Promise.all([
         tx.get(ref), tx.get(courseRef), folderRef ? tx.get(folderRef) : Promise.resolve(null),
+        videoRef ? tx.get(videoRef) : Promise.resolve(null),
       ]);
       if (!currentCourse.exists) fail(404, 'Course not found.');
       if (!pending.exists) fail(409, 'This upload has already been published.');
       validateFolderSnapshot(folder, courseId, folderId, 'content', value);
-      tx.create(videos.doc(draft.id), { course: courseId, title, subject, chapter, type, size, folderId, createdAt: new Date().toISOString() });
+      if (videoRef) {
+        const existing = value(existingVideo);
+        if (!existing || existing.course !== courseId) fail(404, 'Chapter video not found.');
+        previousFile = existing.mediaFile || pathFor(existing.id);
+        tx.update(videoRef, { title, subject, chapter, type, size, mediaFile: pathFor(draft.id) });
+      } else {
+        tx.create(videos.doc(draft.id), { course: courseId, title, subject, chapter, type, size, folderId,
+          createdAt: new Date().toISOString() });
+      }
       tx.update(courseRef, { workspaceVersion: (currentCourse.data().workspaceVersion || 0) + 1 });
       tx.delete(ref);
     });
-    res.status(201).json({ id: draft.id });
+    let warning;
+    try {
+      if (previousFile && previousFile !== pathFor(draft.id)) {
+        await bucket.file(previousFile).delete({ ignoreNotFound: true });
+      }
+    } catch (error) {
+      console.error('Replaced chapter video cleanup failed:', previousFile, error.code);
+      warning = 'The video was updated, but its previous file could not be removed.';
+    }
+    res.status(201).json({ id: draft.replaceId || draft.id, ...(warning ? { warning } : {}) });
   });
 }

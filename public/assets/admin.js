@@ -124,18 +124,24 @@ export function showAdmin(main, ctx, folderTarget = null) {
   paymentMethod.addEventListener('change', () => upiId.dispatchEvent(new Event('change')));
   const paymentQr = rule(el('input', {type: 'file', accept: 'image/png,image/jpeg,image/webp'}), (_, control) =>
     !control.files[0] || /^image\/(png|jpeg|webp)$/i.test(control.files[0].type) ? '' : 'Choose a PNG, JPEG, or WebP image.');
+  const paymentQrPreview = el('img', {class: 'payment-qr-preview', alt: 'Current payment QR code', hidden: ''});
+  const paymentQrStatus = el('p', {class: 'muted', role: 'status'});
   const savePayment = button('Save Payment Options', null, 'submit');
   const uploadQr = button('Upload QR Image', 'secondary');
   const paymentFeedback = status();
   const paymentForm = el('form', {}, field('Payment Method Shown to Students', paymentMethod),
     field('UPI Payee Name', payeeName), field('UPI ID', upiId),
-    field('QR Image (optional unless QR is enabled)', paymentQr),
+    field('QR Image (optional unless QR is enabled)', paymentQr, 'Leave blank to keep the current QR image.'),
+    paymentQrStatus, paymentQrPreview,
     el('div', {class: 'actions'}, uploadQr, savePayment), paymentFeedback);
   savePayment.type = 'submit';
   api('/admin/payment-settings', {ctx, auth: true}).then(values => {
     paymentMethod.value = values.method || 'upi';
     payeeName.value = values.payeeName || '';
     upiId.value = values.upiId || '';
+    paymentQrStatus.textContent = values.customQr ? 'A payment QR image is currently configured.' : 'No custom payment QR image is configured.';
+    paymentQrPreview.hidden = !values.customQr;
+    if (values.customQr) paymentQrPreview.src = `/api/payment-qr?updated=${Date.now()}`;
   }).catch(error => { if (ctx.current()) say(paymentFeedback, error.message, true); });
   uploadQr.addEventListener('click', async () => {
     const file = paymentQr.files[0];
@@ -147,6 +153,9 @@ export function showAdmin(main, ctx, folderTarget = null) {
     run(uploadQr, paymentFeedback, async () => {
       await api('/admin/payment-qr', {ctx, auth: true, method: 'POST', binary: file,
         imageUpload: file.type});
+      paymentQrStatus.textContent = 'A payment QR image is currently configured.';
+      paymentQrPreview.src = `/api/payment-qr?updated=${Date.now()}`;
+      paymentQrPreview.hidden = false;
       say(paymentFeedback, 'QR image uploaded. Save the selected payment method to enable it.');
     }, 'Uploading QR image…');
   });
@@ -271,6 +280,40 @@ export function showAdmin(main, ctx, folderTarget = null) {
   const loadEbooks = (message = '') => loadInto(ebooks, ctx, async () => {
     const rows = await get('/admin/ebooks');
     ebooks.replaceChildren(...(rows.length ? rows.map(book => {
+      const editTitle = el('input', {required: '', maxlength: '120', value: book.title});
+      const editDescription = el('textarea', {rows: '3', required: '', maxlength: '2000'});
+      editDescription.value = book.description;
+      const editPrice = rupeeInput();
+      editPrice.value = String(book.price / 100);
+      const editPdf = rule(el('input', {type: 'file', accept: pdfAccept}), (_, control) => {
+        const file = control.files[0];
+        return file && (!/\.pdf$/i.test(file.name) || file.size > 12 * 1024 * 1024) ?
+          'Choose a PDF no larger than 12 MB.' : '';
+      });
+      const editSubmit = button('Save E-Book Changes', null, 'submit');
+      const editFeedback = status();
+      const editForm = el('form', {}, field('E-Book Title', editTitle), field('Description', editDescription),
+        field('Price (₹)', editPrice, PRICE_HINT),
+        field('Replace Full PDF (optional)', editPdf,
+          `Current full PDF: ${book.pages} pages. Leave blank to keep the existing file.`),
+        editSubmit, editFeedback);
+      bindForm(editForm, editSubmit, editFeedback, async () => {
+        const values = {
+          title: textValue(editTitle, 'E-book title'),
+          description: textValue(editDescription, 'Description'),
+          price: toPaise(editPrice),
+        };
+        let result;
+        if (editPdf.files[0]) {
+          const query = new URLSearchParams({...values, price: String(values.price)});
+          result = await api(`/admin/ebooks/${idPart(book.id)}?${query}`, {
+            ctx, auth: true, method: 'PUT', binary: editPdf.files[0],
+          });
+        } else {
+          result = await api(`/admin/ebooks/${idPart(book.id)}`, {ctx, auth: true, method: 'PUT', json: values});
+        }
+        await loadEbooks(result?.warning || `E-book updated: ${values.title}.`);
+      }, 'Saving e-book…');
       const remove = button('Delete', 'danger secondary');
       remove.disabled = book.orders > 0;
       remove.title = book.orders ? 'Cannot delete an e-book with purchase requests.' : 'Delete e-book';
@@ -308,6 +351,8 @@ export function showAdmin(main, ctx, folderTarget = null) {
         });
         demoActions.append(preview, removeDemo);
       }
+      const editDetails = el('details', {class: 'ebook-edit-editor'},
+        el('summary', {}, 'Edit E-Book'), editForm);
       return el('article', {class: 'manage-item'},
         el('div', {class: 'manage-main'}, el('h3', {}, book.title),
           el('p', {class: 'muted'}, book.description),
@@ -315,6 +360,7 @@ export function showAdmin(main, ctx, folderTarget = null) {
             {style: 'currency', currency: 'INR'}).format(book.price / 100),
           `${book.pages} pages`, `${book.orders || 0} purchase requests`].map(value => el('li', {}, value)))),
         el('div', {class: 'actions manage-actions'}, remove),
+        editDetails,
         el('details', {class: 'ebook-demo-editor'},
           el('summary', {}, book.demoPages ? `Demo PDF · ${book.demoPages} pages` : 'Add a Demo PDF'),
           demoForm));
@@ -343,12 +389,14 @@ export function showAdmin(main, ctx, folderTarget = null) {
   const physicalDescription = el('textarea', {rows: '3', required: '', maxlength: '2000'});
   const physicalPrice = rupeeInput();
   const stock = el('input', {type: 'number', min: '0', max: '10000', step: '1', required: ''});
+  const physicalActive = el('input', {type: 'checkbox'});
+  physicalActive.checked = true;
   const physicalCovers = ctx.publishingMedia ? coverPicker(ctx) : null;
   const physicalSubmit = button('Publish Physical Book', null, 'submit');
   const physicalFeedback = status();
   const physicalForm = el('form', {}, field('Book Title', physicalTitle),
     field('Description', physicalDescription), field('Price (₹)', physicalPrice, PRICE_HINT),
-    field('Stock', stock), physicalCovers?.node,
+    field('Stock', stock), el('label', {class: 'choice'}, physicalActive, 'Show this book in the store'), physicalCovers?.node,
     physicalSubmit, physicalFeedback);
   const loadPhysicalBooks = () => loadInto(physicalBooks, ctx, async () => {
     const rows = await get('/admin/physical-books');
@@ -361,9 +409,10 @@ export function showAdmin(main, ctx, folderTarget = null) {
     const images = await physicalCovers?.upload();
     await post('/admin/physical-books', {json: {
       title: textValue(physicalTitle, 'Book title'), description: textValue(physicalDescription, 'Description'),
-      price: toPaise(physicalPrice), stock: stock.valueAsNumber, images,
+      price: toPaise(physicalPrice), stock: stock.valueAsNumber, active: physicalActive.checked, images,
     }});
     physicalForm.reset();
+    physicalActive.checked = true;
     physicalCovers?.clear();
     say(physicalFeedback, 'Physical book published.');
     loadPhysicalBooks();
@@ -438,17 +487,20 @@ export function showAdmin(main, ctx, folderTarget = null) {
   const description = el('textarea', {rows: '3', required: '', maxlength: '2000'});
   const price = rupeeInput();
   const expiresOn = el('input', {type: 'date', required: ''});
+  const downloadsEnabled = el('input', {type: 'checkbox'});
   const covers = ctx.publishingMedia ? coverPicker(ctx) : null;
   const create = button('Create Live Course', null, 'submit');
   const courseStatus = status();
   const createForm = el('form', {}, field('Course Title', title), field('Description', description),
-    field('Price (₹)', price, PRICE_HINT), covers?.node,
+    field('Price (₹)', price, PRICE_HINT),
+    el('label', {class: 'choice'}, downloadsEnabled, 'Allow students to download course PDFs and chapter videos'),
+    covers?.node,
     covers ? field('Course Expiry Date', expiresOn, 'Purchases and study access end at midnight India time after this date.') : null,
     create, courseStatus);
   bindForm(createForm, create, courseStatus, async () => {
     const images = await covers?.upload();
     await post('/admin/courses', {json: {title: textValue(title, 'Title'), description: textValue(description, 'Description'),
-      price: toPaise(price), expiresOn: covers ? expiresOn.value : undefined, images}});
+      price: toPaise(price), expiresOn: covers ? expiresOn.value : undefined, downloadsEnabled: downloadsEnabled.checked, images}});
     createForm.reset();
     covers?.clear();
     try {

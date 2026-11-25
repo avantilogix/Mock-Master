@@ -159,13 +159,26 @@ export function showReferrals(main, ctx, action) {
 export function showDownloads(main, ctx, action) {
   main.append(...heading('Downloads', 'Content saved on this device. An internet connection is required to check access before opening.'));
   const content = el('div');
-  main.append(panel('Saved on This Device', content));
+  main.append(panel('Saved on This Device',
+    el('div', {class: 'tabs', role: 'tablist', 'aria-label': 'Download type'},
+      el('button', {type: 'button', class: 'tab', role: 'tab', 'aria-selected': 'true'}, 'PDF'),
+      el('button', {type: 'button', class: 'tab', role: 'tab', 'aria-selected': 'false'}, 'Video')),
+    content));
   if (!ctx.user) {
     content.append(el('p', {}, 'Sign in to view saved content.'), action.signInLink());
     return;
   }
+  let activeType = 'pdf';
+  const tabs = main.querySelectorAll('.tabs .tab');
+  tabs.forEach((tab, index) => tab.addEventListener('click', () => {
+    activeType = index === 0 ? 'pdf' : 'video';
+    tabs.forEach((value, position) => value.setAttribute('aria-selected', String(position === index)));
+    load();
+  }));
   const load = () => loadInto(content, ctx, async () => {
-    const items = await savedItems(ctx.user.uid);
+    const items = (await savedItems(ctx.user.uid)).filter(item =>
+      activeType === 'video' ? item.type.includes('video') :
+        !item.type.includes('video'));
     content.replaceChildren(...(items.length ? items.map(item => {
       const feedback = status();
       const remove = confirmDelete(feedback, async () => {
@@ -196,6 +209,12 @@ export function showSaved(main, ctx, type, id) {
       ctx.signal.addEventListener('abort', () => URL.revokeObjectURL(url), {once: true});
       content.append(el('video', {class: 'chapter-video', src: url, controls: '', controlslist: 'nodownload',
         preload: 'metadata', playsinline: '', 'aria-label': item.title}));
+    } else if (type === 'test-pdf' || type === 'test-result-pdf') {
+      const blob = await savedPart(item, 1);
+      if (!ctx.current()) return;
+      const url = URL.createObjectURL(blob);
+      ctx.signal.addEventListener('abort', () => URL.revokeObjectURL(url), {once: true});
+      content.append(el('iframe', {class: 'saved-pdf', src: url, title: item.title}));
     } else {
       pdfReader(content, ctx, {...item, pages: item.parts, readerTools: true, getPage: page => savedPart(item, page)});
     }

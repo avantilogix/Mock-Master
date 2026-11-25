@@ -1,7 +1,7 @@
 import {coverGallery} from './publishing-media.js';
 import {api} from './services.js';
 import {pdfReader} from './ebooks.js?v=continuous-reader-v2';
-import {saveControl} from './saved-content.js';
+import {saveContent, saveControl} from './saved-content.js';
 import {button, el, empty, heading, icon, idPart, link, loadInto, run, say, status} from './ui.js';
 
 const protectedGet = (ctx, path, image = false) => api(path, {ctx, auth: true, image});
@@ -203,6 +203,16 @@ export function showTest(main, ctx, courseId, testId, phone) {
         if (resultButton) {
           resultButton.addEventListener('click', () => run(resultButton, feedback, async () => {
               const blob = await api(`/attempts/${result.attemptId}/result.pdf`, {ctx, auth: true, blob: true});
+              try {
+                await saveContent(ctx, {
+                  type: 'test-result-pdf', id: `result-${result.attemptId}`,
+                  title: `${test.title} - Result`, parts: 1,
+                  downloadPath: `/attempts/${result.attemptId}/result.pdf`,
+                  validatePath: `/attempts/${result.attemptId}/result.pdf`,
+                });
+              } catch (error) {
+                if (!/already saved/i.test(error.message)) throw error;
+              }
               const url = URL.createObjectURL(blob);
               const anchor = el('a', {href: url, download: `${test.title}-result.pdf`});
               document.body.append(anchor); anchor.click(); anchor.remove();
@@ -212,6 +222,16 @@ export function showTest(main, ctx, courseId, testId, phone) {
         if (paperButton) {
           paperButton.addEventListener('click', () => run(paperButton, feedback, async () => {
               const blob = await api(`${path}/question-paper.pdf`, {ctx, auth: true, blob: true});
+              try {
+                await saveContent(ctx, {
+                  type: 'test-pdf', id: `paper-${testId}`,
+                  title: `${test.title} - Question Paper`, parts: 1,
+                  downloadPath: `${path}/question-paper.pdf`,
+                  validatePath: `${path}/question-paper.pdf`,
+                });
+              } catch (error) {
+                if (!/already saved/i.test(error.message)) throw error;
+              }
               const url = URL.createObjectURL(blob);
               const anchor = el('a', {href: url, download: `${test.title}-question-paper.pdf`});
               document.body.append(anchor); anchor.click(); anchor.remove();

@@ -60,6 +60,8 @@ export async function saveContent(ctx, item, onProgress = () => {}) {
       let blob;
       if (item.pagePath) {
         blob = await api(`${item.pagePath}/${page}`, {ctx, auth: true, image: true});
+      } else if (item.downloadPath) {
+        blob = await api(item.downloadPath, {ctx, auth: true, blob: true});
       } else {
         const {url} = await api(item.videoLink, {ctx, auth: true});
         const response = await fetch(url, {signal: ctx.signal, credentials: 'omit', redirect: 'error'});
@@ -109,6 +111,8 @@ async function validateAccess(ctx, item) {
     if (!resource.downloadsEnabled || !media || (type === 'affairs-pdf' && media.pages !== item.parts)) {
       throw new Error('This resource is no longer available for download.');
     }
+  } else if (type === 'test-pdf' || type === 'test-result-pdf') {
+    await api(item.validatePath, {ctx, auth: true, blob: true});
   } else throw new Error('Unknown saved content type.');
 }
 

@@ -9,6 +9,7 @@ import {showDownloads, showReferrals, showSaved, showTimetable, socialFooter} fr
 import {showCourseGroups, showShareRate, showVideos} from './engagement.js?v=youtube-rotate-v2';
 import {showEbook, showEbookDemo, showEbookStore} from './ebooks.js?v=continuous-reader-v2';
 import {examPreferenceField, normalizeExamPreferences} from './exam-preferences.js';
+import {verifyPasswordForPhoneUser} from './password-verification.js';
 import {bindForm, button, el, field, heading, icon, idPart, link, loadInto, panel, run, say, status, textValue} from './ui.js';
 
 const main = document.querySelector('#main');
@@ -163,6 +164,7 @@ function profileUnavailable() {
 function showProfile(ctx) {
   const phone = ctx.user.phoneNumber || session.me?.phone;
   const feedback = status();
+  const passwordFeedback = status();
   const signOut = button('Sign Out', 'secondary');
   signOut.addEventListener('click', async () => {
     if (signingOut) return;
@@ -252,6 +254,58 @@ function showProfile(ctx) {
       el('span', {class: 'profile-menu-arrow', 'aria-hidden': 'true'}, '→'));
     return row;
   };
+  const passwordDialog = el('dialog', {class: 'password-dialog'});
+  const passwordTitle = el('h2', {}, 'Change Password');
+  const currentPassword = el('input', {type: 'password', autocomplete: 'current-password', required: '', minlength: '8', maxlength: '128'});
+  const newPassword = el('input', {type: 'password', autocomplete: 'new-password', required: '', minlength: '8', maxlength: '128'});
+  const confirmPassword = el('input', {type: 'password', autocomplete: 'new-password', required: '', minlength: '8', maxlength: '128'});
+  const passwordForm = el('form', {},
+    field('Current Password', currentPassword),
+    field('New Password', newPassword, 'Use at least 8 characters.'),
+    field('Confirm New Password', confirmPassword));
+  const showHide = el('label', {class: 'choice'}, el('input', {type: 'checkbox'}), 'Show passwords');
+  showHide.querySelector('input').addEventListener('change', event => {
+    const type = event.target.checked ? 'text' : 'password';
+    currentPassword.type = type;
+    newPassword.type = type;
+    confirmPassword.type = type;
+  });
+  const cancelPassword = button('Cancel', 'secondary');
+  const updatePassword = button('Update Password', null, 'submit');
+  passwordForm.append(showHide,
+    el('div', {class: 'actions'}, cancelPassword, updatePassword), passwordFeedback);
+  passwordDialog.append(passwordTitle, passwordForm);
+  cancelPassword.addEventListener('click', () => passwordDialog.close());
+  passwordDialog.addEventListener('close', () => passwordForm.reset());
+  const changePassword = button('Change Password', 'secondary');
+  changePassword.addEventListener('click', () => {
+    passwordFeedback.textContent = '';
+    passwordDialog.showModal();
+    currentPassword.focus();
+  });
+  bindForm(passwordForm, updatePassword, passwordFeedback, async () => {
+    if (newPassword.value !== confirmPassword.value) throw new Error('The new passwords do not match.');
+    if (currentPassword.value === newPassword.value) throw new Error('The new password must be different from the current password.');
+    const user = firebase.auth.currentUser;
+    if (!user?.email) throw new Error('This account does not have a password credential.');
+    const tokenResult = await user.getIdTokenResult();
+    if (tokenResult.signInProvider !== 'phone') {
+      throw new Error('Phone verification is required before changing your password.');
+    }
+    try {
+      await verifyPasswordForPhoneUser(firebase.sdk, firebase.passwordAuth, user, user.email, currentPassword.value);
+      await firebase.sdk.updatePassword(user, newPassword.value);
+      passwordDialog.close();
+      say(feedback, 'Password updated. Use your new password at the next sign-in.');
+    } catch (error) {
+      if (error.code === 'auth/wrong-password' || error.code === 'auth/invalid-credential') {
+        throw new Error('The current password is incorrect.');
+      }
+      if (error.code === 'auth/weak-password') throw new Error('Choose a password with at least 8 characters.');
+      if (error.code === 'auth/requires-recent-login') throw new Error('Sign in again before changing your password.');
+      throw error;
+    }
+  }, 'Updating password…');
   main.append(
     panel('My Learning', el('div', {class: 'profile-menu'},
       profileAction('missions', 'Explore Courses', 'Browse missions and available content', '#catalog'),
@@ -274,9 +328,10 @@ function showProfile(ctx) {
       profileAction('admin', 'Privacy Policy', 'How your account and learning data are used', '#privacy'),
       profileAction('files', 'Terms & Conditions', 'Purchase, content, community, and account rules', '#terms'),
       profileAction('files', 'Copyright Policy', 'Rights and permitted use of learning content', '#copyright'))),
-    panel('Account Actions', el('div', {class: 'account-actions'}, signOut),
+    panel('Account Actions', el('div', {class: 'account-actions'}, changePassword, signOut),
       el('div', {class: 'danger-zone'}, el('div', {}, el('strong', {}, 'Disable Account'),
         el('p', {class: 'muted'}, 'You can contact support later to request reactivation.')), disable, feedback)));
+  main.append(passwordDialog);
   accountEditor.replaceChildren(form);
   showSavedName();
   accountEditor.hidden = true;

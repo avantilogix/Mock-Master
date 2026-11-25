@@ -825,7 +825,7 @@ function createApp() {
     const book = await ownedEbook(req, req.params.id);
     const page = Number(req.params.page);
     if (!Number.isInteger(page) || page < 1 || page > book.pages) fail(404, 'Page not found.');
-    const [pdf] = await bucket.file(`ebooks/${book.id}.pdf`).download();
+    const [pdf] = await bucket.file(book.pdfFile || `ebooks/${book.id}.pdf`).download();
     res.type('png').send(await processDocument(() => renderPage(pdf, page, req.user.phone)));
   });
   api.get('/ebooks/:id/download', () => fail(403, 'Save this e-book inside the app instead.'));
@@ -1342,10 +1342,12 @@ function createApp() {
   });
   api.post('/admin/physical-books', async (req, res) => {
     const { price, stock } = req.body ?? {};
+    const active = req.body?.active ?? true;
     if (!Number.isInteger(price) || price < 100 || price > 10_000_000 ||
         !Number.isInteger(stock) || stock < 0 || stock > 10000) {
       fail(422, 'Enter valid stock and a price from ₹1 to ₹100,000, in paise.');
     }
+    if (typeof active !== 'boolean') fail(422, 'Choose whether the book is visible in the store.');
     const id = randomUUID();
     await db.collection('physicalBooks').doc(id).create({
       title: text(req.body?.title, 'Title', 120),
@@ -1353,7 +1355,7 @@ function createApp() {
       price,
       stock,
       images: await media.validate(req.body?.images),
-      active: true,
+      active,
       createdAt: new Date().toISOString(),
     });
     res.status(201).json({ id });
@@ -1468,12 +1470,15 @@ function createApp() {
     if (!Number.isInteger(price) || price < 100 || price > 10_000_000) {
       fail(422, 'Price must be ₹1–₹100,000, in whole paise.');
     }
+    const downloadsEnabled = req.body?.downloadsEnabled ?? false;
+    if (typeof downloadsEnabled !== 'boolean') fail(422, 'Choose whether course downloads are allowed.');
     const id = await createWithId('courses', {
       title: text(title, 'Title', 120),
       description: text(description, 'Description', 2000),
       price,
       expiresOn: expiryInput(req.body?.expiresOn, { future: true }),
       images: await media.validate(req.body?.images),
+      downloadsEnabled,
     });
     res.status(201).json({ id });
   });
@@ -1580,6 +1585,46 @@ function createApp() {
     }
     res.status(201).json({ id, pages });
   });
+  api.put('/admin/courses/:id/books/:bookId', raw, async (req, res) => {
+    const { id: courseId } = await course(req.params.id);
+    const ref = db.collection('books').doc(req.params.bookId);
+    const existing = value(await ref.get());
+    if (!existing || existing.course !== courseId) fail(404, 'Study book not found.');
+    if (!Buffer.isBuffer(req.body)) fail(400, 'Upload a replacement PDF.');
+    const title = text(req.query.title, 'Title', 120);
+    const subject = text(req.query.subject, 'Subject', 100);
+    const chapter = text(req.query.chapter, 'Chapter', 120);
+    const images = req.query.images === undefined ? existing.images || [] :
+      await media.validate(String(req.query.images).split(','));
+    const pages = await processDocument(() => pageCount(req.body));
+    const pdfFile = `books/${existing.id}/${randomUUID()}.pdf`;
+    await bucket.file(pdfFile).save(req.body, { resumable: false, contentType: 'application/pdf',
+      metadata: { cacheControl: 'private, no-store' } });
+    const courseRef = db.collection('courses').doc(courseId);
+    let previousFile;
+    try {
+      await db.runTransaction(async tx => {
+        const [currentBook, currentCourse] = await Promise.all([tx.get(ref), tx.get(courseRef)]);
+        const book = value(currentBook);
+        if (!book || book.course !== courseId) fail(404, 'Study book not found.');
+        if (!currentCourse.exists) fail(404, 'Course not found.');
+        previousFile = book.pdfFile || `books/${book.id}.pdf`;
+        tx.update(ref, { title, subject, chapter, images, pages, pdfFile });
+        tx.update(courseRef, { workspaceVersion: (currentCourse.data().workspaceVersion || 0) + 1 });
+      });
+    } catch (error) {
+      await bucket.file(pdfFile).delete({ ignoreNotFound: true });
+      throw error;
+    }
+    let warning;
+    try {
+      if (previousFile && previousFile !== pdfFile) await bucket.file(previousFile).delete({ ignoreNotFound: true });
+    } catch (error) {
+      console.error('Replaced study book cleanup failed:', previousFile, error.code);
+      warning = 'The study book was updated, but its previous file could not be removed.';
+    }
+    res.json({ pages, ...(warning ? { warning } : {}) });
+  });
   api.get('/admin/ebooks', async (_req, res) => {
     const [books, orders] = await Promise.all([queryCollection('ebooks'), queryCollection('ebookOrders')]);
     res.json(books.sort(byNewest).map(book => ({
@@ -1608,6 +1653,39 @@ function createApp() {
       throw error;
     }
     res.status(201).json({ id, pages });
+  });
+  api.put('/admin/ebooks/:id', raw, async (req, res) => {
+    const ref = db.collection('ebooks').doc(req.params.id);
+    const existing = value(await ref.get());
+    if (!existing) fail(404, 'E-book not found.');
+    const input = Buffer.isBuffer(req.body) ? req.query : req.body ?? {};
+    const title = text(input.title, 'E-book title', 120);
+    const description = text(input.description, 'Description', 2000);
+    const price = Number(input.price);
+    if (!Number.isInteger(price) || price < 100 || price > 10_000_000) fail(422, 'Price must be ₹1–₹1,00,000.');
+    if (!Buffer.isBuffer(req.body)) {
+      await ref.update({ title, description, price });
+      return res.json({ pages: existing.pages });
+    }
+    const pages = await processDocument(() => pageCount(req.body));
+    const pdfFile = `ebooks/${existing.id}/${randomUUID()}.pdf`;
+    await bucket.file(pdfFile).save(req.body, { resumable: false, contentType: 'application/pdf',
+      metadata: { cacheControl: 'private, no-store' } });
+    try {
+      await ref.update({ title, description, price, pages, pdfFile });
+    } catch (error) {
+      await bucket.file(pdfFile).delete({ ignoreNotFound: true });
+      throw error;
+    }
+    let warning;
+    const previousFile = existing.pdfFile || `ebooks/${existing.id}.pdf`;
+    try {
+      if (previousFile !== pdfFile) await bucket.file(previousFile).delete({ ignoreNotFound: true });
+    } catch (error) {
+      console.error('Replaced e-book cleanup failed:', previousFile, error.code);
+      warning = 'The e-book was updated, but its previous file could not be removed.';
+    }
+    res.json({ pages, ...(warning ? { warning } : {}) });
   });
   api.put('/admin/ebooks/:id/demo', raw, async (req, res) => {
     const ref = db.collection('ebooks').doc(req.params.id);
@@ -1648,7 +1726,7 @@ function createApp() {
     if (!book.exists) fail(404, 'E-book not found.');
     const orders = await db.collection('ebookOrders').where('ebook', '==', req.params.id).limit(1).get();
     if (!orders.empty) fail(409, 'This e-book has purchase requests and cannot be deleted.');
-    await Promise.all([book.ref.delete(), bucket.file(`ebooks/${req.params.id}.pdf`).delete({ ignoreNotFound: true }),
+    await Promise.all([book.ref.delete(), bucket.file(book.data().pdfFile || `ebooks/${req.params.id}.pdf`).delete({ ignoreNotFound: true }),
       ...(book.data().demoFile ? [bucket.file(book.data().demoFile).delete({ ignoreNotFound: true })] : [])]);
     res.sendStatus(204);
   });

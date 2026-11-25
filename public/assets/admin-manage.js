@@ -1,6 +1,7 @@
 import {api} from './services.js';
-import {contentKinds} from './reports.js?v=current-affairs-media';
-import {coverPicker} from './publishing-media.js';
+import {contentKinds, uploadCurrentAffairsMedia} from './reports.js?v=current-affairs-media';
+import {coverGallery, coverPicker} from './publishing-media.js';
+import {maxVideoBytes, uploadChapterVideo, videoAccept, videoType} from './chapter-upload.js';
 import {subjectQuestionManager} from './question-sections.js?v=sectionwise-v2';
 import {bindForm, button, confirmDelete, el, field, formatDate, icon, idPart, link, loadInto, rule, run, say, status, textValue} from './ui.js';
 
@@ -142,13 +143,33 @@ function types({ctx, rupeeInput, toPaise, questionData, priceHint, courses}) {
     books: {
       label: 'Study Books', noun: 'study book', course: true, empty: 'No PDF study books uploaded yet.',
       details: item => [`${item.subject} › ${item.chapter}`, plural(item.pages, 'page')],
-      edit: chapterFields,
+      edit(item) {
+        const fields = chapterFields(item);
+        const pdf = rule(el('input', {type: 'file', accept: '.pdf,application/pdf'}), (_, control) => {
+          const file = control.files[0];
+          return file && (!/\.pdf$/i.test(file.name) || file.size > 12 * 1024 * 1024) ?
+            'Choose a PDF no larger than 12 MB.' : '';
+        });
+        fields.fields.push(field('Replace PDF File (optional)', pdf,
+          `Current PDF: ${plural(item.pages, 'page')}. Leave blank to keep the existing file.`));
+        return {...fields, replacement: {kind: 'book', file: pdf}};
+      },
       remove: () => ({question: 'Delete this PDF study book?'}),
     },
     chapterVideos: {
       label: 'Chapter Videos', noun: 'chapter video', course: true, empty: 'No chapter videos uploaded yet.',
       details: item => [`${item.subject} › ${item.chapter}`, megabytes(item.size)],
-      edit: chapterFields,
+      edit(item) {
+        const fields = chapterFields(item);
+        const video = rule(el('input', {type: 'file', accept: videoAccept}), (_, control) => {
+          const file = control.files[0];
+          return file && (!videoType(file) || file.size < 12 || file.size > maxVideoBytes) ?
+            'Choose a non-empty MP4, WebM, or MOV video up to 300 MB.' : '';
+        });
+        fields.fields.push(field('Replace Video File (optional)', video,
+          `${megabytes(item.size)} currently stored. Leave blank to keep the existing file.`));
+        return {...fields, replacement: {kind: 'video', file: video}};
+      },
       remove: () => ({question: 'Delete this chapter video file?'}),
     },
     videos: {
@@ -192,11 +213,30 @@ function types({ctx, rupeeInput, toPaise, questionData, priceHint, courses}) {
           const published = el('input', {type: 'date', required: '', value: (item.publishedAt || item.createdAt || '').slice(0, 10)});
           const downloads = el('input', {type: 'checkbox', role: 'switch'});
           downloads.checked = Boolean(item.downloadsEnabled);
+          const pdf = rule(el('input', {type: 'file', accept: '.pdf,application/pdf'}), (_, control) => {
+            const file = control.files[0];
+            return file && (!/\.pdf$/i.test(file.name) || file.size < 1 || file.size > 12 * 1024 * 1024) ?
+              'Choose a PDF up to 12 MB.' : '';
+          });
+          const video = rule(el('input', {type: 'file', accept: videoAccept}), (_, control) => {
+            const file = control.files[0];
+            return file && (!videoType(file) || file.size < 12 || file.size > maxVideoBytes) ?
+              'Choose an MP4, WebM, or MOV video up to 300 MB.' : '';
+          });
           return {
             fields: [field('Resource Title', title), field('Publish Date', published),
+              field('Replace PDF File (optional)', pdf,
+                item.media?.pdf ? `Current PDF: ${plural(item.media.pdf.pages, 'page')}. Leave blank to keep it.` : 'No PDF currently attached.'),
+              field('Replace Video File (optional)', video,
+                item.media?.video ? 'A video is currently attached. Leave blank to keep it.' : 'No video currently attached.'),
               el('label', {class: 'choice'}, downloads, 'Allow PDF and video downloads'),
-              el('p', {class: 'muted'}, 'To change uploaded files, delete this resource and publish its replacement.')],
-            values: () => ({title: textValue(title, 'Title'), publishedAt: published.value, downloadsEnabled: downloads.checked}),
+              el('p', {class: 'muted'}, 'Only selected files will be replaced; all other current attachments are retained.')],
+            values: async () => {
+              const uploadId = await uploadCurrentAffairsMedia(ctx,
+                {pdf: pdf.files[0], video: video.files[0]}, {required: false});
+              return {title: textValue(title, 'Title'), publishedAt: published.value,
+                downloadsEnabled: downloads.checked, ...(uploadId ? {uploadId} : {})};
+            },
           };
         }
         const summary = area(item.summary, 300, 2);
@@ -397,7 +437,7 @@ export function publishedManager({ctx, onChange, ...helpers}) {
   }
   function editor(type, item) {
     const key = active;
-    const {fields, values} = type.edit(item);
+    const {fields, values, replacement} = type.edit(item);
     const covers = ctx.publishingMedia && ['courses', 'books', 'physicalBooks'].includes(key) ?
       coverPicker(ctx, {existing: item.images, required: false}) : null;
     const expiry = ctx.publishingMedia && key === 'courses' ?
@@ -406,16 +446,31 @@ export function publishedManager({ctx, onChange, ...helpers}) {
     const cancel = button('Cancel', 'secondary');
     const editFeedback = status();
     const form = el('form', {class: 'manage-editor'}, el('h4', {}, `Edit ${type.noun.replace(/\b\w/g, letter => letter.toUpperCase())}`), fields,
-      expiry ? field('Course Expiry Date', expiry, 'Access ends after this date, India time.') : null, covers?.node,
+      expiry ? field('Course Expiry Date', expiry, 'Access ends after this date, India time.') : null,
+      covers ? coverGallery(item, 'manage-cover-gallery') : null, covers?.node,
       el('div', {class: 'actions'}, save, cancel), editFeedback);
     cancel.addEventListener('click', () => { openEditor = null; render(); });
     bindForm(form, save, editFeedback, async () => {
-      const patch = values();
+      const patch = await values();
       const images = await covers?.upload();
-      await api(`/admin/published/${key}/${idPart(item.id)}`, {ctx, auth: true, method: 'PUT',
-        json: {...patch, images, expiresOn: expiry?.value || undefined}});
+      let result;
+      if (replacement?.file.files[0] && replacement.kind === 'book') {
+        const query = new URLSearchParams({title: patch.title, subject: patch.subject, chapter: patch.chapter});
+        if (images) query.set('images', images.join(','));
+        result = await api(`/admin/courses/${idPart(item.course)}/books/${idPart(item.id)}?${query}`,
+          {ctx, auth: true, method: 'PUT', binary: replacement.file.files[0]});
+      } else if (replacement?.file.files[0] && replacement.kind === 'video') {
+        result = await uploadChapterVideo({ctx, coursePath: `/admin/courses/${idPart(item.course)}`,
+          placement: {title: patch.title, subject: patch.subject, chapter: patch.chapter,
+            ...(item.folderId ? {folderId: item.folderId} : {}), replaceId: item.id},
+          file: replacement.file.files[0],
+          post: (path, body) => api(path, {ctx, auth: true, method: 'POST', ...body})});
+      } else {
+        result = await api(`/admin/published/${key}/${idPart(item.id)}`, {ctx, auth: true, method: 'PUT',
+          json: {...patch, images, expiresOn: expiry?.value || undefined}});
+      }
       openEditor = null;
-      say(feedback, `“${item.title}” was updated.`);
+      say(feedback, result?.warning || `“${item.title}” was updated.`, Boolean(result?.warning));
       await reload();
       onChange?.(key);
     }, 'Saving changes…');
