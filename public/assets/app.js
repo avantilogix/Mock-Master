@@ -5,7 +5,7 @@ import {api, firebaseAuth} from './services.js?v=persistent-session';
 import {showSignIn} from './signin.js?v=persistent-session';
 import {showBook, showLeaderboard, showTest, showVideo} from './study.js?v=sectionwise-test-ui';
 import {showLearningContent, showNotifications, showProgress, showResource} from './reports.js?v=current-affairs-media';
-import {showDownloads, showReferrals, showTimetable, socialFooter} from './features.js?v=stable-mobile-admin-downloads';
+import {showDownloads, showReferrals, showSaved, showTimetable, socialFooter} from './features.js?v=stable-mobile-admin-downloads';
 import {showCourseGroups, showShareRate, showVideos} from './engagement.js?v=youtube-rotate-v2';
 import {showEbook, showEbookDemo, showEbookStore} from './ebooks.js?v=continuous-reader-v2';
 import {examPreferenceField, normalizeExamPreferences} from './exam-preferences.js';
@@ -18,9 +18,9 @@ const routes = new Map([
   ['home', 0], ['catalog', 0], ['my-courses', 0], ['test-series', 0], ['book-store', 0], ['materials', 0],
   ['free-tests', 0], ['current-affairs', 0], ['pyqs', 0], ['syllabus', 0], ['progress', 0], ['notifications', 0],
   ['timetable', 0], ['referrals', 0], ['downloads', 0],
-  ['videos', 0], ['groups', 0], ['share-app', 0], ['about', 0], ['privacy', 0], ['terms', 0],
+  ['videos', 0], ['groups', 0], ['share-app', 0], ['about', 0], ['privacy', 0], ['terms', 0], ['copyright', 0], ['saved', 2],
   ['course', 1], ['test', 2], ['book', 2], ['ebook', 1], ['ebook-demo', 1], ['resource', 1], ['video', 2], ['leaderboard', 2], ['signin', 0],
-  ['profile', 0], ['support', 0], ['admin', 0], ['admin-course', 1]
+  ['profile', 0], ['support', 0], ['admin', 0], ['admin-course', 1], ['admin-publish-test', 2]
 ]);
 let firebase;
 let session;
@@ -272,7 +272,8 @@ function showProfile(ctx) {
           link('Read Full Story', '#about', 'profile-about-link')))),
     panel('Privacy & Legal', el('div', {class: 'profile-menu'},
       profileAction('admin', 'Privacy Policy', 'How your account and learning data are used', '#privacy'),
-      profileAction('files', 'Terms & Conditions', 'Purchase, content, community, and account rules', '#terms'))),
+      profileAction('files', 'Terms & Conditions', 'Purchase, content, community, and account rules', '#terms'),
+      profileAction('files', 'Copyright Policy', 'Rights and permitted use of learning content', '#copyright'))),
     panel('Account Actions', el('div', {class: 'account-actions'}, signOut),
       el('div', {class: 'danger-zone'}, el('div', {}, el('strong', {}, 'Disable Account'),
         el('p', {class: 'muted'}, 'You can contact support later to request reactivation.')), disable, feedback)));
@@ -311,6 +312,13 @@ function receiptList(ctx) {
 }
 
 function showLegalPage(type) {
+  if (type === 'copyright') {
+    main.append(...heading('Copyright Policy'),
+      panel('Ownership and Personal Use', el('p', {}, 'Mission Selection and its licensors retain rights in their respective materials. Purchased access is personal and does not transfer copyright or ownership.')),
+      panel('Permitted Use', el('p', {}, 'Use learning materials for your own study, subject to your access terms and applicable law. Do not redistribute, sell, publish, or commercially use the materials without permission from the rights holder. Do not bypass access controls or remove attribution or watermarks.')),
+      panel('Report a Concern', el('p', {}, 'If you believe content infringes your rights, contact Support with the content location, a description of the work, and information needed to review the claim.'), link('Contact Support', '#support', 'button secondary')));
+    return;
+  }
   if (type === 'privacy') {
     main.append(
       ...heading('Privacy Policy', 'Last updated: 25 November 2026'),
@@ -325,7 +333,7 @@ function showLegalPage(type) {
         el('li', {}, 'Provide courses, mock tests, protected books, videos, groups, downloads, notifications, and progress reports.'),
         el('li', {}, 'Review payment proof, approve access, prevent misuse, and support refunds or disputes where applicable.'),
         el('li', {}, 'Detect fraud, protect paid content, respond to support requests, and meet legal or security obligations.'))),
-      panel('Content Protection', el('p', {}, 'Protected PDF pages may display your verified mobile number or another account-linked mark. Original source files are not intentionally provided through the reader. Native Android versions may prevent screenshots and screen recording; browser and operating-system limitations can still affect protection.')),
+      panel('Content Protection', el('p', {}, 'Protected PDF pages may display your verified mobile number or another account-linked mark. Original source files are not intentionally provided through the reader. Saved learning content is stored on your device within the app and requires an online access check to open. Native Android versions may prevent screenshots and screen recording; browser and operating-system limitations can still affect protection.')),
       panel('Sharing and Service Providers', el('p', {}, 'We use infrastructure providers including Firebase for authentication, hosting, databases, and storage. We do not sell personal information. Information may be shared with authorized administrators, payment verification staff, service providers under appropriate safeguards, or authorities when legally required.')),
       panel('Retention and Security', el('p', {}, 'Information is retained while needed to provide the service, keep purchase records, resolve disputes, maintain security, and comply with applicable law. We use access controls, authenticated requests, protected storage, and restricted administration, but no internet service can guarantee absolute security.')),
       panel('Your Choices', el('ul', {class: 'legal-list'},
@@ -355,6 +363,9 @@ function showLegalPage(type) {
         el('li', {}, 'Do not copy, redistribute, publish, resell, reverse-engineer, remove watermarks, bypass access controls, or use automated extraction tools.'),
         el('li', {}, 'An approved protected E-Book download is licensed only to your account and may still contain a mobile-number watermark.'),
         el('li', {}, 'Content providers and authors retain their rights. Purchase grants access, not ownership of the underlying intellectual property.'))),
+      panel('Copyright and Reporting', el('p', {}, 'Mission Selection and its licensors retain copyright and other rights in their respective materials. You may use authorized content for your personal learning only, subject to applicable law. Do not remove attribution or watermarks, share copies, repost, sell, or use the content commercially without the rights holder’s permission.'),
+        el('p', {}, 'If you believe content infringes your rights, contact Support with the content location, a description of the work, and information needed to review the claim. Mission Selection may review and act on reports as appropriate.'),
+        link('Contact Support', '#support', 'button secondary')),
       panel('Community and Support Conduct', el('p', {}, 'Course discussions, support requests, reviews, and other user submissions must be respectful and lawful. Do not post harassment, abusive material, spam, misleading information, personal data of others, confidential exam content, malware, or links intended to harm users. We may moderate or remove violating content.')),
       panel('Availability and Changes', el('p', {}, 'Features, courses, schedules, tests, and content may be updated, corrected, paused, or removed. We aim for reliable service but do not warrant uninterrupted availability. Temporary maintenance, network issues, third-party outages, or security measures may affect access.')),
       panel('Limitation and Governing Process', el('p', {}, 'To the extent permitted by applicable law, Mission Selection is not liable for indirect loss, device/network failures, user payment mistakes, or outcomes of competitive examinations. Nothing in these terms excludes rights or responsibilities that cannot lawfully be excluded. Disputes should first be raised through Support so they can be reviewed.')),
@@ -366,7 +377,7 @@ function showSupport(ctx) {
   main.append(...heading('How Can We Help?', 'Find a quick answer below or send our support team a message.'),
     el('section', {class: 'support-faq section'},
       el('details', {}, el('summary', {}, 'When will my course unlock?'), el('p', {}, 'After the admin matches your UPI transaction and approves the request. Return to the course and check approval status.')),
-      el('details', {}, el('summary', {}, 'Why is my mobile number on book pages?'), el('p', {}, 'It identifies the licensed reader and helps protect paid content. This app serves protected page images rather than the original PDF.')),
+      el('details', {}, el('summary', {}, 'Why is my mobile number on some book pages?'), el('p', {}, 'It identifies the licensed reader and helps protect paid content. Course pages do not display this mark when downloads are enabled.')),
       el('details', {}, el('summary', {}, 'Can I use the same course on another phone?'), el('p', {}, 'Yes. Sign in with the same verified mobile number to restore the purchases linked to your account.'))));
   if (!ctx.user) {
     main.append(panel('Contact Support', el('p', {}, 'Sign in so the support team can identify your account.'), signInLink()));
@@ -406,14 +417,16 @@ function render(focus = false) {
     'my-courses': '#home', 'test-series': '#home', 'book-store': '#home', 'materials': '#home',
     'progress': '#profile', 'notifications': '#home', 'timetable': '#home', 'referrals': '#profile',
     'downloads': '#home', 'videos': '#home', 'groups': '#profile', 'share-app': '#profile',
-    'about': '#profile', 'privacy': '#profile', 'terms': '#profile', 'free-tests': '#home',
+    'about': '#profile', 'privacy': '#profile', 'terms': '#profile', 'copyright': '#profile', 'free-tests': '#home',
     'current-affairs': '#home', 'pyqs': '#home', 'syllabus': '#home', 'support': '#profile',
     'profile': '#home', 'course': '#catalog', 'ebook': '#book-store', 'admin': '#home',
-    'admin-course': '#admin',
+    'admin-course': '#admin', 'admin-publish-test': parsed.page === 'admin-publish-test' ?
+      `#admin-course/${idPart(parsed.args[0])}` : '#admin',
   };
   if (backTargets[parsed.page]) {
     const back = link('', backTargets[parsed.page], 'page-back');
-    const label = parsed.page === 'admin' ? 'Back to Home' : parsed.page === 'admin-course' ? 'Back to Admin' : 'Back';
+    const label = parsed.page === 'admin' ? 'Back to Home' : parsed.page === 'admin-course' ? 'Back to Admin' :
+      parsed.page === 'admin-publish-test' ? 'Back to Course Workspace' : 'Back';
     back.append(icon('back', 'line-icon'), el('span', {}, label));
     main.append(back);
   }
@@ -436,6 +449,7 @@ function render(focus = false) {
     case 'groups': showCourseGroups(main, ctx, current?.me, {signInLink}); break;
     case 'share-app': showShareRate(main); break;
     case 'privacy':
+    case 'copyright':
     case 'terms': showLegalPage(parsed.page); break;
     case 'about':
       main.append(...heading('About Mission Selection', 'Choose. Prepare. Achieve.'),
@@ -450,7 +464,7 @@ function render(focus = false) {
           el('li', {}, el('strong', {}, 'Stay current'), ' — browse year/month-wise current affairs, PYQs, syllabus, and a study timetable.'),
           el('li', {}, el('strong', {}, 'Learn together'), ' — use private discussion groups available only to purchased-course members.'))),
         panel('Secure Access', el('p', {},
-          'Course access is unlocked only after admin review of the UPI or QR payment proof. Digital books are rendered page by page with the verified mobile number watermarked on the image; original PDF files are never shared directly.')),
+          'Course access is unlocked only after admin review of the UPI or QR payment proof. Digital books are rendered page by page; original PDF files are not provided by the reader. Course pages are watermarked when downloads are disabled.')),
         panel('Student Support', el('p', {},
           'Learners can manage their profile, submit support requests, view notifications, and access protected downloads from their account.')));
       break;
@@ -495,7 +509,9 @@ function render(focus = false) {
     case 'ebook-demo': showEbookDemo(main, ctx, courseId); break;
     case 'resource': showResource(main, ctx, courseId, {signInLink}); break;
     case 'video': if (current) showVideo(main, ctx, courseId, itemId); else needSignIn(); break;
+    case 'saved': if (current) showSaved(main, ctx, courseId, itemId); else needSignIn(); break;
     case 'admin':
+    case 'admin-publish-test':
       if (!current) needSignIn();
       else if (!current.me) main.append(...heading('Admin Workspace'), profileUnavailable());
       else if (!current.me.admin) {
@@ -509,7 +525,7 @@ function render(focus = false) {
         main.append(...heading('Admin Access Required', 'The server must verify your Firebase account before the Admin tab appears.'),
           el('div', {class: 'actions'}, refresh, link('Back to Missions', '#catalog', 'button')), feedback);
       }
-      else showAdmin(main, ctx);
+      else showAdmin(main, ctx, parsed.page === 'admin-publish-test' ? {courseId, folderId: itemId} : null);
       break;
     case 'admin-course':
       if (!current) needSignIn();

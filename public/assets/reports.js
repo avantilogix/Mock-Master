@@ -1,5 +1,6 @@
 import {api} from './services.js';
 import {pdfReader} from './ebooks.js?v=continuous-reader-v2';
+import {saveControl} from './saved-content.js';
 import {bindForm, button, el, entries, field, heading, icon, idPart, link, loadInto, panel, run, say, status, textValue} from './ui.js';
 
 export const contentKinds = {
@@ -199,20 +200,14 @@ export function showResource(main, ctx, id, action) {
       loadInto(videoArea, ctx, async () => {
         const {url} = await api(`/resources/${idPart(id)}/video/link`, {ctx, auth: true});
         const video = el('video', {class: 'chapter-video', controls: '', playsinline: '', preload: 'metadata',
-          src: url, controlslist: item.downloadsEnabled ? '' : 'nodownload'});
+          src: url, controlslist: 'nodownload'});
         const feedback = status();
         video.addEventListener('error', () => say(feedback, 'The video could not load. Reopen this resource to try again.', true));
         ctx.signal.addEventListener('abort', () => { video.pause(); video.removeAttribute('src'); video.load(); }, {once: true});
         videoArea.replaceChildren(el('h2', {}, 'Watch Video'), video, feedback);
         if (item.downloadsEnabled) {
-          const download = button('Download Video', 'secondary');
-          download.addEventListener('click', () => run(download, feedback, async () => {
-            const {url} = await api(`/resources/${idPart(id)}/video/link?download=1`, {ctx, auth: true});
-            const anchor = el('a', {href: url, download: ''});
-            document.body.append(anchor); anchor.click(); anchor.remove();
-            say(feedback, 'Video download started.');
-          }, 'Preparing download…'));
-          videoArea.append(download);
+          videoArea.append(saveControl(ctx, {type: 'affairs-video', id: String(id),
+            title: item.title, videoLink: `/resources/${idPart(id)}/video/link`}));
         }
       });
     }
@@ -220,8 +215,10 @@ export function showResource(main, ctx, id, action) {
       const reader = el('section', {class: 'affairs-pdf'}, el('h2', {}, 'Read PDF'));
       content.append(reader);
       pdfReader(reader, ctx, {title: item.title, pages: item.media.pdf.pages,
+        readerTools: true,
         pagePath: `/resources/${idPart(id)}/pdf/pages`,
-        downloadPath: item.downloadsEnabled ? `/resources/${idPart(id)}/pdf/download` : null});
+        savedItem: item.downloadsEnabled ? {type: 'affairs-pdf', id: String(id), title: item.title,
+          pages: item.media.pdf.pages, pagePath: `/resources/${idPart(id)}/pdf/pages`} : null});
     }
   });
 }

@@ -14,8 +14,8 @@ manifest.startUrl = '/';
 manifest.name = 'Mission Selection';
 manifest.launcherName = 'Mission';
 manifest.packageId = 'com.avantilogix.missionselection';
-manifest.appVersionCode = 17;
-manifest.appVersionName = '17';
+manifest.appVersionCode = 19;
+manifest.appVersionName = '19';
 manifest.display = 'standalone';
 manifest.orientation = 'default';
 manifest.minSdkVersion = 24;
@@ -30,20 +30,14 @@ await writeFile(launcher, `package com.avantilogix.missionselection;
 
 import android.app.Activity;
 import android.content.ActivityNotFoundException;
-import android.content.ContentValues;
 import android.content.Intent;
 import android.content.pm.ActivityInfo;
 import android.graphics.Color;
 import android.net.Uri;
-import android.os.Build;
 import android.os.Bundle;
-import android.os.Environment;
-import android.provider.MediaStore;
 import android.content.SharedPreferences;
-import android.util.Base64;
 import android.view.View;
 import android.view.WindowManager;
-import android.webkit.JavascriptInterface;
 import android.webkit.MimeTypeMap;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
@@ -54,10 +48,6 @@ import android.webkit.WebViewClient;
 import android.widget.FrameLayout;
 import android.widget.Toast;
 
-import java.io.File;
-import java.io.FileOutputStream;
-import java.io.IOException;
-import java.io.OutputStream;
 import java.util.LinkedHashSet;
 import java.util.Locale;
 
@@ -72,8 +62,6 @@ public class LauncherActivity extends Activity {
     private int previousOrientation;
     private int previousSystemUi;
     private boolean wasFullscreen;
-    private OutputStream pendingDownload;
-    private Uri pendingDownloadUri;
     private ValueCallback<Uri[]> pendingFiles;
 
     @Override
@@ -84,10 +72,10 @@ public class LauncherActivity extends Activity {
         webView = new WebView(this);
         SharedPreferences preferences = getSharedPreferences("mission_selection", MODE_PRIVATE);
         int cachedVersion = preferences.getInt("web_cache_version", 0);
-        if (cachedVersion < 17) {
+        if (cachedVersion < 19) {
             webView.clearCache(true);
             webView.clearHistory();
-            preferences.edit().putInt("web_cache_version", 17).apply();
+            preferences.edit().putInt("web_cache_version", 19).apply();
         }
         webView.setLongClickable(false);
         webView.setOnLongClickListener(view -> true);
@@ -162,8 +150,7 @@ public class LauncherActivity extends Activity {
         settings.setAllowContentAccess(true);
         settings.setMediaPlaybackRequiresUserGesture(true);
         settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
-        settings.setUserAgentString(settings.getUserAgentString() + " MissionSelectionSecureApp/17");
-        webView.addJavascriptInterface(new DownloadBridge(), "MissionSelectionDownloads");
+        settings.setUserAgentString(settings.getUserAgentString() + " MissionSelectionSecureApp/19");
         webView.setWebViewClient(new WebViewClient() {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
@@ -260,69 +247,6 @@ public class LauncherActivity extends Activity {
         super.onDestroy();
     }
 
-    private class DownloadBridge {
-        @JavascriptInterface
-        public boolean beginPdf(String filename) {
-            try {
-                finishPdf(false);
-                pendingDownloadUri = null;
-                OutputStream output = null;
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    ContentValues values = new ContentValues();
-                    values.put(MediaStore.Downloads.DISPLAY_NAME, filename);
-                    values.put(MediaStore.Downloads.MIME_TYPE, "application/pdf");
-                    values.put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/Mission Selection");
-                    values.put(MediaStore.Downloads.IS_PENDING, 1);
-                    pendingDownloadUri = getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
-                    if (pendingDownloadUri == null) return false;
-                    output = getContentResolver().openOutputStream(pendingDownloadUri);
-                } else {
-                    File directory = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS);
-                    if (directory == null || (!directory.exists() && !directory.mkdirs())) return false;
-                    output = new FileOutputStream(new File(directory, filename));
-                }
-                if (output == null) return false;
-                pendingDownload = output;
-                return true;
-            } catch (IOException ignored) {
-                return false;
-            }
-        }
-
-        @JavascriptInterface
-        public boolean appendPdf(String base64) {
-            if (pendingDownload == null) return false;
-            try {
-                pendingDownload.write(Base64.decode(base64, Base64.DEFAULT));
-                return true;
-            } catch (IOException ignored) {
-                return false;
-            }
-        }
-
-        @JavascriptInterface
-        public boolean finishPdf(boolean commit) {
-            try {
-                if (pendingDownload != null) {
-                    pendingDownload.flush();
-                    pendingDownload.close();
-                    pendingDownload = null;
-                }
-                if (pendingDownloadUri != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    ContentValues values = new ContentValues();
-                    values.put(MediaStore.Downloads.IS_PENDING, 0);
-                    getContentResolver().update(pendingDownloadUri, values, null, null);
-                    if (!commit) getContentResolver().delete(pendingDownloadUri, null, null);
-                    pendingDownloadUri = null;
-                }
-                return true;
-            } catch (IOException ignored) {
-                pendingDownload = null;
-                pendingDownloadUri = null;
-                return false;
-            }
-        }
-    }
 }
 `);
 const androidManifest = resolve(target, 'app/src/main/AndroidManifest.xml');

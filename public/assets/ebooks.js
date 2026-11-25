@@ -1,5 +1,6 @@
 import {priceText, upiReference} from './course.js?v=ist-payment-fixes-final';
 import {api} from './services.js?v=ist-payment-fixes-final';
+import {saveControl} from './saved-content.js';
 import {bindForm, button, el, field, heading, idPart, link, loadInto, run, say, status, textValue} from './ui.js';
 
 export function showEbookStore(main, ctx, action) {
@@ -129,7 +130,8 @@ export function showEbook(main, ctx, bookId, action) {
       return;
     }
     pdfReader(main, ctx, {...book, pagePath: `/ebooks/${idPart(book.id)}/pages`,
-      downloadPath: `/ebooks/${idPart(book.id)}/download`});
+      savedItem: {type: 'ebook', id: String(book.id), title: book.title, pages: book.pages,
+        pagePath: `/ebooks/${idPart(book.id)}/pages`}});
   });
 }
 
@@ -157,14 +159,43 @@ export function pdfReader(main, ctx, book) {
   const previous = button('Previous Page', 'secondary');
   const next = button('Next Page', 'secondary');
   const controls = el('div', {class: 'actions reader-controls'}, previous, counter, next);
-  if (book.downloadPath) {
-    const download = button('Download Protected PDF');
-    download.addEventListener('click', () => buttonDownload(ctx, book, download, counter));
-    controls.append(download);
-  }
+  if (book.savedItem) controls.append(saveControl(ctx, book.savedItem));
   const imageArea = el('div', {class: 'pdf-reader-pages', role: 'region', 'aria-label': `${book.title} PDF pages`},
     pageNodes);
-  main.append(controls, imageArea);
+  if (book.readerTools) {
+    const pageInput = el('input', {type: 'number', min: '1', max: String(book.pages), value: '1',
+      inputmode: 'numeric', 'aria-label': 'Go to page'});
+    const go = button('Go', 'secondary');
+    const zoomOut = button('Zoom out', 'secondary');
+    const zoomIn = button('Zoom in', 'secondary');
+    const zoomLabel = el('span', {role: 'status'}, '100%');
+    let zoom = 100;
+    const updateZoom = () => {
+      imageArea.style.width = `${zoom}%`;
+      zoomLabel.textContent = `${zoom}%`;
+      zoomOut.disabled = zoom === 100;
+      zoomIn.disabled = zoom === 200;
+    };
+    zoomOut.addEventListener('click', () => { zoom = Math.max(100, zoom - 25); updateZoom(); });
+    zoomIn.addEventListener('click', () => { zoom = Math.min(200, zoom + 25); updateZoom(); });
+    const tools = el('div', {class: 'pdf-reader-tools'}, field('Page', pageInput), go, zoomOut, zoomLabel, zoomIn);
+    go.addEventListener('click', () => {
+      const selected = pageInput.valueAsNumber;
+      if (!Number.isInteger(selected) || selected < 1 || selected > book.pages) {
+        say(counter, `Enter a page from 1 to ${book.pages}.`, true);
+        pageInput.focus();
+        return;
+      }
+      scrollToPage(selected);
+    });
+    pageInput.addEventListener('keydown', event => {
+      if (event.key === 'Enter') { event.preventDefault(); go.click(); }
+    });
+    updateZoom();
+    main.append(controls, tools);
+    if (book.savedItem) main.append(el('p', {class: 'muted'}, 'Saved content is available inside this app while access remains active.'));
+    main.append(el('div', {class: 'pdf-reader-scroll'}, imageArea));
+  } else main.append(controls, imageArea);
   const placeholder = pageNumber => el('div', {class: 'pdf-page-placeholder', 'aria-hidden': 'true'},
     `Page ${pageNumber} · loading as you read`);
   const setPage = pageNumber => {
@@ -179,7 +210,8 @@ export function pdfReader(main, ctx, book) {
     loadingPages.add(pageNumber);
     node.replaceChildren(placeholder(pageNumber));
     try {
-      const blob = await api(`${book.pagePath}/${pageNumber}`, {ctx, auth: book.auth !== false, image: true});
+      const blob = book.getPage ? await book.getPage(pageNumber) :
+        await api(`${book.pagePath}/${pageNumber}`, {ctx, auth: book.auth !== false, image: true});
       if (!ctx.current()) return;
       const objectUrl = URL.createObjectURL(blob);
       objectUrls.set(pageNumber, objectUrl);
@@ -236,40 +268,4 @@ export function pdfReader(main, ctx, book) {
   }, {once: true});
   setPage(1);
   if (!observer) loadPage(1);
-}
-
-async function buttonDownload(ctx, book, control, feedback) {
-  await run(control, feedback, async () => {
-    const blob = await api(book.downloadPath, {ctx, auth: true, blob: true});
-    const filename = `${book.title.replace(/[^\w .-]+/g, '_')}-protected.pdf`;
-    if (window.MissionSelectionDownloads?.beginPdf) {
-      const bytes = new Uint8Array(await blob.arrayBuffer());
-      if (!window.MissionSelectionDownloads.beginPdf(filename)) {
-        throw new Error('The protected PDF could not be started. Check device storage access.');
-      }
-      try {
-        for (let index = 0; index < bytes.length; index += 24576) {
-          let binary = '';
-          const chunk = bytes.subarray(index, index + 24576);
-          for (const value of chunk) binary += String.fromCharCode(value);
-          if (!window.MissionSelectionDownloads.appendPdf(btoa(binary))) {
-            throw new Error('The protected PDF could not be written completely.');
-          }
-        }
-        if (!window.MissionSelectionDownloads.finishPdf(true)) {
-          throw new Error('The protected PDF could not be finalized.');
-        }
-      } catch (error) {
-        window.MissionSelectionDownloads.finishPdf(false);
-        throw error;
-      }
-      say(feedback, 'Protected PDF saved to Downloads.');
-      return;
-    }
-    const url = URL.createObjectURL(blob);
-    const anchor = el('a', {href: url, download: filename});
-    document.body.append(anchor); anchor.click(); anchor.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-    say(feedback, 'Protected PDF downloaded.');
-  }, 'Preparing protected PDF…');
 }

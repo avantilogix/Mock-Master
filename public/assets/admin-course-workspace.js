@@ -1,5 +1,7 @@
 import {api} from './services.js';
-import {button, el, field, heading, idPart, run, say, status, textValue} from './ui.js';
+import {coverPicker} from './publishing-media.js';
+import {maxVideoBytes, uploadChapterVideo, videoAccept, videoType} from './chapter-upload.js';
+import {bindForm, button, el, field, heading, idPart, link, rule, run, say, status, textValue} from './ui.js';
 
 const kinds = [
   {id: 'content', label: 'Course Content'},
@@ -106,11 +108,76 @@ export function showAdminCourseWorkspace(main, ctx, courseId) {
         }, 'Saving folder…');
       });
       const children = renderTree(folder.id);
+      let uploadForm = null;
+      if (activeKind === 'content') {
+        const title = el('input', {required: '', maxlength: '120'});
+        const subject = el('input', {required: '', maxlength: '100', value: 'General'});
+        const chapter = el('input', {required: '', maxlength: '120', value: 'Chapter 1'});
+        const type = el('select', {}, el('option', {value: 'pdf'}, 'PDF Study Book'),
+          el('option', {value: 'video'}, 'Chapter Video'));
+        const pdf = rule(el('input', {type: 'file', accept: '.pdf,application/pdf', required: ''}),
+          (_, control) => {
+            const file = control.files[0];
+            if (type.value === 'pdf') return /\.pdf$/i.test(file?.name || '') ? '' : 'Choose a PDF file.';
+            if (!videoType(file)) return 'Choose an MP4, WebM, or MOV video.';
+            return file.size < 12 || file.size > maxVideoBytes ? 'Choose a non-empty video up to 300 MB.' : '';
+          });
+        const covers = ctx.publishingMedia ? coverPicker(ctx) : null;
+        const upload = button('Upload PDF to Folder', null, 'submit');
+        const uploadFeedback = status();
+        const fileField = field('PDF File', pdf, 'PDF pages are protected and watermarked.');
+        type.addEventListener('change', () => {
+          const video = type.value === 'video';
+          pdf.value = '';
+          pdf.accept = video ? videoAccept : '.pdf,application/pdf';
+          pdf.dataset.label = video ? 'Video File' : 'PDF File';
+          fileField.querySelector('label').textContent = pdf.dataset.label;
+          fileField.querySelector(`#${pdf.id}-hint`).textContent = video ?
+            'MP4, WebM, or MOV, up to 300 MB.' : 'PDF pages are protected and watermarked.';
+          upload.textContent = video ? 'Upload Video to Folder' : 'Upload PDF to Folder';
+          if (covers) {
+            covers.node.hidden = video;
+            covers.file.disabled = video;
+          }
+        });
+        uploadForm = el('form', {class: 'section'}, field('Content Type', type), field('Title', title), field('Subject', subject),
+          field('Chapter', chapter), fileField,
+          covers?.node, upload, uploadFeedback);
+        bindForm(uploadForm, upload, uploadFeedback, async () => {
+          const placement = {title: textValue(title, 'Title'), subject: textValue(subject, 'Subject'),
+            chapter: textValue(chapter, 'Chapter'), folderId: folder.id};
+          const query = new URLSearchParams(placement);
+          const file = pdf.files[0];
+          const video = type.value === 'video';
+          if (video) {
+            await uploadChapterVideo({ctx, coursePath, placement, file,
+              post: (path, body) => api(path, {ctx, auth: true, method: 'POST', ...body}),
+              onPublish: () => say(uploadFeedback, 'Publishing video…')});
+          } else {
+            const images = await covers?.upload();
+            if (images) query.set('images', images.join(','));
+            await api(`${coursePath}/books?${query}`, {ctx, auth: true, method: 'POST', binary: file});
+          }
+          uploadForm.reset();
+          covers?.clear();
+          type.dispatchEvent(new Event('change'));
+          try {
+            await load();
+            say(feedback, `${video ? 'Video' : 'PDF'} uploaded to the folder.`);
+          } catch (error) {
+            if (error.name === 'AbortError') throw error;
+            say(feedback, `${video ? 'Video' : 'PDF'} uploaded, but the workspace could not refresh: ${error.message}`, true);
+          }
+        }, 'Uploading PDF…');
+      }
       return el('li', {class: 'workspace-folder'},
         el('details', {open: ''},
           el('summary', {}, el('strong', {}, folder.name),
             el('span', {class: 'muted'}, `${items.filter(item => item.folderId === folder.id).length} items`)),
           folderForm,
+          uploadForm,
+          activeKind === 'tests' ? link('Import Questions to Folder',
+            `#admin-publish-test/${idPart(courseId)}/${idPart(folder.id)}`, 'button secondary') : null,
           children.length ? el('ul', {class: 'workspace-folder-list'}, ...children) : null));
     });
 

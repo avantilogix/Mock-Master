@@ -8,7 +8,7 @@ import { fail, pageCount, renderPage } from './documents.js';
 const videoTypes = new Set(['video/mp4', 'video/webm', 'video/quicktime']);
 const limits = { pdf: 12 * 1024 * 1024, video: 300 * 1024 * 1024 };
 
-export function currentAffairs(api, { db, directory, text, processDocument, protectedPdf, looksLikeVideo }) {
+export function currentAffairs(api, { db, directory, text, processDocument, looksLikeVideo }) {
   const one = (sql, ...args) => db.prepare(sql).get(...args);
   const filePath = (id, kind) => join(directory, id, kind);
   const secret = randomBytes(32);
@@ -44,8 +44,7 @@ export function currentAffairs(api, { db, directory, text, processDocument, prot
     const item = resource(req.params.id);
     const video = JSON.parse(item.media).video;
     if (!video) fail(404, 'Video not found.');
-    if (download === '1' && !item.downloads_enabled) fail(403, 'Downloads are disabled for this resource.');
-    if (download === '1') res.attachment(`${item.title.replace(/[^\w .-]+/g, '_')}.${video.type === 'video/webm' ? 'webm' : video.type === 'video/quicktime' ? 'mov' : 'mp4'}`);
+    if (download === '1') fail(403, 'Save this video inside the app instead.');
     res.sendFile('video', { root: join(directory, item.id), headers: { 'Content-Type': video.type } });
   });
   return {
@@ -59,19 +58,12 @@ export function currentAffairs(api, { db, directory, text, processDocument, prot
         if (!pdf || !Number.isInteger(page) || page < 1 || page > pdf.pages) fail(404, 'Page not found.');
         res.type('png').send(await processDocument(() => renderPage(readFileSync(filePath(item.id, 'pdf')), page, req.user.phone)));
       });
-      api.get('/resources/:id/pdf/download', async (req, res) => {
-        const item = resource(req.params.id);
-        if (!item.downloads_enabled) fail(403, 'Downloads are disabled for this resource.');
-        const pdf = JSON.parse(item.media).pdf;
-        if (!pdf) fail(404, 'PDF not found.');
-        const output = await processDocument(() => protectedPdf(readFileSync(filePath(item.id, 'pdf')), pdf.pages, req.user.phone));
-        res.attachment(`${item.title.replace(/[^\w .-]+/g, '_')}-protected.pdf`).type('pdf').send(output);
-      });
+      api.get('/resources/:id/pdf/download', () => fail(403, 'Save this resource inside the app instead.'));
       api.get('/resources/:id/video/link', (req, res) => {
         const item = resource(req.params.id);
         if (!JSON.parse(item.media).video) fail(404, 'Video not found.');
         const download = req.query.download === '1' ? '1' : '0';
-        if (download === '1' && !item.downloads_enabled) fail(403, 'Downloads are disabled for this resource.');
+        if (download === '1') fail(403, 'Save this video inside the app instead.');
         const expires = String(Date.now() + (download === '1' ? 10 : 60) * 60_000);
         const uid = req.user.uid;
         res.json({ url: `/api/resource-files/${item.id}?${new URLSearchParams({

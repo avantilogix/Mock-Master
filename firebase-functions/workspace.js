@@ -68,4 +68,9 @@ export function validateItemFolder(folders, folderId, kind) {
   }
 }
 
+export function validateFolderSnapshot(snapshot, courseId, folderId, kind, value) {
+  const folder = snapshot && value(snapshot);
+  validateItemFolder(folder && folder.course === courseId ? [folder] : [], folderId, kind);
+}
+
 export const folderView = ({ id, name, parentId, kind }) => ({ id, name, parentId: parentId ?? null, kind });

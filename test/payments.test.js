@@ -1,6 +1,16 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { paymentReference, upiDetails, upiPaymentUri } from '../server/manual-payments.js';
+import { approvedCourseOrder } from '../firebase-functions/course-entitlements.js';
+
+test('Firebase course entitlement requires approval, preserving legacy paid orders', () => {
+  assert.equal(approvedCourseOrder({ payment: 'paid', paymentStatus: 'approved' }), true);
+  assert.equal(approvedCourseOrder({ payment: 'legacy' }), true);
+  for (const order of [null, {}, {payment: ''}, {payment: 'paid', paymentStatus: 'pending'},
+    {payment: 'paid', paymentStatus: 'rejected'}, {payment: '', paymentStatus: 'approved'}]) {
+    assert.equal(approvedCourseOrder(order), false);
+  }
+});
 
 test('normalizes valid UPI transaction references', () => {
   assert.equal(paymentReference('  upi-123456789  '), 'UPI-123456789');

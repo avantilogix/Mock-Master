@@ -9,7 +9,7 @@ import express from 'express';
 import { rateLimit } from 'express-rate-limit';
 import QRCode from 'qrcode';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
-import { fail, importQuestions, mobile, pageCount, renderDemoPage, renderPage, validateQuestions } from './documents.js';
+import { fail, importQuestions, mobile, pageCount, renderDemoPage, renderPage, renderUnmarkedPage, validateQuestions } from './documents.js';
 import { paymentReference, upiDetails, upiPaymentUri } from './manual-payments.js';
 import { currentAffairs } from './current-affairs.js';
 import { folderBody, folderView, idInput, itemFolderBody, itemTypeInput, kindInput, validateFolder, validateItemFolder } from '../firebase-functions/workspace.js';
@@ -48,19 +48,6 @@ function looksLikeVideo(path, type) {
   try { readSync(fd, header, 0, 12, 0); } finally { closeSync(fd); }
   if (type === 'video/webm') return header.readUInt32BE(0) === 0x1a45dfa3;
   return ['ftyp', 'moov', 'mdat', 'wide', 'free'].includes(header.toString('latin1', 4, 8));
-}
-
-async function protectedPdf(source, pages, phone) {
-  const output = await PDFDocument.create();
-  for (let page = 1; page <= pages; page++) {
-    const image = await output.embedPng(await renderPage(source, page, phone));
-    const target = output.addPage([595, 842]);
-    const scale = Math.min(595 / image.width, 842 / image.height);
-    const width = image.width * scale;
-    const height = image.height * scale;
-    target.drawImage(image, { x: (595 - width) / 2, y: (842 - height) / 2, width, height });
-  }
-  return Buffer.from(await output.save());
 }
 
 async function questionPaperPdf(test, phone) {
@@ -365,7 +352,7 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     if (!row) fail(404, 'Course not found.');
     return row;
   }
-  const owns = (uid, id) => one("SELECT 1 FROM orders WHERE uid=? AND course=? AND payment IS NOT NULL AND payment!=''", uid, id);
+  const owns = (uid, id) => one("SELECT 1 FROM orders WHERE uid=? AND course=? AND payment_status='approved' AND payment IS NOT NULL AND payment!=''", uid, id);
   function requirePurchase(req, id, allowAdmin = true) {
     if (!(allowAdmin && req.user.admin) && !owns(req.user.uid, id)) fail(403, 'Purchase this course to unlock it.');
   }
@@ -451,15 +438,11 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     if (!video) fail(404, 'Video not found.');
     if (one('SELECT 1 FROM students WHERE uid=? AND disabled', uid)) fail(403, 'This account is disabled. Contact support to request reactivation.');
     if (!admins.has(uid) && !owns(uid, video.course)) fail(403, 'Purchase this course to unlock it.');
-    if (req.query.download === '1') {
-      const selectedCourse = one('SELECT downloads_enabled FROM courses WHERE id=?', video.course);
-      if (!selectedCourse?.downloads_enabled) fail(403, 'Downloads are disabled for this course.');
-      res.attachment(`${video.title.replace(/[^\w .-]+/g, '_')}.${videoTypes[video.type] || 'mp4'}`);
-    }
+    if (req.query.download === '1') fail(403, 'Save this video inside the app instead.');
     res.sendFile(videoPath(video.id), { headers: { 'Content-Type': video.type } });
   });
   const affairs = currentAffairs(api, { db, directory: join(videoDir, 'current-affairs'), text, processDocument,
-    protectedPdf, looksLikeVideo });
+    looksLikeVideo });
   api.use(authLimit, login);
   affairs.routes();
   api.get('/me', (req, res) => {
@@ -467,7 +450,7 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     const { name, exam_preference: examPreference } = one('SELECT name, exam_preference FROM students WHERE uid=?', uid);
     res.json({ uid, name, phone, admin, examPreference,
       examPreferences: examPreference ? examPreference.split(',').map(item => item.trim()).filter(Boolean) : [],
-      purchases: all("SELECT course FROM orders WHERE uid=? AND payment IS NOT NULL AND payment!=''", uid).map(p => p.course) });
+      purchases: all("SELECT course FROM orders WHERE uid=? AND payment_status='approved' AND payment IS NOT NULL AND payment!=''", uid).map(p => p.course) });
   });
   api.put('/me', (req, res) => {
     const current = one('SELECT name, exam_preference FROM students WHERE uid=?', req.user.uid);
@@ -594,18 +577,20 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
       return res.status(409).json({ error: 'A payment request is already waiting for admin review.' });
     }
     const orderId = existing?.id || randomUUID();
-    if (creditsUsed) run('UPDATE referrals SET credits=credits-? WHERE uid=? AND credits>=?', creditsUsed, uid, creditsUsed);
-    run(`INSERT INTO orders (id, uid, course, amount, original_amount, credits_used, payment_status,
-      transaction_ref, payment_note, submitted_at, payment)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT (uid, course) DO UPDATE SET amount=excluded.amount, original_amount=excluded.original_amount,
-        credits_used=excluded.credits_used, payment=excluded.payment, payment_status=excluded.payment_status,
-        transaction_ref=excluded.transaction_ref, payment_note=excluded.payment_note, submitted_at=excluded.submitted_at,
-        review_note='', reviewed_at='', reviewed_by=''`,
-    orderId, uid, id, amountDue, price, creditsUsed, amountDue === 0 ? 'approved' : 'pending',
-      reference || 'CREDITS', note, submittedAt, amountDue === 0 ? `credits:${orderId}` : null);
+    transaction(() => {
+      if (creditsUsed) run('UPDATE referrals SET credits=credits-? WHERE uid=? AND credits>=?', creditsUsed, uid, creditsUsed);
+      run(`INSERT INTO orders (id, uid, course, amount, original_amount, credits_used, payment_status,
+        transaction_ref, payment_note, submitted_at, payment)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (uid, course) DO UPDATE SET amount=excluded.amount, original_amount=excluded.original_amount,
+          credits_used=excluded.credits_used, payment=excluded.payment, payment_status=excluded.payment_status,
+          transaction_ref=excluded.transaction_ref, payment_note=excluded.payment_note, submitted_at=excluded.submitted_at,
+          review_note='', reviewed_at='', reviewed_by=''`,
+      orderId, uid, id, amountDue, price, creditsUsed, 'pending',
+        reference || 'CREDITS', note, submittedAt, null);
+    });
     res.status(201).json({ id: orderId, amount: amountDue, creditsUsed,
-      status: amountDue === 0 ? 'approved' : 'pending', reference: reference || 'CREDITS', submittedAt });
+      status: 'pending', reference: reference || 'CREDITS', submittedAt });
   });
   api.get('/ebooks/:id/payment', (req, res) => {
     const book = one('SELECT id, title, price FROM ebooks WHERE id=?', req.params.id);
@@ -652,11 +637,7 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     if (!Number.isInteger(page) || page < 1 || page > book.pages) fail(404, 'Page not found.');
     res.type('png').send(await processDocument(() => renderPage(Buffer.from(book.pdf), page, req.user.phone)));
   });
-  api.get('/ebooks/:id/download', async (req, res) => {
-    const book = ownedEbook(req, req.params.id);
-    const pdf = await protectedPdf(Buffer.from(book.pdf), book.pages, req.user.phone);
-    res.attachment(`${book.title}-protected.pdf`).type('pdf').send(pdf);
-  });
+  api.get('/ebooks/:id/download', () => fail(403, 'Save this e-book inside the app instead.'));
 
   function test(id) {
     const row = one('SELECT * FROM tests WHERE id=?', id);
@@ -777,7 +758,7 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     res.type('pdf').attachment(`${attempt.testTitle}-result.pdf`).send(pdf);
   });
   api.get('/courses/:id/receipt.pdf', async (req, res) => {
-    const order = one(`SELECT * FROM orders WHERE uid=? AND course=? AND payment IS NOT NULL AND payment!=''`, req.user.uid, req.params.id);
+    const order = one(`SELECT * FROM orders WHERE uid=? AND course=? AND payment_status='approved' AND payment IS NOT NULL AND payment!=''`, req.user.uid, req.params.id);
     if (!order) fail(404, 'Approved purchase receipt not found.');
     const selectedCourse = course(req.params.id);
     const student = one('SELECT name, phone FROM students WHERE uid=?', req.user.uid);
@@ -788,7 +769,7 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     res.json(all(`SELECT o.id, o.course, c.title AS title, o.amount, o.transaction_ref AS reference,
       o.reviewed_at AS reviewedAt, o.submitted_at AS submittedAt
       FROM orders o JOIN courses c ON c.id=o.course
-      WHERE o.uid=? AND o.payment IS NOT NULL AND o.payment!=''
+      WHERE o.uid=? AND o.payment_status='approved' AND o.payment IS NOT NULL AND o.payment!=''
       ORDER BY COALESCE(NULLIF(o.reviewed_at,''), o.submitted_at) DESC`, req.user.uid));
   });
   api.get('/tests/:id/question-paper.pdf', async (req, res) => {
@@ -880,7 +861,7 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     }));
     const testNotices = all(`SELECT t.id, t.title, t.starts_at AS startsAt, t.expires_at AS expiresAt, t.course
       FROM tests t JOIN orders o ON o.course=t.course
-      WHERE t.live=1 AND o.uid=? AND o.payment IS NOT NULL AND o.payment!=''
+      WHERE t.live=1 AND o.uid=? AND o.payment_status='approved' AND o.payment IS NOT NULL AND o.payment!=''
         AND (t.expires_at='' OR datetime(t.expires_at)>datetime('now','localtime'))
       ORDER BY t.starts_at LIMIT 20`, req.user.uid).map(test => ({
       id: `live-test-${test.id}`,
@@ -905,40 +886,20 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     requirePurchase(req, book.course);
     const page = Number(req.params.page);
     if (!Number.isSafeInteger(page) || page < 1 || page > book.pages) fail(404, 'Page not found.');
-    const png = await processDocument(() => renderPage(Buffer.from(one('SELECT pdf FROM books WHERE id=?', req.params.id).pdf), page, req.user.phone));
+    const source = Buffer.from(one('SELECT pdf FROM books WHERE id=?', req.params.id).pdf);
+    const png = await processDocument(() => book.downloads_enabled ?
+      renderUnmarkedPage(source, page) : renderPage(source, page, req.user.phone));
     res.type('png').send(png);
   });
-  api.get('/books/:id/pages/:page/download', async (req, res) => {
-    const book = one(`SELECT b.id, b.course, b.title, b.pages, b.pdf, c.downloads_enabled
-      FROM books b JOIN courses c ON c.id=b.course WHERE b.id=?`, req.params.id);
-    if (!book) fail(404, 'Book not found.');
-    requirePurchase(req, book.course);
-    if (!book.downloads_enabled) fail(403, 'Downloads are disabled for this course.');
-    const page = Number(req.params.page);
-    if (!Number.isSafeInteger(page) || page < 1 || page > book.pages) fail(404, 'Page not found.');
-    const png = await processDocument(() => renderPage(Buffer.from(book.pdf), page, req.user.phone));
-    res.attachment(`${book.title}-page-${page}.png`).type('png').send(png);
-  });
-  api.get('/books/:id/download', async (req, res) => {
-    const book = one(`SELECT b.id, b.course, b.title, b.pages, b.pdf, c.downloads_enabled
-      FROM books b JOIN courses c ON c.id=b.course WHERE b.id=?`, req.params.id);
-    if (!book) fail(404, 'Book not found.');
-    requirePurchase(req, book.course);
-    if (!book.downloads_enabled) fail(403, 'Downloads are disabled for this course.');
-    const pdf = await protectedPdf(Buffer.from(book.pdf), book.pages, req.user.phone);
-    res.attachment(`${book.title}-protected.pdf`).type('pdf').send(pdf);
-  });
+  api.get('/books/:id/pages/:page/download', () => fail(403, 'Save this book inside the app instead.'));
+  api.get('/books/:id/download', () => fail(403, 'Save this book inside the app instead.'));
   api.get('/videos/:id/link', (req, res) => {
     const video = one('SELECT id, course, title, type FROM chapter_videos WHERE id=?', req.params.id);
     if (!video) fail(404, 'Video not found.');
     requirePurchase(req, video.course);
-    if (req.query.download === '1' &&
-        !one('SELECT downloads_enabled FROM courses WHERE id=?', video.course)?.downloads_enabled) {
-      fail(403, 'Downloads are disabled for this course.');
-    }
+    if (req.query.download === '1') fail(403, 'Save this video inside the app instead.');
     const expires = String(Math.floor(Date.now() / 1000) + VIDEO_LINK_SECONDS);
     const query = new URLSearchParams({ uid: req.user.uid, expires, signature: videoSignature(video.id, req.user.uid, expires) });
-    if (req.query.download === '1') query.set('download', '1');
     res.json({ url: `/api/videos/${encodeURIComponent(video.id)}/file?${query}`, title: video.title, type: video.type });
   });
 
@@ -1042,9 +1003,9 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     res.json({
       students: one('SELECT COUNT(*) AS count FROM students').count,
       courses: one('SELECT COUNT(*) AS count FROM courses').count,
-      purchases: one("SELECT COUNT(*) AS count FROM orders WHERE payment IS NOT NULL AND payment!=''").count +
+      purchases: one("SELECT COUNT(*) AS count FROM orders WHERE payment_status='approved' AND payment IS NOT NULL AND payment!=''").count +
         one("SELECT COUNT(*) AS count FROM ebook_orders WHERE payment<>''").count,
-      revenue: one("SELECT COALESCE(SUM(amount),0) AS amount FROM orders WHERE payment IS NOT NULL AND payment!=''").amount +
+      revenue: one("SELECT COALESCE(SUM(amount),0) AS amount FROM orders WHERE payment_status='approved' AND payment IS NOT NULL AND payment!=''").amount +
         one("SELECT COALESCE(SUM(amount),0) AS amount FROM ebook_orders WHERE payment<>''").amount,
       attempts24h: one('SELECT COUNT(*) AS count FROM attempts WHERE created_at>=?', since).count,
       attempts: one('SELECT COUNT(*) AS count FROM attempts').count,
@@ -1224,6 +1185,7 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
   api.post('/admin/courses/:id/tests', (req, res) => {
     const { id: courseId } = course(req.params.id);
     const id = randomUUID();
+    const folderId = idInput(req.body?.folderId === undefined ? null : req.body.folderId);
     const { title, questions, live, startsAt, expiresAt, durationMinutes, questionPaperDownload = false,
       attemptsLimit = 2, marksPerQuestion = 1, negativeMark = 0 } = req.body ?? {};
     let scheduled = '';
@@ -1248,12 +1210,15 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     const parsedQuestions = validateQuestions(questions);
     const sections = [...new Set(parsedQuestions.map(question => question.section || 'General'))];
     if (typeof questionPaperDownload !== 'boolean') fail(422, 'Choose a valid question paper download option.');
-    run(`INSERT INTO tests (id, course, title, questions, created_at, live, starts_at, duration_minutes,
-      expires_at, attempts_limit, marks_per_question, negative_mark, sections, question_paper_download)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, id, courseId, text(title, 'Title', 120),
-    JSON.stringify(parsedQuestions), new Date().toISOString(), live ? 1 : 0, scheduled, live ? duration : durationMinutes || 90,
-    expires, live ? attemptsLimit : 0, marksPerQuestion, negativeMark, JSON.stringify(sections),
-    questionPaperDownload ? 1 : 0);
+    transaction(() => {
+      validateItemFolder(workspaceFolders(courseId), folderId, 'tests');
+      run(`INSERT INTO tests (id, course, title, questions, created_at, live, starts_at, duration_minutes,
+        expires_at, attempts_limit, marks_per_question, negative_mark, sections, question_paper_download, folder_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, id, courseId, text(title, 'Title', 120),
+      JSON.stringify(parsedQuestions), new Date().toISOString(), live ? 1 : 0, scheduled, live ? duration : durationMinutes || 90,
+      expires, live ? attemptsLimit : 0, marksPerQuestion, negativeMark, JSON.stringify(sections),
+      questionPaperDownload ? 1 : 0, folderId);
+    });
     res.status(201).json({ id });
   });
   api.post('/admin/import', raw, async (req, res) => {
@@ -1263,12 +1228,18 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     const { id: courseId } = course(req.params.id);
     const id = randomUUID();
     const title = text(req.query.title, 'Title', 120);
+    const folderId = idInput(req.query.folderId === undefined ? null : req.query.folderId);
+    validateItemFolder(workspaceFolders(courseId), folderId, 'content');
     if (!Buffer.isBuffer(req.body)) fail(400, 'Upload a PDF.');
     const pages = await processDocument(() => pageCount(req.body));
     const subject = text(req.query.subject || 'General', 'Subject', 100);
     const chapter = text(req.query.chapter || 'Chapter 1', 'Chapter', 120);
-    run('INSERT INTO books (id, course, title, pages, pdf, subject, chapter, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-      id, courseId, title, pages, req.body, subject, chapter, new Date().toISOString());
+    transaction(() => {
+      course(courseId);
+      validateItemFolder(workspaceFolders(courseId), folderId, 'content');
+      run('INSERT INTO books (id, course, title, pages, pdf, subject, chapter, created_at, folder_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        id, courseId, title, pages, req.body, subject, chapter, new Date().toISOString(), folderId);
+    });
     res.status(201).json({ id, pages });
   });
   api.get('/admin/ebooks', (_req, res) => res.json(all(
@@ -1311,6 +1282,8 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
   });
   api.post('/admin/courses/:id/videos', async (req, res) => {
     const { id: courseId } = course(req.params.id);
+    const folderId = idInput(req.query.folderId === undefined ? null : req.query.folderId);
+    validateItemFolder(workspaceFolders(courseId), folderId, 'content');
     const title = text(req.query.title, 'Title', 120);
     const subject = text(req.query.subject || 'General', 'Subject', 100);
     const chapter = text(req.query.chapter || 'Chapter 1', 'Chapter', 120);
@@ -1329,8 +1302,12 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
         },
       }), createWriteStream(path, { mode: 0o600 }));
       if (!size || !looksLikeVideo(path, type)) fail(422, 'The file is not a valid MP4, WebM, or MOV video.');
-      run('INSERT INTO chapter_videos (id, course, title, subject, chapter, type, size, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', id, courseId, title, subject, chapter, type, size,
-        new Date().toISOString());
+      transaction(() => {
+        course(courseId);
+        validateItemFolder(workspaceFolders(courseId), folderId, 'content');
+        run('INSERT INTO chapter_videos (id, course, title, subject, chapter, type, size, created_at, folder_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', id, courseId, title, subject, chapter, type, size,
+          new Date().toISOString(), folderId);
+      });
     } catch (error) {
       rmSync(path, { force: true });
       throw error;

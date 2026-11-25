@@ -85,6 +85,10 @@ export async function renderPage(pdf, page, phone) {
   return renderPdfPage(pdf, page, phone);
 }
 
+export async function renderUnmarkedPage(pdf, page) {
+  return renderPdfPage(pdf, page, null);
+}
+
 export async function renderDemoPage(pdf, page) {
   return renderPdfPage(pdf, page, 'DEMO - Mission Selection');
 }
@@ -139,6 +143,7 @@ async function renderPdfPage(pdf, page, label) {
   } finally {
     await loading?.destroy();
   }
+  if (label === null) return png;
   const image = sharp(png, { limitInputPixels: MAX_PAGE_PIXELS + 100_000 });
   const { width, height } = await image.metadata();
   const labels = [];

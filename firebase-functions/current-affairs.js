@@ -5,7 +5,7 @@ const videoTypes = new Map([['video/mp4', 'mp4'], ['video/webm', 'webm'], ['vide
 const limits = { pdf: 12 * 1024 * 1024, video: 300 * 1024 * 1024 };
 const pathFor = (id, kind) => `current-affairs/${id}/${kind}`;
 
-export function currentAffairs(api, { db, bucket, value, text, processDocument, protectedPdf }) {
+export function currentAffairs(api, { db, bucket, value, text, processDocument }) {
   const uploads = db.collection('resourceUploads');
   const resources = db.collection('resources');
   const resource = async id => {
@@ -32,24 +32,17 @@ export function currentAffairs(api, { db, bucket, value, text, processDocument, 
         const [bytes] = await fileFor(item.id, 'pdf', pdf).download();
         res.type('png').send(await processDocument(() => renderPage(bytes, page, req.user.phone)));
       });
-      api.get('/resources/:id/pdf/download', async (req, res) => {
-        const item = await resource(req.params.id);
-        if (!item.downloadsEnabled) fail(403, 'Downloads are disabled for this resource.');
-        if (!item.media?.pdf) fail(404, 'PDF not found.');
-        const [bytes] = await fileFor(item.id, 'pdf', item.media.pdf).download();
-        const output = await processDocument(() => protectedPdf(bytes, item.media.pdf.pages, req.user.phone));
-        res.attachment(`${item.title.replace(/[^\w .-]+/g, '_')}-protected.pdf`).type('pdf').send(output);
-      });
+      api.get('/resources/:id/pdf/download', async () => fail(403, 'Save this resource inside the app instead.'));
       api.get('/resources/:id/video/link', async (req, res) => {
         const item = await resource(req.params.id);
         const video = item.media?.video;
         if (!video) fail(404, 'Video not found.');
         const download = req.query.download === '1';
-        if (download && !item.downloadsEnabled) fail(403, 'Downloads are disabled for this resource.');
+        if (download) fail(403, 'Save this video inside the app instead.');
         const filename = `${item.title.replace(/[^\w .-]+/g, '_')}.${videoTypes.get(video.type)}`;
         const [url] = await fileFor(item.id, 'video', video).getSignedUrl({
-          version: 'v4', action: 'read', expires: Date.now() + (download ? 10 : 60) * 60_000,
-          responseDisposition: `${download ? 'attachment' : 'inline'}; filename="${filename}"`,
+          version: 'v4', action: 'read', expires: Date.now() + 60 * 60_000,
+          responseDisposition: `inline; filename="${filename}"`,
         });
         res.json({ url });
       });

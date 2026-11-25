@@ -191,6 +191,10 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px
 .book-page { border-radius: var(--radius-sm); }
 .pdf-reader-pages { display: grid; gap: 1rem; margin-block: 1rem; }
 .pdf-page-shell { scroll-margin-block: 1rem; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); }
+.pdf-reader-scroll { overflow-x: auto; }
+.pdf-reader-tools { display: flex; flex-wrap: wrap; align-items: end; gap: .5rem; }
+.pdf-reader-tools .field { width: 6rem; margin: 0; }
+.pdf-reader-tools [role="status"] { align-self: center; min-width: 3rem; text-align: center; }
 .pdf-page-placeholder, .pdf-page-error { display: grid; place-items: center; gap: .75rem; min-height: 18rem; padding: 1.5rem; color: var(--muted); text-align: center; }
 .pdf-page-placeholder { aspect-ratio: 1 / 1.414; }
 .pdf-page-error { color: var(--danger); }

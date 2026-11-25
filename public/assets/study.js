@@ -1,5 +1,7 @@
 import {coverGallery} from './publishing-media.js';
 import {api} from './services.js';
+import {pdfReader} from './ebooks.js?v=continuous-reader-v2';
+import {saveControl} from './saved-content.js';
 import {button, el, empty, heading, icon, idPart, link, loadInto, run, say, status} from './ui.js';
 
 const protectedGet = (ctx, path, image = false) => api(path, {ctx, auth: true, image});
@@ -291,14 +293,16 @@ export function showVideo(main, ctx, courseId, videoId) {
   const content = el('div');
   main.append(back(), ...heading('Chapter Video'), content);
   loadInto(content, ctx, async () => {
-    const {videos = []} = await protectedGet(ctx, `/courses/${idPart(courseId)}`);
+    const {videos = [], downloadsEnabled} = await protectedGet(ctx, `/courses/${idPart(courseId)}`);
     const video = videos.find(item => String(item.id) === videoId);
     if (!video) throw new Error('This video is not available in the course.');
     const {url} = await protectedGet(ctx, `/videos/${idPart(videoId)}/link`);
     main.replaceChildren(back(), ...heading(video.title, `${video.subject} · ${video.chapter}`), content);
     content.replaceChildren(el('section', {class: 'panel'},
       el('video', {class: 'chapter-video', src: url, controls: '', controlslist: 'nodownload',
-        preload: 'metadata', playsinline: '', 'aria-label': video.title})));
+        preload: 'metadata', playsinline: '', 'aria-label': video.title}),
+      downloadsEnabled ? saveControl(ctx, {type: 'course-video', id: String(videoId), courseId,
+        title: video.title, videoLink: `/videos/${idPart(videoId)}/link`}) : null));
   });
 }
 
@@ -307,7 +311,7 @@ export function showBook(main, ctx, courseId, bookId) {
   const content = el('div');
   main.append(back(), ...heading('Study Book'), content);
   loadInto(content, ctx, async () => {
-    const {books} = await protectedGet(ctx, `/courses/${idPart(courseId)}`);
+    const {books, downloadsEnabled} = await protectedGet(ctx, `/courses/${idPart(courseId)}`);
     const book = books.find(item => String(item.id) === bookId);
     if (!book) throw new Error('This book is not available in the course.');
     const gallery = coverGallery(book, 'reader-gallery');
@@ -316,41 +320,10 @@ export function showBook(main, ctx, courseId, bookId) {
       content.replaceChildren(empty('This book has no pages to display.'));
       return;
     }
-    let page = 1;
-    let objectUrl;
-    let loading = false;
-    const imageArea = el('div', {class: 'panel'});
-    const counter = status();
-    const prev = button('Previous Page', 'secondary');
-    const next = button('Next Page', 'secondary');
-    const revoke = () => { if (objectUrl) URL.revokeObjectURL(objectUrl); objectUrl = null; };
-    ctx.signal.addEventListener('abort', revoke, {once: true});
-    content.replaceChildren(el('nav', {class: 'actions reader-controls', 'aria-label': 'Book pages'},
-      prev, counter, next), imageArea);
-    function showPage(focusControl) {
-      revoke();
-      const number = page;
-      say(counter, `Page ${number} of ${book.pages}`);
-      prev.setAttribute('aria-disabled', String(number === 1));
-      next.setAttribute('aria-disabled', String(number === book.pages));
-      focusControl?.focus();
-      loadInto(imageArea, ctx, async () => {
-        loading = true;
-        try {
-          const blob = await protectedGet(ctx, `/books/${idPart(bookId)}/pages/${number}`, true);
-          objectUrl = URL.createObjectURL(blob);
-          const image = el('img', {class: 'book-page protected-reader', src: objectUrl,
-            alt: `${book.title}, page ${number}`});
-          await image.decode();
-          if (ctx.current()) imageArea.replaceChildren(image);
-        } catch (error) {
-          revoke();
-          throw error;
-        } finally { loading = false; }
-      });
-    }
-    prev.addEventListener('click', () => { if (!loading && page > 1) { page--; showPage(prev); } });
-    next.addEventListener('click', () => { if (!loading && page < book.pages) { page++; showPage(next); } });
-    showPage();
+    content.replaceChildren();
+    pdfReader(content, ctx, {...book, readerTools: true,
+      pagePath: `/books/${idPart(bookId)}/pages`,
+      savedItem: downloadsEnabled ? {type: 'course-pdf', id: String(bookId), courseId,
+        title: book.title, pages: book.pages, pagePath: `/books/${idPart(bookId)}/pages`} : null});
   });
 }

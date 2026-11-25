@@ -165,6 +165,8 @@ export function openDatabase(path) {
   for (const [name, definition] of additions) {
     if (!orderColumns.has(name)) db.exec(`ALTER TABLE orders ADD COLUMN ${name} ${definition}`);
   }
-  db.exec(`UPDATE orders SET payment_status='approved' WHERE payment IS NOT NULL AND payment!='' AND payment_status!='approved'`);
+  if (!orderColumns.has('payment_status')) {
+    db.exec(`UPDATE orders SET payment_status='approved' WHERE payment IS NOT NULL AND payment!=''`);
+  }
   return db;
 }

@@ -4,14 +4,10 @@ import {adminContentForm} from './reports.js?v=current-affairs-media';
 import {coverPicker} from './publishing-media.js';
 import {manualQuestions} from './manual-questions.js';
 import {subjectQuestionManager} from './question-sections.js?v=sectionwise-v2';
-import {bindForm, button, el, entries, field, fieldError, formatDate, heading, icon, idPart, loadInto, panel, rule, run, say, status, textValue} from './ui.js';
+import {maxVideoBytes, uploadChapterVideo, videoAccept, videoType} from './chapter-upload.js';
+import {bindForm, button, el, entries, field, fieldError, formatDate, heading, icon, idPart, link, loadInto, panel, rule, run, say, status, textValue} from './ui.js';
 
 const pdfAccept = '.pdf,application/pdf';
-const videoAccept = '.mp4,.m4v,.webm,.mov,video/mp4,video/webm,video/quicktime';
-const maxVideoBytes = 300 * 1024 * 1024;
-const videoTypes = {mp4: 'video/mp4', m4v: 'video/mp4', webm: 'video/webm', mov: 'video/quicktime'};
-const videoType = file => file && (Object.values(videoTypes).includes(file.type) ? file.type :
-  videoTypes[file.name.split('.').pop().toLowerCase()]);
 
 function youtubeId(input) {
   try {
@@ -63,7 +59,7 @@ function questionData(source) {
   });
 }
 
-export function showAdmin(main, ctx) {
+export function showAdmin(main, ctx, folderTarget = null) {
   main.append(...heading('Admin Workspace', 'Approve course payments, publish learning material, and support students from your phone.'));
   const analytics = el('div', {class: 'admin-analytics'});
   main.append(analytics);
@@ -194,6 +190,12 @@ export function showAdmin(main, ctx) {
       select.replaceChildren(el('option', {value: ''}, list.length ? 'Choose a Course' : 'No Courses Available'),
         ...list.map(course => el('option', {value: course.id}, course.title)));
       if (list.some(course => String(course.id) === selected)) select.value = selected;
+    }
+    if (folderTarget) {
+      const found = list.some(course => String(course.id) === folderTarget.courseId);
+      testCourse.value = found ? folderTarget.courseId : '';
+      publish.disabled = !found;
+      say(testStatus, found ? '' : 'The selected course is unavailable. Return to the course workspace.', !found);
     }
   }
   let courseList = [];
@@ -520,6 +522,7 @@ export function showAdmin(main, ctx) {
   const subjectManager = subjectQuestionManager(editor, (file, format) =>
     post(`/admin/import?format=${format}`, {binary: file}));
   const [testCourse, testField] = courseField();
+  if (folderTarget) testCourse.disabled = true;
   const testTitle = el('input', {required: '', maxlength: '120'});
   rule(editor, value => {
     try { questionData(value); return ''; } catch (error) { return error.message; }
@@ -592,6 +595,7 @@ export function showAdmin(main, ctx) {
     try {
       await post(`/admin/courses/${idPart(testCourse.value)}/tests`, {json: {
         title: textValue(testTitle, 'Test title'), questions, live: !sectionWise && testType.value === 'live',
+        ...(folderTarget ? {folderId: folderTarget.folderId} : {}),
         startsAt: !sectionWise && testType.value === 'live' ? startsAt.value : undefined,
         expiresAt: !sectionWise && testType.value === 'live' ? expiresAt.value : undefined,
         durationMinutes: durationMinutes.valueAsNumber,
@@ -600,6 +604,7 @@ export function showAdmin(main, ctx) {
         marksPerQuestion: sectionWise ? 1 : marksPerQuestion.valueAsNumber, negativeMark: negativeMark.valueAsNumber,
       }});
       testForm.reset();
+      if (folderTarget) testCourse.value = folderTarget.courseId;
       manual.reset();
       subjectManager.reset();
       updateTestType();
@@ -609,7 +614,10 @@ export function showAdmin(main, ctx) {
       updateCreationMethod();
     }
   }, 'Publishing test…');
-  main.append(panel('Publish a Test', field('Test Creation Method', creationMethod), importSection,
+  main.append(panel('Publish a Test',
+    folderTarget ? el('p', {}, 'Publishing into the selected test folder. ',
+      link('Return to Course Workspace', `#admin-course/${idPart(folderTarget.courseId)}`)) : null,
+    field('Test Creation Method', creationMethod), importSection,
     el('div', {class: 'section'}, el('h3', {}, 'Review, Edit, and Publish'), testForm)));
 
   const [bookCourse, bookField] = courseField();
@@ -718,18 +726,8 @@ export function showAdmin(main, ctx) {
     uploadFields.disabled = true;
     try {
       if (video) {
-        const type = videoType(file);
-        const {id, url, headers, direct} = await post(`/admin/courses/${courseId}/videos/upload`,
-          {json: {...placement, type, size: file.size}});
-        if (direct) {
-          await post(`/admin/courses/${courseId}/videos?${query}`, {binary: file, imageUpload: type});
-        } else {
-          const response = await fetch(url, {method: 'PUT', headers: {...headers, 'Content-Type': type},
-            body: file, signal: ctx.signal, credentials: 'omit', redirect: 'error'});
-          if (!response.ok) throw new Error(`The video could not be uploaded (${response.status}). Please try again.`);
-          say(bookStatus, 'Publishing video…');
-          await post(`/admin/courses/${courseId}/videos/${idPart(id)}/publish`, {json: {}});
-        }
+        await uploadChapterVideo({ctx, post, coursePath: `/admin/courses/${courseId}`, placement, file,
+          onPublish: () => say(bookStatus, 'Publishing video…')});
       } else {
         const images = await bookCovers?.upload();
         if (images) query.set('images', images.join(','));
@@ -856,5 +854,8 @@ export function showAdmin(main, ctx) {
   }
   analytics.after(workspace);
   for (const panelNode of panels) panelNode.remove();
-  showOverview();
+  if (folderTarget) {
+    areas.find(area => area.label === 'Mock Tests').open();
+    workspace.querySelector('.admin-add').click();
+  } else showOverview();
 }

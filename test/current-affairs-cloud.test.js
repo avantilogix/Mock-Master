@@ -37,7 +37,6 @@ test('cloud Current Affairs signs private uploads and publishes only matching co
   }, {
     db, bucket, value: snapshot => snapshot.exists ? {id: snapshot.id, ...snapshot.data()} : null,
     text: input => input.trim(), processDocument: operation => operation(),
-    protectedPdf: () => { throw new Error('Download must be denied before rendering.'); },
   });
   service.routes();
   service.adminRoutes();
@@ -78,8 +77,8 @@ test('cloud Current Affairs signs private uploads and publishes only matching co
   assert.equal(signed.at(-1).options.generation, '456');
   assert.match(signed.at(-1).responseDisposition, /^inline/);
   item.downloadsEnabled = true;
-  await handlers.get('GET /resources/:id/video/link')({...read, query: {download: '1'}}, response());
-  assert.match(signed.at(-1).responseDisposition, /^attachment/);
+  await assert.rejects(handlers.get('GET /resources/:id/video/link')({...read, query: {download: '1'}}, response()), {status: 403});
+  await assert.rejects(handlers.get('GET /resources/:id/pdf/download')(read, response()), {status: 403});
   await service.remove(id);
   assert.equal(objects.size, 0);
 });

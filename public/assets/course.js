@@ -438,12 +438,12 @@ function showManualPayment(target, ctx, session, course, path, action) {
       }, 'Checking status…'));
       target.replaceChildren(el('div', {class: 'payment-status pending'},
         el('span', {class: 'status-icon', 'aria-hidden': 'true'}, '◷'), el('h2', {}, 'Payment Submitted'),
-        el('p', {}, 'Your payment proof is with the admin. Course access is unlocked after confirmation.'),
-        el('dl', {class: 'payment-summary'}, el('dt', {}, 'Amount'), el('dd', {}, priceText(amount)),
+        el('p', {}, 'Your request is with the admin. Course access is unlocked after confirmation.'),
+        el('dl', {class: 'payment-summary'}, el('dt', {}, 'Amount'), el('dd', {}, priceText(order.amount)),
           el('dt', {}, 'UPI reference'), el('dd', {}, order.reference)), refresh, feedback));
       return;
     }
-    if (!payment.configured) {
+    if (!payment.configured && credits * 100 < amount) {
       target.replaceChildren(el('div', {class: 'payment-status'},
         el('h2', {}, 'Payments Are Being Configured'),
         el('p', {}, 'UPI details are not available yet. Contact support before making a payment.'),
@@ -464,7 +464,7 @@ function showManualPayment(target, ctx, session, course, path, action) {
           payment.customQr ? el('small', {}, 'Scan using your UPI application') : el('small', {}, payment.upiId)));
       }
     };
-    const methods = payment.method === 'both' ? ['upi', 'qr'] : [payment.method];
+    const methods = payment.configured ? (payment.method === 'both' ? ['upi', 'qr'] : [payment.method]) : [];
     for (const method of methods) {
       const control = button(method === 'upi' ? 'Pay by UPI ID' : 'Scan QR Code', 'secondary');
       control.dataset.method = method;
@@ -473,6 +473,10 @@ function showManualPayment(target, ctx, session, course, path, action) {
     }
     const reference = upiReference(el('input', {required: '', maxlength: '80', autocomplete: 'off', placeholder: 'Example: 418276930125'}));
     const useCredits = el('input', {type: 'checkbox'});
+    if (!payment.configured) {
+      useCredits.checked = true;
+      useCredits.disabled = true;
+    }
     const creditPanel = credits > 0 ? el('label', {class: 'credit-option'},
       useCredits, el('span', {}, `Use available credits: ₹${credits}`)) : null;
     const note = el('textarea', {rows: '2', maxlength: '500', placeholder: 'Optional note from your payment app'});
@@ -503,7 +507,8 @@ function showManualPayment(target, ctx, session, course, path, action) {
     target.replaceChildren(el('div', {class: 'manual-payment'},
       el('div', {class: 'payment-steps'}, el('span', {}, '1'),
         el('div', {}, el('h2', {}, `Pay ${priceText(amount)}`),
-          el('p', {class: 'muted'}, `Use your preferred UPI app to pay ${payment.payeeName}.`))),
+          el('p', {class: 'muted'}, payment.configured ? `Use your preferred UPI app to pay ${payment.payeeName}.` :
+            'Your available credits cover this course. Submit the request for admin approval.'))),
       el('div', {class: 'payment-grid'},
         el('div', {class: 'payment-choice'}, methodButtons, methodPanel),
         el('div', {class: 'payment-instructions'}, el('h3', {}, 'After Paying'),
@@ -513,7 +518,7 @@ function showManualPayment(target, ctx, session, course, path, action) {
             el('strong', {}, 'Payment Not Approved'), el('p', {}, order.reviewNote || 'Check the payment and submit again.')) : null)),
       el('div', {class: 'payment-form-panel'}, el('span', {}, '2'),
         el('div', {}, el('h3', {}, 'Submit Payment Proof'), form))));
-    renderMethod(methods[0]);
+    if (methods.length) renderMethod(methods[0]);
     updateAmount();
   });
 }

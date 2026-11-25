@@ -106,19 +106,33 @@ test('admin approval grants only the confirmed student access to their course, t
   const { id } = await created.json();
   const path = `/courses/${id}`;
   assert.deepEqual(await (await request('/courses')).json(), [{ id, ...course, downloadsEnabled: 0 }]);
+  const testFolder = await (await request(`/admin${path}/folders`, 'admin', 'POST', {kind: 'tests', name: 'Tests'})).json();
   const numberedQuestions = [{...questions[0], questionNumber: '15'}];
   const createdTest = await request(`/admin${path}/tests`, 'admin', 'POST',
-    { title: 'Practice test', questions: numberedQuestions });
+    { title: 'Practice test', questions: numberedQuestions, folderId: testFolder.id });
   assert.equal(createdTest.status, 201);
   const testPath = `/tests/${(await createdTest.json()).id}`;
   const withPdf = true;
   let pagePath;
+  let bookDownloadPath;
   if (withPdf) {
-    const upload = await request(`/admin${path}/books?title=Guide`, 'admin', 'POST', fixturePdf(),
+    const folderResponse = await request(`/admin${path}/folders`, 'admin', 'POST', {kind: 'content', name: 'Guides'});
+    const folder = await folderResponse.json();
+    assert.equal((await request(`/admin${path}/tests`, 'admin', 'POST',
+      {title: 'Invalid folder', questions, folderId: folder.id})).status, 422);
+    const invalidUpload = await request(`/admin${path}/books?title=Guide&folderId=${testFolder.id}`, 'admin', 'POST', fixturePdf(),
+      { 'Content-Type': 'application/octet-stream' });
+    assert.equal(invalidUpload.status, 422);
+    const upload = await request(`/admin${path}/books?title=Guide&folderId=${folder.id}`, 'admin', 'POST', fixturePdf(),
       { 'Content-Type': 'application/octet-stream' });
     assert.equal(upload.status, 201);
-    pagePath = `/books/${(await upload.json()).id}/pages/1`;
+    const bookId = (await upload.json()).id;
+    pagePath = `/books/${bookId}/pages/1`;
+    bookDownloadPath = `/books/${bookId}/download`;
+    const workspace = await (await request(`/admin${path}/workspace?kind=content`, 'admin')).json();
+    assert.equal(workspace.items.find(item => item.id === bookId).folderId, folder.id);
     assert.equal((await request(pagePath, 'buyer')).status, 403);
+    assert.equal((await request(bookDownloadPath, 'buyer')).status, 403);
   }
   assert.equal((await request(path)).status, 401);
   assert.equal((await request(path, 'buyer')).status, 403);
@@ -150,6 +164,9 @@ test('admin approval grants only the confirmed student access to their course, t
   assert.equal((await request(`/admin/payments/${requestId}/approve`, 'admin', 'POST')).status, 204);
   assert.deepEqual((await (await request('/me', 'buyer')).json()).purchases, [id]);
   assert.equal((await request(path, 'buyer')).status, 200);
+  assert.equal((await (await request(path, 'buyer')).json()).tests[0].folderId, testFolder.id);
+  assert.equal((await (await request(path, 'buyer')).json()).books[0].folderId,
+    (await (await request(`/admin${path}/workspace?kind=content`, 'admin')).json()).folders[0].id);
   assert.equal((await request(testPath, 'other')).status, 403);
   assert.deepEqual((await (await request(testPath, 'buyer')).json()).questions,
     [{ prompt: questions[0].prompt, options: questions[0].options, section: 'General', questionNumber: '15' }]);
@@ -218,18 +235,70 @@ test('admin approval grants only the confirmed student access to their course, t
     const page = await request(pagePath, 'buyer');
     assert.equal(page.headers.get('cache-control'), 'no-store');
     assert.equal(page.headers.get('content-type'), 'image/png');
-    assert.equal(Buffer.from(await page.arrayBuffer()).subarray(1, 4).toString(), 'PNG');
+    const marked = Buffer.from(await page.arrayBuffer());
+    assert.equal(marked.subarray(1, 4).toString(), 'PNG');
+    const markedAdmin = Buffer.from(await (await request(pagePath, 'admin')).arrayBuffer());
+    assert.notDeepEqual(marked, markedAdmin);
     const downloadPath = `${pagePath}/download`;
     assert.equal((await request(downloadPath, 'buyer')).status, 403);
+    assert.equal((await request(bookDownloadPath, 'buyer')).status, 403);
     assert.equal((await request(`/admin/published/courses/${id}`, 'admin', 'PUT',
       {...course, downloadsEnabled: true})).status, 204);
-    assert.equal((await request(downloadPath, 'buyer')).headers.get('content-type'), 'image/png');
+    assert.equal((await request(downloadPath, 'buyer')).status, 403);
+    assert.equal((await request(bookDownloadPath, 'other')).status, 403);
+    assert.equal((await request(bookDownloadPath, 'buyer')).status, 403);
+    const clean = Buffer.from(await (await request(pagePath, 'buyer')).arrayBuffer());
+    const cleanOtherPhone = Buffer.from(await (await request(pagePath, 'admin')).arrayBuffer());
+    assert.deepEqual(clean, cleanOtherPhone);
   }
   assert.equal((await request(`/admin/payments/${requestId}/reject`, 'admin', 'POST',
     {note: 'Payment reversed'})).status, 204);
   assert.equal((await request(path, 'buyer')).status, 403);
+  assert.equal((await request(bookDownloadPath, 'buyer')).status, 403);
   assert.equal((await request(testPath, 'buyer')).status, 403);
   assert.ok(!(await (await request('/me', 'buyer')).json()).purchases.includes(id));
+});
+
+test('credit-covered course requests remain locked until admin approval', async t => {
+  const db = openDatabase(':memory:');
+  const users = {
+    admin: {uid: 'admin', phone: '+919000000001'},
+    buyer: {uid: 'buyer', phone: '+919000000002'},
+  };
+  const server = createApp({db, verifyToken: async token => users[token], adminUids: ['admin']})
+    .listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  t.after(() => new Promise(resolve => server.close(() => { db.close(); resolve(); })));
+  const base = `http://127.0.0.1:${server.address().port}/api`;
+  const request = (path, user, method = 'GET', body) => fetch(base + path, {
+    method, headers: {Authorization: `Bearer ${user}`, ...(body === undefined ? {} : {'Content-Type': 'application/json'})},
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const course = await (await request('/admin/courses', 'admin', 'POST',
+    {title: 'Course', description: 'Description', price: 10000})).json();
+  const test = await (await request(`/admin/courses/${course.id}/tests`, 'admin', 'POST',
+    {title: 'Test', questions})).json();
+  await request('/me', 'buyer');
+  db.prepare('INSERT INTO referrals (uid,code,credits) VALUES (?,?,?)').run('buyer', 'CODE', 100);
+  const submitted = await request(`/courses/${course.id}/payment`, 'buyer', 'POST', {useCredits: true});
+  assert.equal(submitted.status, 201);
+  const order = await submitted.json();
+  assert.equal(order.amount, 0);
+  assert.equal(order.status, 'pending');
+  assert.deepEqual((await (await request('/me', 'buyer')).json()).purchases, []);
+  assert.equal((await request(`/courses/${course.id}`, 'buyer')).status, 403);
+  assert.equal((await request(`/tests/${test.id}`, 'buyer')).status, 403);
+  assert.equal((await request(`/admin/payments/${order.id}/approve`, 'buyer', 'POST')).status, 403);
+  db.prepare("UPDATE orders SET payment='unexpected' WHERE id=?").run(order.id);
+  assert.equal((await request(`/courses/${course.id}`, 'buyer')).status, 403);
+  assert.deepEqual(await (await request('/receipts', 'buyer')).json(), []);
+  assert.equal((await request(`/admin/payments/${order.id}/approve`, 'admin', 'POST')).status, 204);
+  assert.equal((await request(`/courses/${course.id}`, 'buyer')).status, 200);
+  assert.equal((await request(`/tests/${test.id}`, 'buyer')).status, 200);
+  assert.deepEqual((await (await request('/me', 'buyer')).json()).purchases, [course.id]);
+  assert.equal((await request(`/admin/payments/${order.id}/reject`, 'admin', 'POST', {note: 'Revoked'})).status, 204);
+  assert.equal((await request(`/courses/${course.id}`, 'buyer')).status, 403);
+  assert.equal(db.prepare('SELECT credits FROM referrals WHERE uid=?').get('buyer').credits, 100);
 });
 
 test('chapter videos upload for admins and stream only through signed links for buyers', async t => {
@@ -254,9 +323,16 @@ test('chapter videos upload for admins and stream only through signed links for 
     JSON.stringify({ title: 'Maths', description: 'Practice', price: 14900 }), 'application/json');
   const { id } = await created.json();
   const mp4 = Buffer.concat([Buffer.from([0, 0, 0, 24]), Buffer.from('ftypisom'), Buffer.alloc(64, 1)]);
-  const uploadPath = `/admin/courses/${id}/videos?title=Algebra%20Lesson&subject=Maths&chapter=Chapter%204`;
+  const folderResponse = await request(`/admin/courses/${id}/folders`, 'admin', 'POST',
+    JSON.stringify({kind: 'content', name: 'Video folder'}), 'application/json');
+  const folder = await folderResponse.json();
+  const testFolderResponse = await request(`/admin/courses/${id}/folders`, 'admin', 'POST',
+    JSON.stringify({kind: 'tests', name: 'Test folder'}), 'application/json');
+  const testFolder = await testFolderResponse.json();
+  const uploadPath = `/admin/courses/${id}/videos?title=Algebra%20Lesson&subject=Maths&chapter=Chapter%204&folderId=${folder.id}`;
 
   assert.equal((await request(uploadPath, 'buyer', 'POST', mp4, 'video/mp4')).status, 403);
+  assert.equal((await request(uploadPath.replace(folder.id, testFolder.id), 'admin', 'POST', mp4, 'video/mp4')).status, 422);
   assert.equal((await request(uploadPath, 'admin', 'POST', mp4, 'application/pdf')).status, 415);
   assert.equal((await request(uploadPath, 'admin', 'POST', Buffer.from('not a video at all'), 'video/mp4')).status, 422);
   const upload = await request(uploadPath, 'admin', 'POST', mp4, 'video/mp4');
@@ -265,11 +341,11 @@ test('chapter videos upload for admins and stream only through signed links for 
 
   const material = await (await request(`/courses/${id}`, 'admin')).json();
   assert.deepEqual(material.videos, [{ id: videoId, title: 'Algebra Lesson', subject: 'Maths', chapter: 'Chapter 4',
-    type: 'video/mp4', size: mp4.length, folderId: null }]);
+    type: 'video/mp4', size: mp4.length, folderId: folder.id }]);
   assert.equal((await request(`/videos/${videoId}/link`, 'buyer')).status, 403);
 
   for (const uid of ['buyer', 'other']) db.prepare('INSERT OR IGNORE INTO students (uid, phone) VALUES (?, ?)').run(uid, users.get(uid).phone);
-  db.prepare('INSERT INTO orders (id, uid, course, amount, payment) VALUES (?, ?, ?, ?, ?)').run('order-1', 'buyer', id, 14900, 'pay-1');
+  db.prepare("INSERT INTO orders (id, uid, course, amount, payment, payment_status) VALUES (?, ?, ?, ?, ?, 'approved')").run('order-1', 'buyer', id, 14900, 'pay-1');
   const linked = await request(`/videos/${videoId}/link`, 'buyer');
   assert.equal(linked.status, 200);
   const { url } = await linked.json();
@@ -277,13 +353,11 @@ test('chapter videos upload for admins and stream only through signed links for 
   assert.equal(file.status, 200);
   assert.equal(file.headers.get('content-type'), 'video/mp4');
   assert.deepEqual(Buffer.from(await file.arrayBuffer()), mp4);
+  assert.equal((await fetch(`${origin}${url}&download=1`)).status, 403);
   assert.equal((await request(`/admin/published/courses/${id}`, 'admin', 'PUT',
     JSON.stringify({title: 'Video Course', description: 'Secure videos', price: 14900, downloadsEnabled: true}),
     'application/json')).status, 204);
-  const downloadLink = await request(`/videos/${videoId}/link?download=1`, 'buyer');
-  const downloadUrl = (await downloadLink.json()).url;
-  const download = await fetch(`${origin}${downloadUrl}`);
-  assert.match(download.headers.get('content-disposition'), /attachment; filename="Algebra Lesson\.mp4"/);
+  assert.equal((await request(`/videos/${videoId}/link?download=1`, 'buyer')).status, 403);
   assert.equal((await fetch(origin + url, { headers: { Range: 'bytes=0-3' } })).status, 206);
 
   assert.equal((await fetch(origin + url.replace(/signature=[^&]+/, 'signature=forged'))).status, 403);
@@ -356,13 +430,9 @@ test('Current Affairs publishes completed media, protects viewing and enforces d
   const editPath = `/admin/published/resources/${id}`;
   const edit = {title: 'Updated Affairs', publishedAt: '2026-03-01', downloadsEnabled: true};
   assert.equal((await request(editPath, 'admin', 'PUT', edit)).status, 204);
-  const download = await request(`/resources/${id}/pdf/download`, 'student');
-  assert.equal(download.status, 200);
-  assert.equal(Buffer.from(await download.arrayBuffer()).subarray(0, 4).toString(), '%PDF');
-  const {url: downloadUrl} = await (await request(`/resources/${id}/video/link?download=1`, 'student')).json();
-  assert.match((await fetch(origin + downloadUrl)).headers.get('content-disposition'), /attachment/);
+  assert.equal((await request(`/resources/${id}/pdf/download`, 'student')).status, 403);
+  assert.equal((await request(`/resources/${id}/video/link?download=1`, 'student')).status, 403);
   assert.equal((await request(editPath, 'admin', 'PUT', {...edit, downloadsEnabled: false})).status, 204);
-  assert.equal((await fetch(origin + downloadUrl)).status, 403);
   const managed = await (await request('/admin/published')).json();
   assert.equal(managed.resources[0].media.pdf.pages, 1);
   assert.equal(managed.resources[0].title, 'Updated Affairs');
@@ -472,7 +542,7 @@ test('admins list published content with dates, edit it, and delete it safely', 
   assert.deepEqual([after.courses.length, after.tests.length], [0, 0]);
 });
 
-test('standalone e-books unlock after admin payment approval and download as protected PDFs', async t => {
+test('standalone e-books unlock after admin payment approval and cannot be exported', async t => {
   const db = openDatabase(':memory:');
   const users = new Map([
     ['buyer', { uid: 'buyer', phone: '+919000000031' }],
@@ -506,10 +576,7 @@ test('standalone e-books unlock after admin payment approval and download as pro
   assert.equal(payments.find(item => item.id === orderId).type, 'ebook');
   assert.equal((await request(`/admin/payments/${orderId}/approve`, 'admin', 'POST', {})).status, 204);
   assert.equal((await request(`/ebooks/${id}/pages/1`, 'buyer')).headers.get('content-type'), 'image/png');
-  const download = await request(`/ebooks/${id}/download`, 'buyer');
-  assert.equal(download.status, 200);
-  assert.match(download.headers.get('content-disposition'), /protected\.pdf/);
-  assert.equal(Buffer.from(await download.arrayBuffer()).subarray(0, 4).toString(), '%PDF');
+  assert.equal((await request(`/ebooks/${id}/download`, 'buyer')).status, 403);
   assert.equal((await request(`/admin/payments/${orderId}/reject`, 'admin', 'POST',
     {note: 'Transaction could not be verified'})).status, 204);
   assert.equal((await request(`/ebooks/${id}/pages/1`, 'buyer')).status, 403);
@@ -676,8 +743,8 @@ test('live leaderboard is private, rank ordered, and locked until expiry', async
   db.prepare(`INSERT INTO tests (id,course,title,questions,live,starts_at,expires_at,duration_minutes)
     VALUES (?,?,?,?,?,?,?,?)`).run('t', 'c', 'Final Live', JSON.stringify([{prompt:'A?', options:['A','B'], answer:0}]),
   1, '2026-01-01T00:00:00.000Z', '2099-01-01T00:00:00.000Z', 60);
-  db.prepare('INSERT INTO orders (id,uid,course,amount,payment) VALUES (?,?,?,?,?)').run('o1', 'one', 'c', 100, 'paid-one');
-  db.prepare('INSERT INTO orders (id,uid,course,amount,payment) VALUES (?,?,?,?,?)').run('o2', 'two', 'c', 100, 'paid-two');
+  db.prepare("INSERT INTO orders (id,uid,course,amount,payment,payment_status) VALUES (?,?,?,?,?,'approved')").run('o1', 'one', 'c', 100, 'paid-one');
+  db.prepare("INSERT INTO orders (id,uid,course,amount,payment,payment_status) VALUES (?,?,?,?,?,'approved')").run('o2', 'two', 'c', 100, 'paid-two');
   for (const [id, uid, score, elapsed] of [
     ['a1', 'one', 4, 60], ['a2', 'two', 2, 40],
   ]) db.prepare(`INSERT INTO attempts (id,uid,course,test,title,score,total,created_at,max_marks,elapsed_seconds)
@@ -713,7 +780,7 @@ test('mock and live question paper switches require a completed attempt and pres
   const createdCourse = await request('/admin/courses', 'admin', 'POST',
     {title: 'Live Download', description: 'Test', price: 10000});
   const {id: courseId} = await createdCourse.json();
-  db.prepare('INSERT INTO orders (id,uid,course,amount,payment) VALUES (?,?,?,?,?)')
+  db.prepare("INSERT INTO orders (id,uid,course,amount,payment,payment_status) VALUES (?,?,?,?,?,'approved')")
     .run('download-order', 'student', courseId, 10000, 'paid');
   const question = [{prompt: 'Capital of India?', options: ['Delhi', 'Mumbai'], answer: 0, section: 'General'}];
   for (const live of [false, true]) {

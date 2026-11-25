@@ -1,5 +1,7 @@
 import {api} from './services.js';
-import {bindForm, button, confirmDelete, el, entries, field, heading, icon, idPart, loadInto, panel, run, say, status, textValue} from './ui.js';
+import {pdfReader} from './ebooks.js?v=continuous-reader-v2';
+import {openSaved, removeSaved, savedItems, savedPart} from './saved-content.js';
+import {bindForm, button, confirmDelete, el, entries, field, heading, icon, idPart, link, loadInto, panel, run, say, status, textValue} from './ui.js';
 
 export const socialLinks = [
   ['YouTube', 'youtube', '▶'],
@@ -155,100 +157,49 @@ export function showReferrals(main, ctx, action) {
 }
 
 export function showDownloads(main, ctx, action) {
-  main.append(...heading('Downloads', 'Protected PDF pages and approved digital content for your purchased missions.'));
+  main.append(...heading('Downloads', 'Content saved on this device. An internet connection is required to check access before opening.'));
   const content = el('div');
-  const videoContent = el('div');
-  const tabs = [['pdf', 'PDF', content], ['video', 'Video', videoContent]].map(([key, label, body]) => {
-    const tab = el('button', {type: 'button', class: 'tab', role: 'tab', id: `downloads-tab-${key}`,
-      'aria-controls': `downloads-panel-${key}`}, label);
-    const tabPanel = el('div', {role: 'tabpanel', id: `downloads-panel-${key}`, 'aria-labelledby': tab.id}, body);
-    return {tab, tabPanel};
-  });
-  const select = (index, focus = false) => tabs.forEach(({tab, tabPanel}, position) => {
-    const active = position === index;
-    tab.setAttribute('aria-selected', String(active));
-    tab.tabIndex = active ? 0 : -1;
-    tabPanel.hidden = !active;
-    if (active && focus) tab.focus();
-  });
-  tabs.forEach(({tab}, index) => {
-    tab.addEventListener('click', () => select(index));
-    tab.addEventListener('keydown', event => {
-      if (!['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
-      event.preventDefault();
-      select((index + (event.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length, true);
-    });
-  });
-  select(0);
-  const loader = el('div');
-  main.append(panel('Protected Downloads',
-    el('div', {class: 'tabs', role: 'tablist', 'aria-label': 'Download type'}, ...tabs.map(({tab}) => tab)),
-    el('p', {}, 'Download the complete protected PDF. Your verified mobile number is watermarked on every page.'),
-    loader, ...tabs.map(({tabPanel}) => tabPanel)));
+  main.append(panel('Saved on This Device', content));
   if (!ctx.user) {
-    content.append(el('p', {}, 'Sign in to download protected PDF pages.'), action.signInLink());
-    videoContent.append(el('p', {}, 'Sign in to download chapter videos.'), action.signInLink());
+    content.append(el('p', {}, 'Sign in to view saved content.'), action.signInLink());
     return;
   }
-  loadInto(loader, ctx, async () => {
-    const courses = await api('/courses', {ctx});
-    const me = await api('/me', {ctx, auth: true});
-    const owned = courses.filter(course => !course.expired && course.downloadsEnabled &&
-      me.purchases.some(id => String(id) === String(course.id)));
-    const rows = [];
-    const videoRows = [];
-    for (const course of owned) {
-      const material = await api(`/courses/${idPart(course.id)}`, {ctx, auth: true});
-      for (const book of material.books) {
-        const download = button('Download PDF');
-        const feedback = status();
-        download.prepend(icon('download', 'line-icon'));
-        download.addEventListener('click', () => buttonDownload(ctx, book.id, download, feedback));
-        rows.push(el('article', {class: 'download-row'}, el('div', {}, el('strong', {}, book.title),
-          el('p', {class: 'muted'}, `${course.title} · ${book.subject} · ${book.chapter} · ${book.pages} pages`)),
-          download, feedback));
-      }
-      for (const video of material.videos || []) {
-        const download = button('Download Video');
-        const feedback = status();
-        download.addEventListener('click', () => videoDownload(ctx, video, download, feedback));
-        videoRows.push(el('article', {class: 'download-row video-row'}, el('div', {}, el('strong', {}, video.title),
-          el('p', {class: 'muted'}, `${course.title} · ${video.subject} · ${video.chapter} · ${sizeText(video.size)}`)),
-          download, feedback));
-      }
-    }
-    loader.replaceChildren();
-    content.replaceChildren(...(rows.length ? rows : [el('p', {class: 'empty-library'},
-      'No purchased books are available for download yet.')]));
-    videoContent.replaceChildren(...(videoRows.length ? videoRows : [el('p', {class: 'empty-library'},
-      'No purchased videos are available for download yet.')]));
+  const load = () => loadInto(content, ctx, async () => {
+    const items = await savedItems(ctx.user.uid);
+    content.replaceChildren(...(items.length ? items.map(item => {
+      const feedback = status();
+      const remove = confirmDelete(feedback, async () => {
+        await removeSaved(ctx.user.uid, item.type, item.id);
+        load();
+      }, {question: 'Remove this saved item?'});
+      return el('article', {class: 'download-row'}, el('div', {},
+        el('strong', {}, item.title), el('p', {class: 'muted'},
+          item.incomplete ? 'Incomplete save. Remove and try again.' : item.type.includes('video') ? 'Video' : `${item.parts} pages`)),
+      item.incomplete ? null : link('Open', `#saved/${idPart(item.type)}/${idPart(item.id)}`, 'button'),
+      remove, feedback);
+    }) : [el('p', {class: 'empty-library'}, 'Nothing saved yet. Open eligible learning content and choose Save to Downloads.')]));
   });
+  load();
 }
 
-const sizeText = bytes => bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
-
-async function videoDownload(ctx, video, control, feedback) {
-  run(control, feedback, async () => {
-    const {url} = await api(`/videos/${idPart(video.id)}/link?download=1`, {ctx, auth: true});
-    const anchor = el('a', {href: url, download: '', referrerpolicy: 'no-referrer'});
-    document.body.append(anchor);
-    anchor.click();
-    anchor.remove();
-    say(feedback, 'Video download started.');
-  }, 'Preparing video…');
-}
-
-async function buttonDownload(ctx, bookId, control, feedback) {
-  run(control, feedback, async () => {
-    const blob = await api(`/books/${idPart(bookId)}/download`, {ctx, auth: true, blob: true});
-    const url = URL.createObjectURL(blob);
-    const anchor = el('a', {href: url, download: `mission-selection-book-${bookId}.pdf`});
-    document.body.append(anchor);
-    anchor.click();
-    anchor.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-    say(feedback, 'Protected PDF downloaded.');
-  }, 'Preparing protected PDF…');
+export function showSaved(main, ctx, type, id) {
+  const content = el('div');
+  main.append(link('Back to Downloads', '#downloads', 'back'), content);
+  loadInto(content, ctx, async () => {
+    const item = await openSaved(ctx, type, id);
+    if (!ctx.current()) return;
+    content.replaceChildren(...heading(item.title, 'Saved on this device'));
+    if (type.includes('video')) {
+      const blob = await savedPart(item, 1);
+      if (!ctx.current()) return;
+      const url = URL.createObjectURL(blob);
+      ctx.signal.addEventListener('abort', () => URL.revokeObjectURL(url), {once: true});
+      content.append(el('video', {class: 'chapter-video', src: url, controls: '', controlslist: 'nodownload',
+        preload: 'metadata', playsinline: '', 'aria-label': item.title}));
+    } else {
+      pdfReader(content, ctx, {...item, pages: item.parts, readerTools: true, getPage: page => savedPart(item, page)});
+    }
+  });
 }
 
 export function socialFooter(ctx) {

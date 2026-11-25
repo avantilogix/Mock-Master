@@ -9,7 +9,7 @@ import { defineString } from 'firebase-functions/params';
 import { onRequest } from 'firebase-functions/v2/https';
 import QRCode from 'qrcode';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
-import { fail, importQuestions, mobile, pageCount, renderDemoPage, renderPage, validateQuestions } from './documents.js';
+import { fail, importQuestions, mobile, pageCount, renderDemoPage, renderPage, renderUnmarkedPage, validateQuestions } from './documents.js';
 import { paymentReference, upiDetails, upiPaymentUri } from './manual-payments.js';
 import { sampleBookPdf, sampleCourses, sampleResources } from './sample-data.js';
 import { registerVideoRoutes } from './chapter-videos.js';
@@ -17,7 +17,8 @@ import { registerPublishedRoutes } from './published.js';
 import { courseCutoff, expiryInput, publishingMedia, requireActive } from './publishing-media.js';
 import { currentAffairs } from './current-affairs.js';
 import { registerWorkspaceRoutes } from './workspace-routes.js';
-import { folderView } from './workspace.js';
+import { folderView, idInput, validateFolderSnapshot } from './workspace.js';
+import { approvedCourseOrder } from './course-entitlements.js';
 
 initializeApp();
 
@@ -64,19 +65,6 @@ function examPreferences(value) {
   const selected = [...new Set(value.filter(item => typeof item === 'string' && examChoices.has(item)))];
   if (!selected.length || selected.length !== value.length) fail(422, 'Choose valid target exams.');
   return selected;
-}
-
-async function protectedPdf(source, pages, phone) {
-  const output = await PDFDocument.create();
-  for (let page = 1; page <= pages; page++) {
-    const image = await output.embedPng(await renderPage(source, page, phone));
-    const target = output.addPage([595, 842]);
-    const scale = Math.min(595 / image.width, 842 / image.height);
-    const width = image.width * scale;
-    const height = image.height * scale;
-    target.drawImage(image, { x: (595 - width) / 2, y: (842 - height) / 2, width, height });
-  }
-  return Buffer.from(await output.save());
 }
 
 async function questionPaperPdf(test, phone) {
@@ -274,7 +262,7 @@ async function course(id) {
 
 async function owned(uid, courseId) {
   const snapshot = await db.collection('orders').where('uid', '==', uid).where('course', '==', courseId).get();
-  return snapshot.docs.map(value).some(item => typeof item.payment === 'string' && item.payment.length > 0);
+  return snapshot.docs.map(value).some(approvedCourseOrder);
 }
 
 async function requirePurchase(user, courseId, allowAdmin = true) {
@@ -479,7 +467,7 @@ function createApp() {
   });
 
   const media = publishingMedia(api, { bucket, processDocument });
-  const affairs = currentAffairs(api, { db, bucket, value, text, processDocument, protectedPdf });
+  const affairs = currentAffairs(api, { db, bucket, value, text, processDocument });
   api.use(authLimit, login);
   affairs.routes();
   api.get('/me', async (req, res) => {
@@ -494,7 +482,7 @@ function createApp() {
       examPreference: student?.examPreference || '',
       examPreferences: student?.examPreferences || (student?.examPreference ?
         student.examPreference.split(',').map(item => item.trim()).filter(Boolean) : []),
-      purchases: orders.filter(order => typeof order.payment === 'string' && order.payment.length > 0).map(order => order.course),
+      purchases: orders.filter(approvedCourseOrder).map(order => order.course),
     });
   });
   api.put('/me', async (req, res) => {
@@ -651,7 +639,7 @@ function createApp() {
       const student = value(await db.collection('students').doc(message.uid).get());
       return { name: student?.name || 'Student', text: message.text };
     }));
-    res.json({ tests, books, videos, folders, messages: namedMessages.reverse() });
+    res.json({ downloadsEnabled: Boolean(selected.downloadsEnabled), tests, books, videos, folders, messages: namedMessages.reverse() });
   });
   api.post('/courses/:id/messages', async (req, res) => {
     const { id } = await course(req.params.id);
@@ -741,7 +729,7 @@ function createApp() {
       const { price } = currentCourse;
       const existing = value(snapshot);
       const referral = value(referralSnapshot);
-      if (existing && typeof existing.payment === 'string' && existing.payment.length > 0) {
+      if (approvedCourseOrder(existing)) {
         fail(409, 'You already own this course.');
       }
       if (existing?.paymentStatus === 'pending') {
@@ -756,7 +744,7 @@ function createApp() {
       if (creditsUsed) transaction.update(referralRef, { credits: Number(referral.credits) - creditsUsed });
       result = {
         id: orderId, amount: amountDue, creditsUsed,
-        status: amountDue === 0 ? 'approved' : 'pending',
+        status: 'pending',
         reference: reference || 'CREDITS', submittedAt,
       };
       transaction.set(orderRef, {
@@ -765,7 +753,7 @@ function createApp() {
         amount: amountDue,
         originalAmount: price,
         creditsUsed,
-        payment: amountDue === 0 ? `credits:${orderId}` : '',
+        payment: '',
         paymentStatus: result.status,
         transactionRef: result.reference,
         paymentNote: note,
@@ -840,12 +828,7 @@ function createApp() {
     const [pdf] = await bucket.file(`ebooks/${book.id}.pdf`).download();
     res.type('png').send(await processDocument(() => renderPage(pdf, page, req.user.phone)));
   });
-  api.get('/ebooks/:id/download', async (req, res) => {
-    const book = await ownedEbook(req, req.params.id);
-    const [source] = await bucket.file(`ebooks/${book.id}.pdf`).download();
-    const pdf = await protectedPdf(source, book.pages, req.user.phone);
-    res.attachment(`${book.title}-protected.pdf`).type('pdf').send(pdf);
-  });
+  api.get('/ebooks/:id/download', () => fail(403, 'Save this e-book inside the app instead.'));
 
   async function test(id) {
     const item = value(await db.collection('tests').doc(id).get());
@@ -1018,7 +1001,7 @@ function createApp() {
   });
   api.get('/courses/:id/receipt.pdf', async (req, res) => {
     const snapshots = (await db.collection('orders').where('uid','==',req.user.uid).where('course','==',req.params.id).get()).docs.map(value);
-    const order = snapshots.find(item => Boolean(item.payment));
+    const order = snapshots.find(approvedCourseOrder);
     if (!order) fail(404, 'Approved purchase receipt not found.');
     const [selectedCourse, student] = await Promise.all([course(req.params.id), db.collection('students').doc(req.user.uid).get()]);
     res.type('pdf').attachment(`${selectedCourse.title}-receipt.pdf`).send(
@@ -1026,7 +1009,7 @@ function createApp() {
   });
   api.get('/receipts', async (req, res) => {
     const orders = (await db.collection('orders').where('uid','==',req.user.uid).get()).docs.map(value)
-      .filter(order => Boolean(order.payment));
+      .filter(approvedCourseOrder);
     res.json(await Promise.all(orders.map(async order => {
       const selected = value(await db.collection('courses').doc(order.course).get());
       return {id: order.id, course: order.course, title: selected?.title || 'Course',
@@ -1125,8 +1108,7 @@ function createApp() {
         unread: order.paymentStatus === 'pending',
       };
     }));
-    const owned = new Set(orders.filter(order =>
-      typeof order.payment === 'string' && order.payment.length > 0).map(order => order.course));
+    const owned = new Set(orders.filter(approvedCourseOrder).map(order => order.course));
     const liveTests = (await db.collection('tests').where('live', '==', true).get()).docs.map(value)
       .filter(test => owned.has(test.course) && (!test.expiresAt || Date.parse(test.expiresAt) > Date.now()))
       .sort((a, b) => String(a.startsAt).localeCompare(String(b.startsAt))).slice(0, 20)
@@ -1149,6 +1131,7 @@ function createApp() {
     const book = value(await db.collection('books').doc(req.params.id).get());
     if (!book) fail(404, 'Book not found.');
     await requirePurchase(req.user, book.course);
+    const selectedCourse = await course(book.course);
     const page = Number(req.params.page);
     if (!Number.isSafeInteger(page) || page < 1 || page > book.pages) fail(404, 'Page not found.');
     let pdf;
@@ -1160,47 +1143,16 @@ function createApp() {
     }
     let png;
     try {
-      png = await processDocument(() => renderPage(pdf, page, req.user.phone));
+      png = await processDocument(() => selectedCourse.downloadsEnabled ?
+        renderUnmarkedPage(pdf, page) : renderPage(pdf, page, req.user.phone));
     } catch (error) {
       console.error('Book render failed', { book: book.id, page, message: error.message, stack: error.stack });
       throw error;
     }
     res.type('png').send(png);
   });
-  api.get('/books/:id/pages/:page/download', async (req, res) => {
-    const book = value(await db.collection('books').doc(req.params.id).get());
-    if (!book) fail(404, 'Book not found.');
-    await requirePurchase(req.user, book.course);
-    const selectedCourse = value(await db.collection('courses').doc(book.course).get());
-    if (!selectedCourse?.downloadsEnabled) fail(403, 'Downloads are disabled for this course.');
-    const page = Number(req.params.page);
-    if (!Number.isSafeInteger(page) || page < 1 || page > book.pages) fail(404, 'Page not found.');
-    let pdf;
-    try {
-      [pdf] = await bucket.file(`books/${book.id}.pdf`).download();
-    } catch (error) {
-      console.error('Book download storage fetch failed', { book: book.id, message: error.message, code: error.code });
-      throw error;
-    }
-    let png;
-    try {
-      png = await processDocument(() => renderPage(pdf, page, req.user.phone));
-    } catch (error) {
-      console.error('Book download render failed', { book: book.id, page, message: error.message, stack: error.stack });
-      throw error;
-    }
-    res.attachment(`${book.title}-page-${page}.png`).type('png').send(png);
-  });
-  api.get('/books/:id/download', async (req, res) => {
-    const book = value(await db.collection('books').doc(req.params.id).get());
-    if (!book) fail(404, 'Book not found.');
-    await requirePurchase(req.user, book.course);
-    const selectedCourse = value(await db.collection('courses').doc(book.course).get());
-    if (!selectedCourse?.downloadsEnabled) fail(403, 'Downloads are disabled for this course.');
-    const [source] = await bucket.file(`books/${book.id}.pdf`).download();
-    const pdf = await protectedPdf(source, book.pages, req.user.phone);
-    res.attachment(`${book.title}-protected.pdf`).type('pdf').send(pdf);
-  });
+  api.get('/books/:id/pages/:page/download', () => fail(403, 'Save this book inside the app instead.'));
+  api.get('/books/:id/download', () => fail(403, 'Save this book inside the app instead.'));
 
   api.use('/admin', admin);
   registerWorkspaceRoutes(api, { db, value, course });
@@ -1210,7 +1162,7 @@ function createApp() {
       queryCollection('ebookOrders'),
       queryCollection('attempts'), db.collection('tests').where('live', '==', true).get(),
     ]);
-    const approved = orders.filter(order => typeof order.payment === 'string' && order.payment.length > 0);
+    const approved = orders.filter(approvedCourseOrder);
     const since = Date.now() - 86_400_000;
     const liveRows = await Promise.all(liveTests.docs.map(value).map(async row => {
       const results = attempts.filter(attempt => attempt.test === row.id);
@@ -1527,6 +1479,7 @@ function createApp() {
   });
   api.post('/admin/courses/:id/tests', async (req, res) => {
     const { id: courseId } = await course(req.params.id);
+    const folderId = idInput(req.body?.folderId === undefined ? null : req.body.folderId);
     const {
       title, questions, live, startsAt, expiresAt, durationMinutes, attemptsLimit,
       marksPerQuestion, negativeMark, questionPaperDownload = false,
@@ -1561,7 +1514,7 @@ function createApp() {
     }
     const validQuestions = validateQuestions(questions);
     if (typeof questionPaperDownload !== 'boolean') fail(422, 'Choose a valid question paper download option.');
-    const id = await createWithId('tests', {
+    const test = {
       course: courseId,
       title: text(title, 'Title', 120),
       questions: validQuestions,
@@ -1574,6 +1527,19 @@ function createApp() {
       negativeMark: negative,
       questionPaperDownload,
       sections: [...new Set(validQuestions.map(question => question.section))],
+      folderId,
+    };
+    const id = randomUUID();
+    await db.runTransaction(async tx => {
+      const courseRef = db.collection('courses').doc(courseId);
+      const folderRef = folderId === null ? null : db.collection('courseFolders').doc(folderId);
+      const [currentCourse, folder] = await Promise.all([
+        tx.get(courseRef), folderRef ? tx.get(folderRef) : Promise.resolve(null),
+      ]);
+      if (!currentCourse.exists) fail(404, 'Course not found.');
+      validateFolderSnapshot(folder, courseId, folderId, 'tests', value);
+      tx.create(db.collection('tests').doc(id), { ...test, createdAt: new Date().toISOString() });
+      tx.update(courseRef, { workspaceVersion: (currentCourse.data().workspaceVersion || 0) + 1 });
     });
     res.status(201).json({ id });
   });
@@ -1584,15 +1550,29 @@ function createApp() {
     const { id: courseId } = await course(req.params.id);
     const id = randomUUID();
     const title = text(req.query.title, 'Title', 120);
+    const folderId = idInput(req.query.folderId === undefined ? null : req.query.folderId);
+    const folderRef = folderId === null ? null : db.collection('courseFolders').doc(folderId);
+    const validateDestination = snapshot => validateFolderSnapshot(snapshot, courseId, folderId, 'content', value);
+    if (folderRef) validateDestination(await folderRef.get());
     const images = await media.validate(typeof req.query.images === 'string' ? req.query.images.split(',') : []);
     if (!Buffer.isBuffer(req.body)) fail(400, 'Upload a PDF.');
     const pages = await processDocument(() => pageCount(req.body));
     const file = bucket.file(`books/${id}.pdf`);
     await file.save(req.body, { resumable: false, contentType: 'application/pdf', metadata: { cacheControl: 'private, no-store' } });
     try {
-      await db.collection('books').doc(id).create({
-        course: courseId, title, pages, images, subject: text(req.query.subject || 'General', 'Subject', 100),
+      const book = {
+        course: courseId, title, pages, images, folderId, subject: text(req.query.subject || 'General', 'Subject', 100),
         chapter: text(req.query.chapter || 'Chapter 1', 'Chapter', 120), createdAt: new Date().toISOString(),
+      };
+      await db.runTransaction(async tx => {
+        const courseRef = db.collection('courses').doc(courseId);
+        const [currentCourse, folder] = await Promise.all([
+          tx.get(courseRef), folderRef ? tx.get(folderRef) : Promise.resolve(null),
+        ]);
+        if (!currentCourse.exists) fail(404, 'Course not found.');
+        validateDestination(folder);
+        tx.create(db.collection('books').doc(id), book);
+        tx.update(courseRef, { workspaceVersion: (currentCourse.data().workspaceVersion || 0) + 1 });
       });
     } catch (error) {
       await file.delete({ ignoreNotFound: true });

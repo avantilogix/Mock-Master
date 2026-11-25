@@ -75,7 +75,7 @@ test('course workspaces enforce scope, hierarchy and item placement', async t =>
   assert.equal(detail.videos[0].folderId, a.id);
   assert.equal(detail.tests[0].folderId, testFolder.id);
   assert.equal((await request('/courses/one', 'GET', undefined, 'student')).status, 403);
-  db.prepare("INSERT INTO orders (id,uid,course,amount,payment) VALUES ('order','student','one',100,'paid')").run();
+  db.prepare("INSERT INTO orders (id,uid,course,amount,payment,payment_status) VALUES ('order','student','one',100,'paid','approved')").run();
   const studentDetail = await (await request('/courses/one', 'GET', undefined, 'student')).json();
   assert.deepEqual(studentDetail.folders, detail.folders);
   assert.equal(studentDetail.books[0].folderId, b.id);
@@ -96,20 +96,28 @@ test('legacy SQLite databases migrate and retain workspace data after reopening'
   t.after(() => { for (const suffix of ['', '-wal', '-shm']) rmSync(path + suffix, { force: true }); });
   const old = new DatabaseSync(path);
   old.exec(`
+    CREATE TABLE students (uid TEXT PRIMARY KEY, phone TEXT NOT NULL, name TEXT NOT NULL DEFAULT '') STRICT;
     CREATE TABLE courses (id TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT NOT NULL, price INTEGER NOT NULL) STRICT;
+    CREATE TABLE orders (id TEXT PRIMARY KEY, uid TEXT NOT NULL REFERENCES students, course TEXT NOT NULL REFERENCES courses,
+      amount INTEGER NOT NULL, payment TEXT UNIQUE, UNIQUE (uid, course)) STRICT;
     CREATE TABLE tests (id TEXT PRIMARY KEY, course TEXT NOT NULL REFERENCES courses, title TEXT NOT NULL, questions TEXT NOT NULL) STRICT;
     CREATE TABLE books (id TEXT PRIMARY KEY, course TEXT NOT NULL REFERENCES courses, title TEXT NOT NULL, pages INTEGER NOT NULL, pdf BLOB NOT NULL) STRICT;
     CREATE TABLE chapter_videos (id TEXT PRIMARY KEY, course TEXT NOT NULL REFERENCES courses, title TEXT NOT NULL, subject TEXT NOT NULL, chapter TEXT NOT NULL, type TEXT NOT NULL, size INTEGER NOT NULL, created_at TEXT NOT NULL) STRICT;
     INSERT INTO courses VALUES ('c','Course','Description',100);
+    INSERT INTO students VALUES ('s','+919000000001','');
+    INSERT INTO orders VALUES ('o','s','c',100,'legacy-paid');
     INSERT INTO tests VALUES ('t','c','Test','[]');
   `);
   old.close();
   let db = openDatabase(path);
+  assert.equal(db.prepare("SELECT payment_status FROM orders WHERE id='o'").get().payment_status, 'approved');
+  db.prepare("UPDATE orders SET payment_status='rejected' WHERE id='o'").run();
   assert.equal(db.prepare("SELECT folder_id FROM tests WHERE id='t'").get().folder_id, null);
   db.prepare("INSERT INTO course_folders VALUES ('f','c','tests','Folder',NULL)").run();
   db.prepare("UPDATE tests SET folder_id='f' WHERE id='t'").run();
   db.close();
   db = openDatabase(path);
+  assert.equal(db.prepare("SELECT payment_status FROM orders WHERE id='o'").get().payment_status, 'rejected');
   assert.equal(db.prepare("SELECT folder_id FROM tests WHERE id='t'").get().folder_id, 'f');
   assert.equal(db.prepare("SELECT name FROM course_folders WHERE id='f'").get().name, 'Folder');
   db.close();
