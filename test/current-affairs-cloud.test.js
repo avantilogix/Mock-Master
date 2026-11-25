@@ -19,6 +19,7 @@ test('cloud Current Affairs signs private uploads and publishes only matching co
     runTransaction: async action => action({
       get: item => item.get(),
       create: (item, data) => documents.set(item.path, data),
+      update: (item, patch) => documents.set(item.path, {...documents.get(item.path), ...patch}),
       delete: item => documents.delete(item.path),
     }),
   };
@@ -70,6 +71,44 @@ test('cloud Current Affairs signs private uploads and publishes only matching co
   await assert.rejects(service.publish(req), {status: 404});
   const read = {params: {id}, query: {}, user: {uid: 'student'}};
   await assert.rejects(handlers.get('GET /resources/:id/pdf/download')(read, response()), {status: 403});
+  const pyqDraft = response();
+  await handlers.get('POST /admin/current-affairs/uploads')({
+    user: {uid: 'admin'}, body: {pdf: {size: bytes.length, type: 'application/pdf'}},
+  }, pyqDraft);
+  const pyqId = pyqDraft.body.id;
+  objects.set(`current-affairs/${pyqId}/pdf`, {bytes, metadata: {size: String(bytes.length),
+    contentType: 'application/pdf', generation: '124', metadata: {'upload-id': pyqId}}});
+  const pyqRequest = {user: {uid: 'admin'}, body: {uploadId: pyqId, title: 'PYQs',
+    summary: 'Past questions', body: 'Practice paper', publishedAt: '2026-03-02', downloadsEnabled: true}};
+  assert.equal(await service.publish(pyqRequest, 'pyqs'), pyqId);
+  const pyqRead = response();
+  await handlers.get('GET /resources/:id')({params: {id: pyqId}}, pyqRead);
+  assert.equal(pyqRead.body.kind, 'pyqs');
+  assert.equal(pyqRead.body.summary, 'Past questions');
+  assert.equal(pyqRead.body.media.pdf.pages, 1);
+  assert.equal(pyqRead.body.downloadsEnabled, true);
+  const pyqEdit = {user: {uid: 'admin'}, body: {
+    title: 'Updated PYQs', publishedAt: '2026-03-02', downloadsEnabled: false,
+  }};
+  assert.deepEqual(await service.edit(pyqId, pyqEdit), {id: pyqId});
+  const updatedPyq = documents.get(`resources/${pyqId}`);
+  assert.equal(updatedPyq.title, 'Updated PYQs');
+  assert.equal(updatedPyq.summary, 'Past questions');
+  assert.equal(updatedPyq.body, 'Practice paper');
+  assert.equal(updatedPyq.media.pdf.generation, '124');
+  assert.equal(updatedPyq.downloadsEnabled, false);
+  const syllabusDraft = response();
+  await handlers.get('POST /admin/current-affairs/uploads')({
+    user: {uid: 'admin'}, body: {pdf: {size: bytes.length, type: 'application/pdf'}},
+  }, syllabusDraft);
+  const syllabusId = syllabusDraft.body.id;
+  objects.set(`current-affairs/${syllabusId}/pdf`, {bytes, metadata: {size: String(bytes.length),
+    contentType: 'application/pdf', generation: '125', metadata: {'upload-id': syllabusId}}});
+  assert.equal(await service.publish({user: {uid: 'admin'}, body: {
+    uploadId: syllabusId, title: 'Syllabus', publishedAt: '2026-03-03', downloadsEnabled: false,
+  }}, 'syllabus'), syllabusId);
+  assert.equal(documents.get(`resources/${syllabusId}`).summary, '');
+  assert.equal(documents.get(`resources/${syllabusId}`).body, '');
   const item = documents.get(`resources/${id}`);
   item.media.video = {type: 'video/mp4', size: 12, generation: '456'};
   await assert.rejects(handlers.get('GET /resources/:id/video/link')({...read, query: {download: '1'}}, response()), {status: 403});
@@ -80,6 +119,8 @@ test('cloud Current Affairs signs private uploads and publishes only matching co
   await assert.rejects(handlers.get('GET /resources/:id/video/link')({...read, query: {download: '1'}}, response()), {status: 403});
   await assert.rejects(handlers.get('GET /resources/:id/pdf/download')(read, response()), {status: 403});
   await service.remove(id);
+  await service.remove(pyqId);
+  await service.remove(syllabusId);
   assert.equal(objects.size, 0);
 });
 

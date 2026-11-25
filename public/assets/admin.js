@@ -1,9 +1,10 @@
 import {api} from './services.js';
-import {publishedManager, weekdays} from './admin-manage.js?v=course-folders';
-import {adminContentForm} from './reports.js?v=current-affairs-media';
+import {publishedManager, weekdays} from './admin-manage.js?v=public-learning-resources-v3';
+import {adminContentForm} from './reports.js?v=public-learning-resources-v3';
 import {coverPicker} from './publishing-media.js';
 import {manualQuestions} from './manual-questions.js';
 import {subjectQuestionManager} from './question-sections.js?v=sectionwise-v2';
+import {questionData} from './question-data.js';
 import {maxVideoBytes, uploadChapterVideo, videoAccept, videoType} from './chapter-upload.js';
 import {bindForm, button, el, entries, field, fieldError, formatDate, heading, icon, idPart, link, loadInto, panel, rule, run, say, status, textValue} from './ui.js';
 
@@ -36,28 +37,6 @@ const rupeeInput = () => {
   return control;
 };
 const toPaise = control => Math.round(control.valueAsNumber * 100);
-
-function questionData(source) {
-  let data;
-  try { data = JSON.parse(source); } catch { throw new Error('Questions must be valid JSON. Check commas, quotes, and brackets.'); }
-  if (!Array.isArray(data) || !data.length) throw new Error('Add at least one question in a JSON array.');
-  return data.map((item, index) => {
-    const {prompt, options, answer, section, questionNumber} = item || {};
-    if (questionNumber !== undefined &&
-        !(typeof questionNumber === 'string' && /^\d{1,10}$/.test(questionNumber) && Number(questionNumber) > 0) &&
-        !(Number.isSafeInteger(questionNumber) && questionNumber > 0)) {
-      throw new Error(`Question ${index + 1} needs a positive source question number.`);
-    }
-    if (typeof prompt !== 'string' || !prompt.trim() || !Array.isArray(options) || options.length < 2 ||
-        options.some(value => typeof value !== 'string' || !value.trim()) ||
-        !Number.isInteger(answer) || answer < 0 || answer >= options.length) {
-      throw new Error(`Question ${index + 1} needs a prompt, at least two options, and a valid zero-based answer.`);
-    }
-    return {prompt: prompt.trim(), options: options.map(value => value.trim()), answer,
-      ...(questionNumber === undefined ? {} : {questionNumber: String(questionNumber)}),
-      section: typeof section === 'string' && section.trim() ? section.trim() : 'General'};
-  });
-}
 
 export function showAdmin(main, ctx, folderTarget = null) {
   main.append(...heading('Admin Workspace', 'Approve course payments, publish learning material, and support students from your phone.'));
@@ -862,7 +841,7 @@ export function showAdmin(main, ctx, folderTarget = null) {
       open: () => openList({label: 'Study Materials', managerType: 'books', list: manager.node, add: findPanel('Upload a Study Book or Video'), addLabel: 'Add Study Material'})},
     {label: 'YouTube Videos', description: 'Published learning video library', icon: '▶',
       open: () => openList({label: 'YouTube Videos', managerType: 'videos', list: manager.node, add: findPanel('YouTube Videos'), addLabel: 'Add YouTube Video'})},
-    {label: 'Learning Resources', description: 'Current affairs, PYQs, syllabus, and free tests', icon: '☷',
+    {label: 'Learning Resources', description: 'Current affairs, PYQs, and syllabus', icon: '☷',
       open: () => openList({label: 'Learning Resources', managerType: 'resources', list: manager.node, add: findPanel('Publish Learning Resources'), addLabel: 'Add Resource'})},
     {label: 'Course Payments', description: 'Approve or reject course payment requests', icon: '₹',
       open: () => openList({label: 'Course Payments', list: findPanel('Payment Approvals')})},

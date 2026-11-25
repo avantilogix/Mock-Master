@@ -3,7 +3,7 @@ import {button, el, field, rule} from './ui.js';
 
 const imageUrl = id => `/api/publishing-images/${encodeURIComponent(id)}`;
 
-export function coverPicker(ctx, {existing = [], required = true} = {}) {
+export function coverPicker(ctx, {existing = [], required = false} = {}) {
   const file = rule(el('input', {type: 'file', multiple: '', accept: '.jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp',
     required: required ? '' : null}), (_, control) => {
     const files = [...control.files];

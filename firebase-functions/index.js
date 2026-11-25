@@ -241,6 +241,8 @@ function byNewest(a, b) {
   return String(b.createdAt || b.submittedAt || '').localeCompare(String(a.createdAt || a.submittedAt || ''));
 }
 
+const CURRENT_AFFAIRS_COURSE_ID = 'public-current-affairs';
+
 function publicCourse(item) {
   return {
     id: item.id,
@@ -260,6 +262,12 @@ async function course(id) {
   return item;
 }
 
+async function courseForSale(id) {
+  const item = await course(id);
+  if (item.publicLearning) fail(404, 'Course not found.');
+  return item;
+}
+
 async function owned(uid, courseId) {
   const snapshot = await db.collection('orders').where('uid', '==', uid).where('course', '==', courseId).get();
   return snapshot.docs.map(value).some(approvedCourseOrder);
@@ -267,6 +275,7 @@ async function owned(uid, courseId) {
 
 async function requirePurchase(user, courseId, allowAdmin = true) {
   const item = await course(courseId);
+  if (item.publicLearning) fail(404, 'Course not found.');
   if (allowAdmin && user.admin) return null;
   const cutoff = requireActive(item);
   if (!await owned(user.uid, courseId)) fail(403, 'Purchase this course to unlock it.');
@@ -389,7 +398,7 @@ function createApp() {
     res.json(Object.fromEntries(['youtube', 'instagram', 'telegram'].map(key => [key, social?.[key] || ''])));
   });
   api.get('/courses', async (_req, res) => {
-    res.json((await queryCollection('courses')).sort(byNewest).map(publicCourse));
+    res.json((await queryCollection('courses')).filter(item => !item.publicLearning).sort(byNewest).map(publicCourse));
   });
   api.get('/ebooks', async (_req, res) => {
     res.json((await queryCollection('ebooks')).sort(byNewest).map(book =>
@@ -410,7 +419,7 @@ function createApp() {
     res.type('png').send(await processDocument(() => renderDemoPage(pdf, page)));
   });
   api.get('/courses/:id/payment-qr', async (req, res) => {
-    const row = await course(req.params.id);
+    const row = await courseForSale(req.params.id);
     requireActive(row);
     const payment = await paymentDetails();
     const setting = value(await db.collection('settings').doc('payment').get());
@@ -682,7 +691,7 @@ function createApp() {
     res.sendStatus(204);
   });
   api.get('/courses/:id/payment', async (req, res) => {
-    const selected = await course(req.params.id);
+    const selected = await courseForSale(req.params.id);
     requireActive(selected);
     const { id, price } = selected;
     const snapshot = await db.collection('orders').where('uid', '==', req.user.uid).where('course', '==', id).limit(1).get();
@@ -705,7 +714,7 @@ function createApp() {
     });
   });
   api.post('/courses/:id/payment', paymentLimit, async (req, res) => {
-    const selected = await course(req.params.id);
+    const selected = await courseForSale(req.params.id);
     requireActive(selected);
     const { id } = selected;
     const { uid } = req.user;
@@ -835,9 +844,17 @@ function createApp() {
     if (!item) fail(404, 'Test not found.');
     return item;
   }
+  async function requireTestAccess(user, item) {
+    if (item.resourceId) {
+      const resource = value(await db.collection('resources').doc(item.resourceId).get());
+      if (!resource || resource.kind !== 'current-affairs') fail(404, 'Current Affairs resource not found.');
+      return;
+    }
+    await requirePurchase(user, item.course);
+  }
   api.get('/tests/:id', async (req, res) => {
     const item = await test(req.params.id);
-    await requirePurchase(req.user, item.course);
+    await requireTestAccess(req.user, item);
     const attempts = (await db.collection('attempts').where('uid', '==', req.user.uid)
       .where('test', '==', item.id).get()).size;
     const now = Date.now();
@@ -857,6 +874,7 @@ function createApp() {
       live: Boolean(item.live),
       startsAt: item.startsAt || '',
       expiresAt: item.expiresAt || '',
+      resourceId: item.resourceId || null,
       durationMinutes: item.durationMinutes || 90,
       attempts,
       attemptsLimit: item.live ? attemptsLimit : 0,
@@ -873,7 +891,7 @@ function createApp() {
   });
   api.post('/tests/:id/start', async (req, res) => {
     const item = await test(req.params.id);
-    await requirePurchase(req.user, item.course);
+    await requireTestAccess(req.user, item);
     const attempts = (await db.collection('attempts').where('uid', '==', req.user.uid)
       .where('test', '==', item.id).get()).size;
     const nowMs = Date.now();
@@ -914,7 +932,7 @@ function createApp() {
   });
   api.post('/tests/:id/submit', async (req, res) => {
     const item = await test(req.params.id);
-    await requirePurchase(req.user, item.course);
+    await requireTestAccess(req.user, item);
     const { answers } = req.body ?? {};
     const questions = item.questions;
     if (!Array.isArray(answers) || answers.length !== questions.length ||
@@ -988,6 +1006,8 @@ function createApp() {
     const [selectedTest, selectedCourse, student] = await Promise.all([
       test(attempt.test), course(attempt.course), db.collection('students').doc(req.user.uid).get(),
     ]);
+    const linkedResource = selectedTest.resourceId ?
+      value(await db.collection('resources').doc(selectedTest.resourceId).get()) : null;
     const questions = selectedTest.questions;
     attempt.correct = questions.filter((question,index) => attempt.answers[index] === question.answer).length;
     attempt.wrong = questions.filter((question,index) => attempt.answers[index] !== null && attempt.answers[index] !== question.answer).length;
@@ -997,7 +1017,9 @@ function createApp() {
       .map(item => [item.uid,item])).values()].sort((a,b)=>b.score-a.score || a.elapsedSeconds-b.elapsedSeconds);
     const rank = best.findIndex(item => item.uid === req.user.uid) + 1;
     res.type('pdf').attachment(`${selectedTest.title}-result.pdf`).send(
-      await buildResultPdf({student:value(student) || {phone:req.user.phone}, attempt, course:selectedCourse, test:selectedTest, rank}));
+      await buildResultPdf({student:value(student) || {phone:req.user.phone}, attempt,
+        course: linkedResource ? {...selectedCourse, title: linkedResource.title} : selectedCourse,
+        test:selectedTest, rank}));
   });
   api.get('/courses/:id/receipt.pdf', async (req, res) => {
     const snapshots = (await db.collection('orders').where('uid','==',req.user.uid).where('course','==',req.params.id).get()).docs.map(value);
@@ -1020,7 +1042,7 @@ function createApp() {
   });
   api.get('/tests/:id/question-paper.pdf', async (req, res) => {
     const item = await test(req.params.id);
-    await requirePurchase(req.user, item.course);
+    await requireTestAccess(req.user, item);
     if (!item.questionPaperDownload) fail(403, 'Question paper download is disabled by the admin.');
     const attempt = await db.collection('attempts').where('uid', '==', req.user.uid)
       .where('test', '==', item.id).limit(1).get();
@@ -1030,7 +1052,7 @@ function createApp() {
   });
   api.get('/tests/:id/leaderboard', async (req, res) => {
     const item = await test(req.params.id);
-    await requirePurchase(req.user, item.course);
+    await requireTestAccess(req.user, item);
     if (!item.live) fail(404, 'Leaderboard is available for live tests only.');
     const expires = Date.parse(item.expiresAt);
     if (!Number.isFinite(expires) || Date.now() < expires) {
@@ -1058,17 +1080,20 @@ function createApp() {
         attempts: snapshots.filter(attempt => attempt.uid === entry.uid).length,
         isCurrentUser: entry.uid === req.user.uid});
     }
-    res.json({title: item.title, expiresAt: item.expiresAt, participants: rows.length,
+    res.json({title: item.title, expiresAt: item.expiresAt, resourceId: item.resourceId || null, participants: rows.length,
       rows, mine: rows.find(row => row.isCurrentUser) || null});
   });
   api.get('/progress', async (req, res) => {
     const attempts = (await db.collection('attempts').where('uid', '==', req.user.uid).get()).docs
       .map(value).sort(byNewest).slice(0, 100);
+    const linkedTests = new Map((await queryCollection('tests')).filter(item => item.resourceId)
+      .map(item => [item.id, item.resourceId]));
     const total = attempts.reduce((sum, item) => sum + item.total, 0);
     const correct = attempts.reduce((sum, item) => sum + item.score, 0);
     const output = await Promise.all(attempts.map(async attempt => ({
       ...attempt,
-      courseTitle: value(await db.collection('courses').doc(attempt.course).get())?.title || 'Mission',
+      courseTitle: linkedTests.has(attempt.test) ? 'Current Affairs' :
+        value(await db.collection('courses').doc(attempt.course).get())?.title || 'Mission',
     })));
     const courses = Object.values(output.reduce((groups, item) => {
       const entry = groups[item.course] ||= { course: item.course, title: item.courseTitle, attempts: 0, correct: 0, total: 0, best: 0 };
@@ -1123,9 +1148,18 @@ function createApp() {
     res.json([...liveTests, ...paymentNotices].sort((a, b) => String(b.date).localeCompare(String(a.date))));
   });
   api.get('/content/:kind', async (req, res) => {
-    if (!['current-affairs', 'pyqs', 'syllabus', 'free-tests'].includes(req.params.kind)) fail(404, 'Content not found.');
-    res.json((await db.collection('resources').where('kind', '==', req.params.kind).get()).docs
-      .map(value).sort((a, b) => String(b.publishedAt || b.createdAt).localeCompare(String(a.publishedAt || a.createdAt))));
+    if (!['current-affairs', 'pyqs', 'syllabus'].includes(req.params.kind)) fail(404, 'Content not found.');
+    const resources = (await db.collection('resources').where('kind', '==', req.params.kind).get()).docs.map(value);
+    const linkedTests = req.params.kind === 'current-affairs' ?
+      (await queryCollection('tests')).filter(item => item.resourceId) : [];
+    const testsByResource = new Map(linkedTests.map(item => [item.resourceId, {
+      id: item.id, title: item.title, live: Boolean(item.live),
+      startsAt: item.startsAt || '', expiresAt: item.expiresAt || '',
+    }]));
+    res.json(resources.map(item => ({
+      ...item,
+      ...(testsByResource.has(item.id) ? {test: testsByResource.get(item.id)} : {}),
+    })).sort((a, b) => String(b.publishedAt || b.createdAt).localeCompare(String(a.publishedAt || a.createdAt))));
   });
   api.get('/books/:id/pages/:page', async (req, res) => {
     const book = value(await db.collection('books').doc(req.params.id).get());
@@ -1172,7 +1206,7 @@ function createApp() {
         students: new Set(results.map(result => result.uid)).size, attempts: results.length, average};
     }));
     res.json({
-      students: students.length, courses: courses.length,
+      students: students.length, courses: courses.filter(item => !item.publicLearning).length,
       purchases: approved.length + ebookOrders.filter(order => Boolean(order.payment)).length,
       revenue: approved.reduce((sum, order) => sum + Number(order.amount || 0), 0) +
         ebookOrders.filter(order => Boolean(order.payment)).reduce((sum, order) => sum + Number(order.amount || 0), 0),
@@ -1420,20 +1454,97 @@ function createApp() {
     });
     res.sendStatus(204);
   });
-  api.post('/admin/content/:kind', async (req, res) => {
-    if (req.params.kind === 'current-affairs' && req.body?.uploadId !== undefined) {
-      return res.status(201).json({ id: await affairs.publish(req) });
+  function testValues(body, courseId, folderId) {
+    const {
+      title, questions, live, startsAt, expiresAt, durationMinutes, attemptsLimit,
+      marksPerQuestion, negativeMark, questionPaperDownload = false,
+    } = body ?? {};
+    const duration = durationMinutes === undefined ? 90 : durationMinutes;
+    if (!Number.isInteger(duration) || duration < 10 || duration > 300) {
+      fail(422, 'A test needs a duration from 10–300 minutes.');
     }
+    const scheduled = live ? istIso(startsAt, 'Live start time') : '';
+    let expiration = '';
+    if (expiresAt !== undefined && expiresAt !== '') expiration = istIso(expiresAt, 'Live expiry time');
+    if (live && (!expiration || Date.parse(expiration) <= Date.parse(scheduled))) {
+      fail(422, 'A live test expiry must be after its start time.');
+    }
+    const allowedAttempts = live ? (attemptsLimit === undefined ? 2 : attemptsLimit) : 0;
+    const marks = marksPerQuestion === undefined ? 1 : marksPerQuestion;
+    const negative = negativeMark === undefined ? 0 : negativeMark;
+    if (live && (!Number.isInteger(allowedAttempts) || allowedAttempts < 1 || allowedAttempts > 100)) {
+      fail(422, 'Attempt limit must be a whole number from 1–100.');
+    }
+    if (typeof marks !== 'number' || !Number.isFinite(marks) || marks <= 0 || marks > 100) {
+      fail(422, 'Marks per question must be greater than zero and at most 100.');
+    }
+    if (typeof negative !== 'number' || !Number.isFinite(negative) || negative < 0 || negative > 100) {
+      fail(422, 'Negative mark must be from 0–100.');
+    }
+    const validQuestions = validateQuestions(questions);
+    if (typeof questionPaperDownload !== 'boolean') fail(422, 'Choose a valid question paper download option.');
+    return {
+      course: courseId,
+      title: text(title, 'Title', 120),
+      questions: validQuestions,
+      live: Boolean(live),
+      startsAt: scheduled,
+      expiresAt: expiration,
+      durationMinutes: duration,
+      attemptsLimit: allowedAttempts,
+      marksPerQuestion: marks,
+      negativeMark: negative,
+      questionPaperDownload,
+      sections: [...new Set(validQuestions.map(question => question.section))],
+      folderId,
+    };
+  }
+  api.post('/admin/content/:kind', async (req, res) => {
     const kind = req.params.kind;
-    if (!['current-affairs', 'pyqs', 'syllabus', 'free-tests'].includes(kind)) fail(422, 'Choose a valid content section.');
+    if (!['current-affairs', 'pyqs', 'syllabus'].includes(kind)) fail(422, 'Choose a valid content section.');
+    if (req.body?.contentType === 'test') {
+      if (kind !== 'current-affairs') fail(422, 'Tests can only be published in Current Affairs.');
+      const testRecord = testValues(req.body, CURRENT_AFFAIRS_COURSE_ID, null);
+      const publishedAt = req.body?.publishedAt;
+      if (typeof publishedAt !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(publishedAt) ||
+          Number.isNaN(Date.parse(publishedAt))) fail(422, 'Enter a valid publish date.');
+      const resourceId = randomUUID();
+      const testId = randomUUID();
+      const createdAt = new Date().toISOString();
+      await db.runTransaction(async tx => {
+        const courseRef = db.collection('courses').doc(CURRENT_AFFAIRS_COURSE_ID);
+        const currentCourse = await tx.get(courseRef);
+        if (currentCourse.exists && !currentCourse.data().publicLearning) {
+          fail(409, 'The reserved Current Affairs test course is unavailable.');
+        }
+        if (!currentCourse.exists) {
+          tx.create(courseRef, {
+            title: 'Current Affairs', description: '', price: 0, publicLearning: true, createdAt,
+          });
+        }
+        tx.create(db.collection('resources').doc(resourceId), {
+          kind: 'current-affairs', title: testRecord.title, summary: '', body: '',
+          publishedAt, downloadsEnabled: false, media: {}, createdAt,
+        });
+        tx.create(db.collection('tests').doc(testId), {
+          ...testRecord, resourceId, createdAt,
+        });
+      });
+      return res.status(201).json({id: resourceId, testId});
+    }
+    if (req.body?.uploadId !== undefined) {
+      return res.status(201).json({ id: await affairs.publish(req, kind) });
+    }
     const publishedAt = typeof req.body?.publishedAt === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(req.body.publishedAt)
       ? req.body.publishedAt : new Date().toISOString().slice(0, 10);
     const id = await createWithId('resources', {
       kind,
       title: text(req.body?.title, 'Title', 120),
-      summary: text(req.body?.summary, 'Summary', 300),
-      body: text(req.body?.body, 'Content', 10_000),
+      summary: req.body?.summary === undefined ? '' : text(req.body.summary, 'Summary', 300),
+      body: req.body?.body === undefined ? '' : text(req.body.body, 'Content', 10_000),
       publishedAt,
+      downloadsEnabled: false,
+      media: {},
     });
     res.status(201).json({ id });
   });
@@ -1485,55 +1596,7 @@ function createApp() {
   api.post('/admin/courses/:id/tests', async (req, res) => {
     const { id: courseId } = await course(req.params.id);
     const folderId = idInput(req.body?.folderId === undefined ? null : req.body.folderId);
-    const {
-      title, questions, live, startsAt, expiresAt, durationMinutes, attemptsLimit,
-      marksPerQuestion, negativeMark, questionPaperDownload = false,
-    } = req.body ?? {};
-    let scheduled = '';
-    let expiration = '';
-    let duration = 0;
-    duration = durationMinutes === undefined ? 90 : durationMinutes;
-    if (!Number.isInteger(duration) || duration < 10 || duration > 300) {
-      fail(422, 'A test needs a duration from 10–300 minutes.');
-    }
-    if (live) {
-      scheduled = istIso(startsAt, 'Live start time');
-    }
-    if (expiresAt !== undefined && expiresAt !== '') {
-      expiration = istIso(expiresAt, 'Live expiry time');
-    }
-    if (live && (!expiration || Date.parse(expiration) <= Date.parse(scheduled))) {
-      fail(422, 'A live test expiry must be after its start time.');
-    }
-    const attempts = live ? (attemptsLimit === undefined ? 2 : attemptsLimit) : 0;
-    const marks = marksPerQuestion === undefined ? 1 : marksPerQuestion;
-    const negative = negativeMark === undefined ? 0 : negativeMark;
-    if (live && (!Number.isInteger(attempts) || attempts < 1 || attempts > 100)) {
-      fail(422, 'Attempt limit must be a whole number from 1–100.');
-    }
-    if (typeof marks !== 'number' || !Number.isFinite(marks) || marks <= 0 || marks > 100) {
-      fail(422, 'Marks per question must be greater than zero and at most 100.');
-    }
-    if (typeof negative !== 'number' || !Number.isFinite(negative) || negative < 0 || negative > 100) {
-      fail(422, 'Negative mark must be from 0–100.');
-    }
-    const validQuestions = validateQuestions(questions);
-    if (typeof questionPaperDownload !== 'boolean') fail(422, 'Choose a valid question paper download option.');
-    const test = {
-      course: courseId,
-      title: text(title, 'Title', 120),
-      questions: validQuestions,
-      live: Boolean(live),
-      startsAt: scheduled,
-      expiresAt: expiration,
-      durationMinutes: duration,
-      attemptsLimit: attempts,
-      marksPerQuestion: marks,
-      negativeMark: negative,
-      questionPaperDownload,
-      sections: [...new Set(validQuestions.map(question => question.section))],
-      folderId,
-    };
+    const testRecord = testValues(req.body ?? {}, courseId, folderId);
     const id = randomUUID();
     await db.runTransaction(async tx => {
       const courseRef = db.collection('courses').doc(courseId);
@@ -1543,7 +1606,7 @@ function createApp() {
       ]);
       if (!currentCourse.exists) fail(404, 'Course not found.');
       validateFolderSnapshot(folder, courseId, folderId, 'tests', value);
-      tx.create(db.collection('tests').doc(id), { ...test, createdAt: new Date().toISOString() });
+      tx.create(db.collection('tests').doc(id), { ...testRecord, createdAt: new Date().toISOString() });
       tx.update(courseRef, { workspaceVersion: (currentCourse.data().workspaceVersion || 0) + 1 });
     });
     res.status(201).json({ id });

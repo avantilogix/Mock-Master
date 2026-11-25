@@ -1,11 +1,13 @@
 import {api} from './services.js';
 import {pdfReader} from './ebooks.js?v=continuous-reader-v2';
 import {saveControl} from './saved-content.js';
-import {bindForm, button, el, entries, field, heading, icon, idPart, link, loadInto, panel, run, say, status, textValue} from './ui.js';
+import {manualQuestions} from './manual-questions.js';
+import {subjectQuestionManager} from './question-sections.js?v=sectionwise-v2';
+import {questionData} from './question-data.js';
+import {bindForm, button, el, entries, field, heading, icon, idPart, link, loadInto, panel, rule, run, say, status, textValue} from './ui.js';
 
 export const contentKinds = {
-  'free-tests': {title: 'Free Tests', icon: '✓', description: 'Try selected practice resources without purchasing a mission.'},
-  'current-affairs': {title: 'Current Affairs', icon: '◫', description: 'Read PDFs and watch video updates, organized by publication date.'},
+  'current-affairs': {title: 'Current Affairs', icon: '◫', description: 'Explore PDF, video, and test updates by year, month, and date.'},
   'pyqs': {title: 'Previous Year Questions', icon: '?', description: 'Revise important question patterns from earlier examinations.'},
   'syllabus': {title: 'Syllabus', icon: '☷', description: 'Organize preparation with published topic and syllabus resources.'},
 };
@@ -141,41 +143,86 @@ export function showLearningContent(main, ctx, kind, action) {
   loadInto(content, ctx, async () => {
     const rows = await api(`/content/${kind}`, {ctx, auth: true});
     if (kind === 'current-affairs') {
-      const years = new Map();
+      const archive = new Map();
       for (const item of rows) {
         const date = item.publishedAt || item.createdAt?.slice(0, 10) || new Date().toISOString().slice(0, 10);
         const [year, month] = date.split('-');
-        if (!years.has(year)) years.set(year, new Map());
-        if (!years.get(year).has(month)) years.get(year).set(month, []);
-        years.get(year).get(month).push(item);
+        if (!archive.has(year)) archive.set(year, new Map());
+        if (!archive.get(year).has(month)) archive.get(year).set(month, new Map());
+        if (!archive.get(year).get(month).has(date)) archive.get(year).get(month).set(date, []);
+        archive.get(year).get(month).get(date).push(item);
       }
       const monthName = value => new Intl.DateTimeFormat('en-IN', {month: 'long'}).format(new Date(2026, Number(value) - 1, 1));
-      content.replaceChildren(...(years.size ? [...years].map(([year, months]) =>
-        el('section', {class: 'affairs-year'},
-          el('div', {class: 'affairs-year-head'}, el('h2', {}, year), el('span', {}, `${[...months.values()].flat().length} updates`)),
-          ...[...months].sort(([a], [b]) => Number(a) - Number(b)).map(([month, items]) => el('details', {class: 'affairs-month', open: ''},
-            el('summary', {}, el('span', {}, monthName(month)), el('small', {}, `${items.length} ${items.length === 1 ? 'item' : 'items'}`)),
-            ...items.map(item => el('article', {class: 'resource-card'},
-              el('h3', {}, item.title),
-              el('small', {class: 'muted'}, new Date(`${(item.publishedAt || item.createdAt.slice(0, 10))}T12:00:00`).toLocaleDateString('en-IN',
-                {day: 'numeric', month: 'long', year: 'numeric'})),
-              item.media?.pdf || item.media?.video ? el('div', {class: 'affairs-media-card'},
-                el('div', {class: 'actions'}, item.media.pdf ? el('span', {class: 'badge'}, `${item.media.pdf.pages} PDF ${item.media.pdf.pages === 1 ? 'page' : 'pages'}`) : null,
-                  item.media.video ? el('span', {class: 'badge'}, 'Video') : null,
-                  el('small', {class: 'muted'}, item.downloadsEnabled ? 'Downloads allowed' : 'View in app')),
-                link(item.media.pdf && item.media.video ? 'View PDF & Video' : item.media.pdf ? 'View PDF' : 'Watch Video',
-                  `#resource/${idPart(item.id)}`, 'button secondary')) :
-                el('div', {}, el('p', {class: 'muted'}, item.summary),
-                  el('details', {}, el('summary', {}, 'Read Update'), el('div', {class: 'resource-body'}, item.body))))))))) :
-        [el('div', {class: 'empty-library'}, el('h2', {}, 'No Current Affairs Published Yet'),
-          el('p', {class: 'muted'}, 'Admin can add dated updates from the Admin workspace.'))]));
+      const sorted = map => [...map].sort(([a], [b]) => b.localeCompare(a));
+      const resourceCard = item => {
+        const badges = [];
+        if (item.media?.pdf) badges.push(el('span', {class: 'badge'}, `${item.media.pdf.pages} PDF ${item.media.pdf.pages === 1 ? 'page' : 'pages'}`));
+        if (item.media?.video) badges.push(el('span', {class: 'badge'}, 'Video'));
+        if (item.test) badges.push(el('span', {class: 'badge'}, item.test.live ? 'Live Test' : 'Mock Test'));
+        return el('article', {class: 'resource-card affairs-resource-card'},
+          el('div', {class: 'affairs-resource-heading'}, el('h3', {}, item.title),
+            badges.length ? el('div', {class: 'actions'}, ...badges) : null),
+          item.summary ? el('p', {class: 'muted'}, item.summary) : null,
+          item.media?.pdf || item.media?.video ? el('div', {class: 'affairs-media-card'},
+            el('small', {class: 'muted'}, item.downloadsEnabled ? 'Downloads allowed' : 'View in app'),
+            link(item.media.pdf && item.media.video ? 'View PDF & Video' : item.media.pdf ? 'View PDF' : 'Watch Video',
+              `#resource/${idPart(item.id)}`, 'button secondary')) : null,
+          item.test ? link(item.test.live ? 'Take Live Test' : 'Take Mock Test',
+            `#test/current-affairs/${idPart(item.test.id)}`, 'button') : null,
+          item.body ? el('details', {}, el('summary', {}, 'Read Update'), el('div', {class: 'resource-body'}, item.body)) : null);
+      };
+      const showYears = () => {
+        content.replaceChildren(el('div', {class: 'affairs-navigation-grid'},
+          ...sorted(archive).map(([year, months]) => {
+            const count = [...months.values()].reduce((total, dates) =>
+              total + [...dates.values()].reduce((sum, items) => sum + items.length, 0), 0);
+            const select = button('', 'affairs-nav-card');
+            select.replaceChildren(el('strong', {}, year),
+              el('small', {}, `${count} ${count === 1 ? 'resource' : 'resources'} · ${months.size} ${months.size === 1 ? 'month' : 'months'}`));
+            select.addEventListener('click', () => showMonths(year));
+            return select;
+          })));
+      };
+      const showMonths = year => {
+        const months = archive.get(year);
+        const back = button('← All Years', 'secondary affairs-back');
+        back.addEventListener('click', showYears);
+        content.replaceChildren(back, el('h2', {class: 'affairs-selection-title'}, year),
+          el('div', {class: 'affairs-navigation-grid'},
+            ...sorted(months).map(([month, dates]) => {
+              const count = [...dates.values()].reduce((sum, items) => sum + items.length, 0);
+              const select = button('', 'affairs-nav-card');
+              select.replaceChildren(el('strong', {}, monthName(month)),
+                el('small', {}, `${count} ${count === 1 ? 'resource' : 'resources'} · ${dates.size} ${dates.size === 1 ? 'date' : 'dates'}`));
+              select.addEventListener('click', () => showDates(year, month));
+              return select;
+            })));
+      };
+      const showDates = (year, month) => {
+        const dates = archive.get(year).get(month);
+        const back = button(`← ${year} Months`, 'secondary affairs-back');
+        back.addEventListener('click', () => showMonths(year));
+        content.replaceChildren(back, el('h2', {class: 'affairs-selection-title'}, `${monthName(month)} ${year}`),
+          ...sorted(dates).map(([date, items]) => el('section', {class: 'affairs-day'},
+            el('h3', {}, new Intl.DateTimeFormat('en-IN', {day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC'})
+              .format(new Date(`${date}T00:00:00Z`))),
+            el('div', {class: 'affairs-day-resources'}, ...items.map(resourceCard)))));
+      };
+      if (archive.size) showYears();
+      else content.replaceChildren(el('div', {class: 'empty-library'}, el('h2', {}, 'No Current Affairs Published Yet'),
+        el('p', {class: 'muted'}, 'Admin can add dated updates from the Admin workspace.')));
       return;
     }
     content.replaceChildren(...(rows.length ? rows.map(item =>
       el('article', {class: 'resource-card'},
         el('span', {class: 'resource-icon', 'aria-hidden': 'true'}, config.icon),
-        el('h2', {}, item.title), el('p', {class: 'lead'}, item.summary),
-        el('details', {}, el('summary', {}, 'Open Resource'), el('div', {class: 'resource-body'}, item.body)))) :
+        el('h2', {}, item.title), item.summary ? el('p', {class: 'lead'}, item.summary) : null,
+        item.media?.pdf ? el('div', {class: 'affairs-media-card'},
+          el('div', {class: 'actions'},
+            el('span', {class: 'badge'}, `${item.media.pdf.pages} PDF ${item.media.pdf.pages === 1 ? 'page' : 'pages'}`),
+            el('small', {class: 'muted'}, item.downloadsEnabled ? 'Downloads allowed' : 'View in app')),
+          link('View PDF', `#resource/${idPart(item.id)}`, 'button secondary')) : null,
+        item.body ? el('details', {}, el('summary', {}, 'Open Resource'), el('div', {class: 'resource-body'}, item.body)) : null)) :
       [el('div', {class: 'empty-library'}, el('span', {class: 'resource-icon'}, config.icon),
         el('h2', {}, `No ${config.title} Published Yet`),
         el('p', {class: 'muted'}, 'Your admin can publish new resources from the Admin workspace.'))]));
@@ -183,7 +230,8 @@ export function showLearningContent(main, ctx, kind, action) {
 }
 
 export function showResource(main, ctx, id, action) {
-  main.append(link('Back to Current Affairs', '#current-affairs', 'back'));
+  const back = link('Back to Learning Resources', '#home', 'back');
+  main.append(back);
   if (!ctx.user) {
     main.append(panel('Current Affairs', el('p', {}, 'Sign in to view this resource.'), action.signInLink()));
     return;
@@ -192,8 +240,14 @@ export function showResource(main, ctx, id, action) {
   main.append(content);
   loadInto(content, ctx, async () => {
     const item = await api(`/resources/${idPart(id)}`, {ctx, auth: true});
-    content.replaceChildren(...heading(item.title, `Published ${item.publishedAt || item.createdAt.slice(0, 10)}`),
+    const section = contentKinds[item.kind];
+    back.href = `#${item.kind}`;
+    back.textContent = `Back to ${section?.title || 'Learning Resources'}`;
+    content.replaceChildren(...heading(item.title, `Published ${item.publishedAt || item.createdAt?.slice(0, 10) || ''}`),
       el('p', {class: 'muted'}, item.downloadsEnabled ? 'Downloads are enabled for this resource.' : 'View in the app. Downloads are disabled.'));
+    if (item.summary || item.body) {
+      content.append(el('p', {class: 'lead'}, item.summary), el('div', {class: 'resource-body'}, item.body));
+    }
     if (item.media?.video) {
       const videoArea = el('section', {class: 'panel'});
       content.append(videoArea);
@@ -265,51 +319,156 @@ export async function uploadCurrentAffairsMedia(ctx, files, {required = true, on
 export function adminContentForm(post, refresh, ctx) {
   const kind = el('select', {required: ''},
     Object.entries(contentKinds).map(([value, config]) => el('option', {value}, config.title)));
+  const entryType = el('select', {required: ''},
+    el('option', {value: 'resource'}, 'Learning Resource'), el('option', {value: 'test'}, 'Mock / Live Test'));
+  const entryTypeField = field('Content Type', entryType);
   const title = el('input', {required: '', maxlength: '120'});
-  const summary = el('textarea', {rows: '2', required: '', maxlength: '300'});
-  const body = el('textarea', {rows: '7', required: '', maxlength: '10000'});
   const published = el('input', {type: 'date', required: '', value: new Date().toISOString().slice(0, 10)});
   const publishedField = field('Publish Date', published, 'Current Affairs uses this year and month in the student archive.');
   const pdf = el('input', {type: 'file', accept: '.pdf,application/pdf'});
   const video = el('input', {type: 'file', accept: '.mp4,.m4v,.webm,.mov,video/mp4,video/webm,video/quicktime'});
   const downloads = el('input', {type: 'checkbox', role: 'switch'});
+  const pdfField = field('PDF File (optional)', pdf, 'PDF, up to 12 MB. Students read protected pages inside the app.');
+  const videoField = field('Video File (optional)', video, 'MP4, WebM, or MOV, up to 300 MB.');
+  const downloadLabel = el('label', {class: 'choice'}, downloads, 'Allow PDF downloads');
+  const mediaHint = el('p', {class: 'muted'}, 'PDFs are optional. Downloads are off by default.');
   const mediaFields = el('div', {class: 'affairs-upload'},
     el('div', {class: 'affairs-upload-files'},
-      field('PDF File (optional)', pdf, 'PDF, up to 12 MB. Students read protected pages inside the app.'),
-      field('Video File (optional)', video, 'MP4, WebM, or MOV, up to 300 MB.')),
-    el('label', {class: 'choice'}, downloads, 'Allow PDF and video downloads'),
-    el('p', {class: 'muted'}, 'Upload a PDF, a video, or both. Downloads are off by default.'));
-  const summaryField = field('Short Summary', summary);
-  const bodyField = field('Content', body);
+      pdfField, videoField),
+    downloadLabel,
+    mediaHint);
+  const questionEntryType = el('select', {required: ''},
+    el('option', {value: 'import'}, 'Import File / Questions (JSON)'),
+    el('option', {value: 'manual'}, 'Create Test Manually'));
+  const testType = el('select', {required: ''},
+    el('option', {value: 'mock'}, 'Mock Test — Unlimited Attempts'),
+    el('option', {value: 'live'}, 'Live Test — Limited Attempts'));
+  const duration = el('input', {type: 'number', min: '10', max: '300', step: '1', required: '', value: '90'});
+  const marks = el('input', {type: 'number', min: '0.01', max: '10', step: 'any', required: '', value: '1'});
+  const negative = el('input', {type: 'number', min: '0', max: '10', step: 'any', required: '', value: '0'});
+  const startsAt = el('input', {type: 'datetime-local', required: ''});
+  const expiresAt = el('input', {type: 'datetime-local', required: ''});
+  const attempts = el('input', {type: 'number', min: '1', max: '10', step: '1', required: '', value: '1'});
+  const questionPaperDownload = el('input', {type: 'checkbox', role: 'switch'});
+  const editor = rule(el('textarea', {rows: '12', required: '',
+    placeholder: '[{\"prompt\":\"Question text\",\"options\":[\"Option A\",\"Option B\"],\"answer\":0,\"section\":\"General\"}]'}),
+  value => {
+    try { questionData(value); return ''; } catch (error) { return error.message; }
+  });
+  const manual = manualQuestions();
+  const subjectManager = subjectQuestionManager(editor, (file, format) =>
+    api(`/admin/import?format=${format}`, {ctx, auth: true, method: 'POST', binary: file}));
+  const questionFile = el('input', {type: 'file', accept: '.pdf,.docx,.txt'});
+  const importFeedback = status();
+  const importButton = button('Import Questions', 'secondary');
+  const importPanel = el('div', {class: 'question-import-panel'},
+    field('Question File (PDF, DOCX, or TXT)', questionFile), importButton, importFeedback);
+  importButton.addEventListener('click', () => run(importButton, importFeedback, async () => {
+    const file = questionFile.files[0];
+    if (!file) throw new Error('Choose a PDF, DOCX, or TXT question file.');
+    const format = file.name.split('.').pop().toLowerCase();
+    if (!['pdf', 'docx', 'txt'].includes(format)) throw new Error('Choose a PDF, DOCX, or TXT question file.');
+    const result = await api(`/admin/import?format=${format}`, {ctx, auth: true, method: 'POST', binary: file});
+    if (!Array.isArray(result?.questions) || !result.questions.length) throw new Error('No questions were imported.');
+    editor.value = JSON.stringify(result.questions, null, 2);
+    editor.dispatchEvent(new Event('input', {bubbles: true}));
+    say(importFeedback, `${result.questions.length} questions imported. Review or edit them before publishing.`);
+  }, 'Importing questions…'));
+  const liveFields = el('div', {class: 'test-live-fields'},
+    field('Live Test Opens (IST)', startsAt), field('Live Test Closes (IST)', expiresAt),
+    field('Allowed Attempts', attempts, 'Live tests allow 1–10 attempts during the scheduled window.'));
+  const questionEditorField = field('Questions (JSON)', editor,
+    'Review extracted questions and edit prompts, options, answers, and sections before publishing.');
+  const questionFields = el('fieldset', {class: 'current-affairs-test-questions upload-fields'},
+    field('Question Creation', questionEntryType), importPanel, subjectManager.node,
+    questionEditorField, manual.node);
+  const testFields = el('fieldset', {class: 'current-affairs-test-fields upload-fields', hidden: '', disabled: ''},
+    field('Test Type', testType), liveFields,
+    field('Duration (minutes)', duration), field('Marks Per Correct Answer', marks),
+    field('Negative Mark Per Wrong Answer', negative), questionFields,
+    el('label', {class: 'choice'}, questionPaperDownload,
+      'Enable Question Paper Download after first completed attempt'));
+  const updateTestFields = () => {
+    const live = testType.value === 'live';
+    liveFields.hidden = !live;
+    startsAt.disabled = expiresAt.disabled = attempts.disabled = !live;
+    const manualMode = questionEntryType.value === 'manual';
+    questionEditorField.hidden = importPanel.hidden = subjectManager.node.hidden = manualMode;
+    editor.disabled = manualMode;
+    manual.node.hidden = !manualMode;
+    manual.node.disabled = !manualMode;
+  };
+  testType.addEventListener('change', updateTestFields);
+  questionEntryType.addEventListener('change', updateTestFields);
+  const submit = button('Publish Resource', null, 'submit');
   const updateFields = () => {
     const affairs = kind.value === 'current-affairs';
-    publishedField.hidden = mediaFields.hidden = !affairs;
-    summaryField.hidden = bodyField.hidden = affairs;
-    summary.disabled = body.disabled = affairs;
-    pdf.disabled = video.disabled = downloads.disabled = !affairs;
+    const testMode = affairs && entryType.value === 'test';
+    entryTypeField.hidden = !affairs;
+    publishedField.hidden = !affairs;
+    mediaFields.hidden = testMode;
+    videoField.hidden = !affairs;
+    video.disabled = !affairs;
+    testFields.hidden = !testMode;
+    testFields.disabled = !testMode;
+    downloadLabel.lastChild.textContent = affairs ? 'Allow PDF and video downloads' : 'Allow PDF downloads';
+    mediaHint.textContent = affairs ? 'Upload a PDF, a video, or both. Downloads are off by default.' :
+      'PDFs are optional. Downloads are off by default.';
+    const hasMedia = Boolean(pdf.files.length || (affairs && video.files.length));
+    downloads.disabled = !affairs && !pdf.files.length;
+    if (!hasMedia) downloads.checked = false;
+    submit.textContent = testMode ? 'Publish Current Affairs Test' : 'Publish Resource';
   };
+  pdf.addEventListener('change', updateFields);
+  video.addEventListener('change', updateFields);
   kind.addEventListener('change', updateFields);
+  entryType.addEventListener('change', updateFields);
   updateFields();
-  const submit = button('Publish Resource', null, 'submit');
+  updateTestFields();
   const feedback = status();
-  const fields = el('fieldset', {class: 'upload-fields'}, field('Section', kind), field('Resource Title', title),
-    mediaFields, publishedField, summaryField, bodyField);
+  const fields = el('fieldset', {class: 'upload-fields'}, field('Section', kind), entryTypeField,
+    field('Resource Title', title), mediaFields, publishedField, testFields);
   const form = el('form', {}, fields, submit, feedback);
   bindForm(form, submit, feedback, async () => {
     const section = kind.value;
     const json = {title: textValue(title, 'Title'), publishedAt: published.value};
-    if (section !== 'current-affairs') Object.assign(json, {
-      summary: textValue(summary, 'Summary'), body: textValue(body, 'Content'),
-    });
+    if (section === 'current-affairs' && entryType.value === 'test') {
+      const questions = questionData(questionEntryType.value === 'manual' ?
+        JSON.stringify(manual.values()) : editor.value);
+      Object.assign(json, {
+        contentType: 'test', questions,
+        live: testType.value === 'live',
+        startsAt: testType.value === 'live' ? startsAt.value : undefined,
+        expiresAt: testType.value === 'live' ? expiresAt.value : undefined,
+        attemptsLimit: testType.value === 'live' ? attempts.valueAsNumber : 0,
+        durationMinutes: duration.valueAsNumber,
+        marksPerQuestion: marks.valueAsNumber,
+        negativeMark: negative.valueAsNumber,
+        questionPaperDownload: questionPaperDownload.checked,
+      });
+    }
     fields.disabled = true;
     try {
-      if (section === 'current-affairs') {
-        const files = {pdf: pdf.files[0], video: video.files[0]};
-        const uploadId = await uploadCurrentAffairsMedia(ctx, files, {onStatus: message => say(feedback, message)});
-        Object.assign(json, {uploadId, downloadsEnabled: downloads.checked});
+      if (section === 'current-affairs' && entryType.value === 'test') {
+        await post(`/admin/content/${section}`, {json});
+      } else {
+        if (section === 'current-affairs') {
+          const files = {pdf: pdf.files[0], video: video.files[0]};
+          const uploadId = await uploadCurrentAffairsMedia(ctx, files, {onStatus: message => say(feedback, message)});
+          Object.assign(json, {uploadId, downloadsEnabled: downloads.checked});
+        } else if (pdf.files[0]) {
+          const uploadId = await uploadCurrentAffairsMedia(ctx, {pdf: pdf.files[0]},
+            {required: false, onStatus: message => say(feedback, message)});
+          if (uploadId) Object.assign(json, {uploadId, downloadsEnabled: downloads.checked});
+        }
+        await post(`/admin/content/${section}`, {json});
       }
-      await post(`/admin/content/${section}`, {json});
       form.reset();
+      subjectManager.reset();
+      manual.reset();
+      questionFile.value = '';
+      questionPaperDownload.checked = false;
+      updateTestFields();
       updateFields();
       say(feedback, 'Learning resource published.');
       refresh?.();

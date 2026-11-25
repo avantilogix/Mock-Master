@@ -21,6 +21,7 @@ export default defineConfig({
       PORT: '3011',
       UPI_ID: 'missionselection@upi',
       UPI_PAYEE_NAME: 'Mission Selection',
+      PLAYWRIGHT_TEST_MODE: '1',
     },
   },
 });

@@ -52,9 +52,7 @@ test('extracts Word paragraphs from a DOCX', { skip: !has('zip') || !has('unzip'
   assert.deepEqual(await importQuestions(readFileSync(join(path, 'test.docx')), 'docx'), importedQuestions);
 });
 
-test('extracts PDF questions and bakes a viewer-specific watermark into pages', {
-  skip: !has('pdftotext') || !has('pdftoppm'),
-}, async () => {
+test('extracts PDF questions and bakes a viewer-specific watermark into pages', async () => {
   const pdf = fixturePdf();
   assert.deepEqual(await importQuestions(pdf, 'pdf'), importedQuestions);
   const [first, second] = await Promise.all([renderPage(pdf, 1, '+919000000001'), renderPage(pdf, 1, '+919000000002')]);
@@ -482,7 +480,7 @@ test('Current Affairs publishes completed media, protects viewing and enforces d
   assert.equal((await request(publishPath, 'admin', 'POST', {...input, uploadId: badDraft.id})).status, 410);
 
   const text = {title: 'Syllabus', summary: 'Existing summary', body: 'Existing content', publishedAt: '2026-01-02'};
-  for (const kind of ['syllabus', 'current-affairs']) {
+  for (const kind of ['syllabus', 'pyqs', 'current-affairs']) {
     const created = await request(`/admin/content/${kind}`, 'admin', 'POST', text);
     assert.equal(created.status, 201);
     const {id: legacyId} = await created.json();
@@ -492,8 +490,37 @@ test('Current Affairs publishes completed media, protects viewing and enforces d
     const rows = await (await request(`/content/${kind}`, 'student')).json();
     assert.equal(rows[0].summary, text.summary);
     assert.equal(rows[0].body, text.body);
-    if (kind === 'syllabus') assert.equal((await request(`/admin/published/resources/${legacyId}`, 'admin', 'PUT', edit)).status, 422);
+    if (kind === 'syllabus') {
+      assert.equal((await request(`/admin/published/resources/${legacyId}`, 'admin', 'PUT', edit)).status, 200);
+      const updated = await (await request(`/resources/${legacyId}`, 'student')).json();
+      assert.equal(updated.summary, text.summary);
+      assert.equal(updated.body, text.body);
+    }
   }
+
+  const pyqDraft = await (await request(draftPath, 'admin', 'POST',
+    {pdf: {size: pdf.length, type: 'application/pdf'}})).json();
+  assert.equal((await request(`${draftPath}/${pyqDraft.id}/pdf`, 'admin', 'PUT', pdf)).status, 204);
+  const pyq = {uploadId: pyqDraft.id, title: 'PYQ PDF', summary: 'Past questions',
+    body: 'Review these questions.', publishedAt: '2026-03-02', downloadsEnabled: true};
+  const publishedPyq = await request('/admin/content/pyqs', 'admin', 'POST', pyq);
+  assert.equal(publishedPyq.status, 201);
+  const {id: pyqId} = await publishedPyq.json();
+  const pyqResource = (await (await request(`/resources/${pyqId}`, 'student')).json());
+  assert.equal(pyqResource.kind, 'pyqs');
+  assert.equal(pyqResource.summary, pyq.summary);
+  assert.equal(pyqResource.media.pdf.pages, 1);
+  assert.equal(pyqResource.downloadsEnabled, true);
+  assert.equal((await request(`/resources/${pyqId}/pdf/pages/1`, 'student')).status, 200);
+  assert.equal((await request(`/resources/${pyqId}/pdf/download`, 'student')).status, 403);
+  const pyqEdit = await request(`/admin/published/resources/${pyqId}`, 'admin', 'PUT',
+    {...pyq, uploadId: undefined, title: 'Updated PYQ PDF', summary: 'Updated summary', downloadsEnabled: false});
+  assert.equal(pyqEdit.status, 200);
+  const updatedPyq = await (await request(`/resources/${pyqId}`, 'student')).json();
+  assert.equal(updatedPyq.title, 'Updated PYQ PDF');
+  assert.equal(updatedPyq.summary, 'Updated summary');
+  assert.equal(updatedPyq.media.pdf.pages, 1);
+  assert.equal(updatedPyq.downloadsEnabled, false);
 });
 
 function jsonServer(t, users) {
@@ -539,6 +566,9 @@ test('admins list published content with dates, edit it, and delete it safely', 
   const users = new Map([['admin', { uid: 'admin', phone: '+919000000021' }], ['student', { uid: 'student', phone: '+919000000022' }]]);
   const { db, server, request } = jsonServer(t, users);
   await once(server, 'listening');
+  db.prepare(`INSERT INTO resources (id,kind,title,summary,body,created_at,published_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)`).run('legacy-free-test', 'free-tests', 'Legacy Free Test', 'summary', 'body',
+    new Date().toISOString(), '2026-01-01');
   const course = { title: 'Reasoning', description: 'Daily practice', price: 50000, downloadsEnabled: true };
   const { body: { id } } = await request('/admin/courses', 'admin', 'POST', course);
   const questions = [{ prompt: '2 + 2?', options: ['3', '4'], answer: 1, section: 'General' }];
@@ -546,6 +576,13 @@ test('admins list published content with dates, edit it, and delete it safely', 
 
   assert.equal((await request('/admin/published', 'student')).status, 403);
   const listed = (await request('/admin/published', 'admin')).body;
+  assert.ok(!listed.resources.some(item => item.kind === 'free-tests'));
+  assert.equal((await request('/content/free-tests', 'student')).status, 404);
+  const resourceText = {title: 'Legacy Free Test', summary: 'summary', body: 'body', publishedAt: '2026-01-01'};
+  assert.equal((await request('/admin/content/free-tests', 'admin', 'POST', resourceText)).status, 422);
+  assert.equal((await request('/admin/published/resources/legacy-free-test', 'admin', 'PUT', resourceText)).status, 404);
+  assert.equal((await request('/admin/published/resources/legacy-free-test', 'admin', 'DELETE')).status, 404);
+  assert.ok(db.prepare('SELECT id FROM resources WHERE id=?').get('legacy-free-test'));
   assert.equal(listed.courses[0].title, 'Reasoning');
   assert.equal(listed.courses[0].downloadsEnabled, true);
   assert.ok(!Number.isNaN(Date.parse(listed.courses[0].createdAt)));

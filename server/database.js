@@ -137,6 +137,7 @@ export function openDatabase(path) {
   if (!ebookColumns.has('demo_pdf')) db.exec('ALTER TABLE ebooks ADD COLUMN demo_pdf BLOB');
   if (!ebookColumns.has('demo_pages')) db.exec('ALTER TABLE ebooks ADD COLUMN demo_pages INTEGER NOT NULL DEFAULT 0');
   const testColumns = new Set(db.prepare('PRAGMA table_info(tests)').all().map(column => column.name));
+  if (!testColumns.has('resource_id')) db.exec('ALTER TABLE tests ADD COLUMN resource_id TEXT');
   if (!testColumns.has('live')) db.exec('ALTER TABLE tests ADD COLUMN live INTEGER NOT NULL DEFAULT 0');
   if (!testColumns.has('starts_at')) db.exec("ALTER TABLE tests ADD COLUMN starts_at TEXT NOT NULL DEFAULT ''");
   if (!testColumns.has('duration_minutes')) db.exec('ALTER TABLE tests ADD COLUMN duration_minutes INTEGER NOT NULL DEFAULT 0');

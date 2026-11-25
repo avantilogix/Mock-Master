@@ -38,6 +38,7 @@ function examPreferences(value) {
   return selected;
 }
 
+const CURRENT_AFFAIRS_COURSE_ID = 'public-current-affairs';
 const MAX_VIDEO_BYTES = 300 * 1024 * 1024;
 const VIDEO_LINK_SECONDS = 2 * 60 * 60;
 const videoTypes = { 'video/mp4': 'mp4', 'video/webm': 'webm', 'video/quicktime': 'mov' };
@@ -271,7 +272,7 @@ async function buildReceiptPdf({student, order, course}) {
 
 export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, adminUids = [], adminPhones = [],
   trustLocalProxy = false,
-  videoDir = join(tmpdir(), 'mock-master-videos'), dummyLogin = false }) {
+  videoDir = join(tmpdir(), 'mock-master-videos'), dummyLogin = false, authRequestLimit = 120 }) {
   const app = express();
   if (trustLocalProxy) app.set('trust proxy', 'loopback');
   app.disable('x-powered-by');
@@ -294,7 +295,7 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     windowMs: 60_000, limit: max, standardHeaders: 'draft-8', legacyHeaders: false,
     message: { error: 'Too many requests. Wait a minute and try again.' },
   });
-  const authLimit = limit(120);
+  const authLimit = limit(authRequestLimit);
   const paymentLimit = limit(20);
   const demoLimit = limit(60);
   const one = (sql, ...args) => db.prepare(sql).get(...args);
@@ -352,8 +353,14 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     if (!row) fail(404, 'Course not found.');
     return row;
   }
+  function courseForSale(id) {
+    const row = course(id);
+    if (id === CURRENT_AFFAIRS_COURSE_ID) fail(404, 'Course not found.');
+    return row;
+  }
   const owns = (uid, id) => one("SELECT 1 FROM orders WHERE uid=? AND course=? AND payment_status='approved' AND payment IS NOT NULL AND payment!=''", uid, id);
   function requirePurchase(req, id, allowAdmin = true) {
+    if (id === CURRENT_AFFAIRS_COURSE_ID) fail(404, 'Course not found.');
     if (!(allowAdmin && req.user.admin) && !owns(req.user.uid, id)) fail(403, 'Purchase this course to unlock it.');
   }
   api.use(express.json({ limit: '1mb', inflate: false }));
@@ -378,7 +385,7 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     res.json(Object.fromEntries(rows.map(row => [row.key, row.value])));
   });
   api.get('/courses', (_req, res) => res.json(all(`SELECT id, title, description, price,
-    downloads_enabled AS downloadsEnabled FROM courses ORDER BY rowid DESC`)));
+    downloads_enabled AS downloadsEnabled FROM courses WHERE id!=? ORDER BY rowid DESC`, CURRENT_AFFAIRS_COURSE_ID)));
   api.get('/ebooks', (_req, res) => res.json(all(
     'SELECT id, title, description, price, pages, demo_pages AS demoPages, created_at AS createdAt FROM ebooks ORDER BY rowid DESC')));
   api.get('/ebooks/:id/demo', demoLimit, (req, res) => {
@@ -394,7 +401,7 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     res.type('png').send(await processDocument(() => renderDemoPage(Buffer.from(book.demo_pdf), page)));
   });
   api.get('/courses/:id/payment-qr', async (req, res) => {
-    const row = course(req.params.id);
+    const row = courseForSale(req.params.id);
     const payment = runtimePayment();
     const setting = one('SELECT qr, qr_type FROM payment_settings WHERE id=1');
     if (setting?.qr && payment.method !== 'upi') {
@@ -417,7 +424,7 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     res.type('svg').send(await QRCode.toString(uri, { type: 'svg', margin: 1, errorCorrectionLevel: 'M' }));
   });
   api.get('/courses/:id/reviews', (req, res) => {
-    course(req.params.id);
+    courseForSale(req.params.id);
     res.json(all(`SELECT COALESCE(NULLIF(s.name, ''), 'Student') AS name, r.rating, r.text
       FROM reviews r JOIN students s USING (uid) WHERE r.course=? ORDER BY r.rowid DESC LIMIT 100`, req.params.id));
   });
@@ -550,7 +557,7 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     res.sendStatus(204);
   });
   api.get('/courses/:id/payment', (req, res) => {
-    const { id, price } = course(req.params.id);
+    const { id, price } = courseForSale(req.params.id);
     const order = one(`SELECT id, amount, payment_status AS status, transaction_ref AS reference,
       payment_note AS note, review_note AS reviewNote, submitted_at AS submittedAt FROM orders
       WHERE uid=? AND course=?`, req.user.uid, id);
@@ -558,7 +565,7 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     res.json({ amount: price, credits, payment: { ...runtimePayment(), qr: `/api/courses/${id}/payment-qr` }, order });
   });
   api.post('/courses/:id/payment', paymentLimit, (req, res) => {
-    const { id, price } = course(req.params.id);
+    const { id, price } = courseForSale(req.params.id);
     const { uid } = req.user;
     if (owns(uid, id)) fail(409, 'You already own this course.');
     const referral = one('SELECT credits FROM referrals WHERE uid=?', uid);
@@ -644,9 +651,60 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     if (!row) fail(404, 'Test not found.');
     return row;
   }
+  function testInput(body) {
+    const {title, questions, live, startsAt, expiresAt, durationMinutes, questionPaperDownload = false,
+      attemptsLimit = 2, marksPerQuestion = 1, negativeMark = 0} = body;
+    const duration = durationMinutes === undefined ? 90 : durationMinutes;
+    if (!Number.isInteger(duration) || duration < 10 || duration > 300) {
+      fail(422, 'A test needs a duration from 10–300 minutes.');
+    }
+    const scheduled = live ? istIso(startsAt, 'Live start time') : '';
+    const expires = live ? istIso(expiresAt, 'Live expiry time') : '';
+    if (live && (Date.parse(expires) <= Date.parse(scheduled) ||
+        !Number.isInteger(attemptsLimit) || attemptsLimit < 1 || attemptsLimit > 10)) {
+      fail(422, 'Live expiry must be after the start time, with 1–10 attempts allowed.');
+    }
+    if (!Number.isFinite(marksPerQuestion) || marksPerQuestion <= 0 || marksPerQuestion > 10 ||
+        !Number.isFinite(negativeMark) || negativeMark < 0 || negativeMark > marksPerQuestion) {
+      fail(422, 'Enter valid marks per question and negative marking.');
+    }
+    const parsedQuestions = validateQuestions(questions);
+    if (typeof questionPaperDownload !== 'boolean') fail(422, 'Choose a valid question paper download option.');
+    return {
+      title: text(title, 'Title', 120),
+      questions: parsedQuestions,
+      live: Boolean(live),
+      startsAt: scheduled,
+      expiresAt: expires,
+      durationMinutes: duration,
+      attemptsLimit: live ? attemptsLimit : 0,
+      marksPerQuestion,
+      negativeMark,
+      sections: [...new Set(parsedQuestions.map(question => question.section || 'General'))],
+      questionPaperDownload,
+    };
+  }
+  function insertTest(id, courseId, values, folderId = null, resourceId = null) {
+    run(`INSERT INTO tests (id, course, title, questions, created_at, live, starts_at, duration_minutes,
+      expires_at, attempts_limit, marks_per_question, negative_mark, sections, question_paper_download,
+      folder_id, resource_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    id, courseId, values.title, JSON.stringify(values.questions), new Date().toISOString(),
+    values.live ? 1 : 0, values.startsAt, values.durationMinutes, values.expiresAt, values.attemptsLimit,
+    values.marksPerQuestion, values.negativeMark, JSON.stringify(values.sections),
+    values.questionPaperDownload ? 1 : 0, folderId, resourceId);
+  }
+  function requireTestAccess(req, row) {
+    if (row.resource_id) {
+      if (!one("SELECT 1 FROM resources WHERE id=? AND kind='current-affairs'", row.resource_id)) {
+        fail(404, 'Current Affairs resource not found.');
+      }
+      return;
+    }
+    requirePurchase(req, row.course);
+  }
   api.get('/tests/:id', (req, res) => {
     const row = test(req.params.id);
-    requirePurchase(req, row.course);
+    requireTestAccess(req, row);
     const attempts = one('SELECT COUNT(*) AS count FROM attempts WHERE uid=? AND test=?', req.user.uid, row.id)?.count || 0;
     const now = Date.now();
     const starts = Date.parse(row.starts_at);
@@ -659,6 +717,7 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     const sections = [...new Set(JSON.parse(row.questions).map(question => question.section || 'General'))];
     res.json({
       title: row.title, live: Boolean(row.live), startsAt: row.starts_at, expiresAt: row.expires_at,
+      resourceId: row.resource_id || null,
       durationMinutes: row.duration_minutes || 90, attempts, attemptsLimit: row.live ? (row.attempts_limit || 2) : 0,
       limited: Boolean(limited), marksPerQuestion: row.marks_per_question || 1, negativeMark: row.negative_mark || 0, sections,
       questionPaperDownload: Boolean(row.question_paper_download), completedAttempt: attempts > 0,
@@ -670,7 +729,7 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
   });
   api.post('/tests/:id/start', (req, res) => {
     const row = test(req.params.id);
-    requirePurchase(req, row.course);
+    requireTestAccess(req, row);
     const attempts = one('SELECT COUNT(*) AS count FROM attempts WHERE uid=? AND test=?', req.user.uid, row.id)?.count || 0;
     const nowMs = Date.now();
     const starts = Date.parse(row.starts_at);
@@ -701,7 +760,7 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
   });
   api.post('/tests/:id/submit', (req, res) => {
     const row = test(req.params.id);
-    requirePurchase(req, row.course);
+    requireTestAccess(req, row);
     const questions = JSON.parse(row.questions);
     const { answers } = req.body ?? {};
     if (!Array.isArray(answers) || answers.length !== questions.length ||
@@ -740,8 +799,10 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     res.json({...result, attemptId});
   });
   api.get('/attempts/:id/result.pdf', async (req, res) => {
-    const attempt = one(`SELECT a.*, t.title AS testTitle, t.questions, t.duration_minutes, c.title AS courseTitle
+    const attempt = one(`SELECT a.*, t.title AS testTitle, t.questions, t.duration_minutes,
+      COALESCE(r.title, c.title) AS courseTitle
       FROM attempts a JOIN tests t ON t.id=a.test JOIN courses c ON c.id=a.course
+      LEFT JOIN resources r ON r.id=t.resource_id
       WHERE a.id=? AND a.uid=?`, req.params.id, req.user.uid);
     if (!attempt) fail(404, 'Test result not found.');
     const answers = JSON.parse(attempt.answers || '[]');
@@ -774,7 +835,7 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
   });
   api.get('/tests/:id/question-paper.pdf', async (req, res) => {
     const row = test(req.params.id);
-    requirePurchase(req, row.course);
+    requireTestAccess(req, row);
     if (!row.question_paper_download) fail(403, 'Question paper download is disabled by the admin.');
     if (!one('SELECT 1 FROM attempts WHERE uid=? AND test=?', req.user.uid, row.id)) {
       fail(403, 'Complete your first test attempt before downloading the question paper.');
@@ -784,7 +845,7 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
   });
   api.get('/tests/:id/leaderboard', (req, res) => {
     const row = test(req.params.id);
-    requirePurchase(req, row.course);
+    requireTestAccess(req, row);
     if (!row.live) fail(404, 'Leaderboard is available for live tests only.');
     const expires = Date.parse(row.expires_at);
     if (!Number.isFinite(expires) || Date.now() < expires) {
@@ -813,11 +874,13 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
       };
     });
     const mine = rows.find(entry => entry.isCurrentUser) || null;
-    res.json({title: row.title, expiresAt: row.expires_at, participants: rows.length, rows, mine});
+    res.json({title: row.title, expiresAt: row.expires_at, resourceId: row.resource_id || null,
+      participants: rows.length, rows, mine});
   });
   api.get('/progress', (req, res) => {
-    const attempts = all(`SELECT a.id, a.course, c.title AS courseTitle, a.test, a.title, a.score, a.total,
+    const attempts = all(`SELECT a.id, a.course, COALESCE(r.title, c.title) AS courseTitle, a.test, a.title, a.score, a.total,
       a.created_at AS createdAt FROM attempts a JOIN courses c ON c.id=a.course
+      JOIN tests t ON t.id=a.test LEFT JOIN resources r ON r.id=t.resource_id
       WHERE a.uid=? ORDER BY a.created_at DESC LIMIT 100`, req.user.uid);
     const total = attempts.reduce((sum, item) => sum + item.total, 0);
     const correct = attempts.reduce((sum, item) => sum + item.score, 0);
@@ -874,10 +937,16 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     res.json([...testNotices, ...paymentNotices].sort((a, b) => String(b.date).localeCompare(String(a.date))));
   });
   api.get('/content/:kind', (req, res) => {
-    if (!['current-affairs', 'pyqs', 'syllabus', 'free-tests'].includes(req.params.kind)) fail(404, 'Content not found.');
+    if (!['current-affairs', 'pyqs', 'syllabus'].includes(req.params.kind)) fail(404, 'Content not found.');
     res.json(all(`SELECT * FROM resources WHERE kind=?
       ORDER BY CASE WHEN published_at='' THEN created_at ELSE published_at END DESC`,
-      req.params.kind).map(affairs.publicResource));
+      req.params.kind).map(row => {
+      const resource = affairs.publicResource(row);
+      if (row.kind !== 'current-affairs') return resource;
+      const linkedTest = one(`SELECT id, title, live, starts_at AS startsAt, expires_at AS expiresAt
+        FROM tests WHERE resource_id=?`, row.id);
+      return linkedTest ? {...resource, test: {...linkedTest, live: Boolean(linkedTest.live)}} : resource;
+    }));
   });
   api.get('/books/:id/pages/:page', async (req, res) => {
     const book = one(`SELECT b.course, b.pages, c.downloads_enabled FROM books b
@@ -1002,7 +1071,7 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
     res.json({
       students: one('SELECT COUNT(*) AS count FROM students').count,
-      courses: one('SELECT COUNT(*) AS count FROM courses').count,
+      courses: one('SELECT COUNT(*) AS count FROM courses WHERE id!=?', CURRENT_AFFAIRS_COURSE_ID).count,
       purchases: one("SELECT COUNT(*) AS count FROM orders WHERE payment_status='approved' AND payment IS NOT NULL AND payment!=''").count +
         one("SELECT COUNT(*) AS count FROM ebook_orders WHERE payment<>''").count,
       revenue: one("SELECT COALESCE(SUM(amount),0) AS amount FROM orders WHERE payment_status='approved' AND payment IS NOT NULL AND payment!=''").amount +
@@ -1165,16 +1234,36 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
   affairs.adminRoutes();
   api.post('/admin/content/:kind', async (req, res) => {
     const kind = req.params.kind;
-    if (!['current-affairs', 'pyqs', 'syllabus', 'free-tests'].includes(kind)) fail(422, 'Choose a valid content section.');
-    if (kind === 'current-affairs' && req.body?.uploadId !== undefined) {
-      return res.status(201).json({ id: await affairs.publish(req) });
+    if (!['current-affairs', 'pyqs', 'syllabus'].includes(kind)) fail(422, 'Choose a valid content section.');
+    if (req.body?.contentType === 'test') {
+      if (kind !== 'current-affairs') fail(422, 'Tests can only be published in Current Affairs.');
+      const values = testInput(req.body);
+      const publishedAt = req.body?.publishedAt;
+      if (typeof publishedAt !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(publishedAt) ||
+          Number.isNaN(Date.parse(publishedAt))) fail(422, 'Enter a valid publish date.');
+      const resourceId = randomUUID();
+      const testId = randomUUID();
+      transaction(() => {
+        run(`INSERT OR IGNORE INTO courses (id, title, description, price, created_at, downloads_enabled)
+          VALUES (?, 'Current Affairs', '', 0, ?, 0)`, CURRENT_AFFAIRS_COURSE_ID, new Date().toISOString());
+        run(`INSERT INTO resources (id, kind, title, summary, body, created_at, published_at, media, downloads_enabled)
+          VALUES (?, 'current-affairs', ?, '', '', ?, ?, '{}', 0)`,
+        resourceId, values.title, new Date().toISOString(), publishedAt);
+        insertTest(testId, CURRENT_AFFAIRS_COURSE_ID, values, null, resourceId);
+      });
+      return res.status(201).json({id: resourceId, testId});
+    }
+    if (req.body?.uploadId !== undefined) {
+      return res.status(201).json({ id: await affairs.publish(req, kind) });
     }
     const id = randomUUID();
     const publishedAt = typeof req.body?.publishedAt === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(req.body.publishedAt)
       ? req.body.publishedAt : new Date().toISOString().slice(0, 10);
     run('INSERT INTO resources (id,kind,title,summary,body,created_at,published_at) VALUES (?, ?, ?, ?, ?, ?, ?)', id, kind,
-      text(req.body?.title, 'Title', 120), text(req.body?.summary, 'Summary', 300),
-      text(req.body?.body, 'Content', 10_000), new Date().toISOString(), publishedAt);
+      text(req.body?.title, 'Title', 120),
+      req.body?.summary === undefined ? '' : text(req.body.summary, 'Summary', 300),
+      req.body?.body === undefined ? '' : text(req.body.body, 'Content', 10_000),
+      new Date().toISOString(), publishedAt);
     res.status(201).json({ id });
   });
   api.post('/admin/courses', (req, res) => {
@@ -1192,38 +1281,10 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     const { id: courseId } = course(req.params.id);
     const id = randomUUID();
     const folderId = idInput(req.body?.folderId === undefined ? null : req.body.folderId);
-    const { title, questions, live, startsAt, expiresAt, durationMinutes, questionPaperDownload = false,
-      attemptsLimit = 2, marksPerQuestion = 1, negativeMark = 0 } = req.body ?? {};
-    let scheduled = '';
-    let duration = 0;
-    duration = durationMinutes === undefined ? 90 : durationMinutes;
-    if (!Number.isInteger(duration) || duration < 10 || duration > 300) {
-      fail(422, 'A test needs a duration from 10–300 minutes.');
-    }
-    if (live) {
-      const scheduledDate = istIso(startsAt, 'Live start time');
-      scheduled = scheduledDate;
-    }
-    const expires = live ? istIso(expiresAt, 'Live expiry time') : '';
-    if (live && (Number.isNaN(Date.parse(expires)) || Date.parse(expires) <= Date.parse(scheduled) ||
-        !Number.isInteger(attemptsLimit) || attemptsLimit < 1 || attemptsLimit > 10)) {
-      fail(422, 'Live expiry must be after the start time, with 1–10 attempts allowed.');
-    }
-    if (!Number.isFinite(marksPerQuestion) || marksPerQuestion <= 0 || marksPerQuestion > 10 ||
-        !Number.isFinite(negativeMark) || negativeMark < 0 || negativeMark > marksPerQuestion) {
-      fail(422, 'Enter valid marks per question and negative marking.');
-    }
-    const parsedQuestions = validateQuestions(questions);
-    const sections = [...new Set(parsedQuestions.map(question => question.section || 'General'))];
-    if (typeof questionPaperDownload !== 'boolean') fail(422, 'Choose a valid question paper download option.');
+    const values = testInput(req.body ?? {});
     transaction(() => {
       validateItemFolder(workspaceFolders(courseId), folderId, 'tests');
-      run(`INSERT INTO tests (id, course, title, questions, created_at, live, starts_at, duration_minutes,
-        expires_at, attempts_limit, marks_per_question, negative_mark, sections, question_paper_download, folder_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, id, courseId, text(title, 'Title', 120),
-      JSON.stringify(parsedQuestions), new Date().toISOString(), live ? 1 : 0, scheduled, live ? duration : durationMinutes || 90,
-      expires, live ? attemptsLimit : 0, marksPerQuestion, negativeMark, JSON.stringify(sections),
-      questionPaperDownload ? 1 : 0, folderId);
+      insertTest(id, courseId, values, folderId);
     });
     res.status(201).json({ id });
   });
@@ -1411,12 +1472,15 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     return value;
   };
   api.get('/admin/published', (_req, res) => {
-    const tests = all(`SELECT t.id, t.course, c.title AS courseTitle, t.title, t.questions, t.created_at AS createdAt,
+    const tests = all(`SELECT t.id, t.course, t.resource_id AS resourceId,
+      CASE WHEN t.resource_id IS NOT NULL THEN 'Current Affairs' ELSE c.title END AS courseTitle,
+      t.title, t.questions, t.created_at AS createdAt,
       t.duration_minutes AS durationMinutes, t.marks_per_question AS marksPerQuestion, t.negative_mark AS negativeMark,
       (SELECT COUNT(*) FROM attempts a WHERE a.test=t.id) AS attempts, t.live,
       t.starts_at AS startsAt, t.expires_at AS expiresAt, t.attempts_limit AS attemptsLimit,
       t.question_paper_download AS questionPaperDownload
-      FROM tests t JOIN courses c ON c.id=t.course ORDER BY t.created_at DESC, t.rowid DESC`)
+      FROM tests t JOIN courses c ON c.id=t.course LEFT JOIN resources r ON r.id=t.resource_id
+      ORDER BY t.created_at DESC, t.rowid DESC`)
       .map(test => ({ ...test, questions: JSON.parse(test.questions) }));
     res.json({
       courses: all(`SELECT c.id, c.title, c.description, c.price, c.downloads_enabled AS downloadsEnabled,
@@ -1425,7 +1489,7 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
         (SELECT COUNT(*) FROM tests t WHERE t.course=c.id) AS tests,
         (SELECT COUNT(*) FROM books b WHERE b.course=c.id) + (SELECT COUNT(*) FROM chapter_videos v WHERE v.course=c.id) AS materials,
         (SELECT COUNT(*) FROM videos v WHERE v.course=c.id) AS linkedVideos
-        FROM courses c ORDER BY c.created_at DESC, c.rowid DESC`).map(item => ({
+        FROM courses c WHERE c.id!=? ORDER BY c.created_at DESC, c.rowid DESC`, CURRENT_AFFAIRS_COURSE_ID).map(item => ({
           ...item, downloadsEnabled: Boolean(item.downloadsEnabled),
         })),
       tests,
@@ -1435,7 +1499,7 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
         v.created_at AS createdAt FROM chapter_videos v JOIN courses c ON c.id=v.course ORDER BY v.created_at DESC`),
       videos: all(`SELECT v.id, v.title, v.description, v.video_id AS videoId, v.course, c.title AS courseTitle,
         v.created_at AS createdAt FROM videos v LEFT JOIN courses c ON c.id=v.course ORDER BY v.created_at DESC`),
-      resources: all('SELECT * FROM resources ORDER BY created_at DESC').map(affairs.publicResource),
+      resources: all("SELECT * FROM resources WHERE kind!='free-tests' ORDER BY created_at DESC").map(affairs.publicResource),
       physicalBooks: all(`SELECT b.id, b.title, b.description, b.price, b.stock, b.active, b.created_at AS createdAt,
         (SELECT COUNT(*) FROM physical_orders o WHERE o.book=b.id) AS orders FROM physical_books b ORDER BY b.created_at DESC`),
       schedules: all(`SELECT id, title, day, starts_at AS startsAt, duration, description, created_at AS createdAt
@@ -1524,16 +1588,18 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
         text(body.description, 'Description', 1000), selected, videoId, id);
     },
     resources(id, body) {
-      found('resources', id, 'Resource');
+      const resource = one('SELECT kind, summary, body FROM resources WHERE id=?', id);
+      if (!resource || resource.kind === 'free-tests') fail(404, 'Resource not found.');
       if (typeof body.publishedAt !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(body.publishedAt) ||
           Number.isNaN(Date.parse(body.publishedAt))) fail(422, 'Enter a valid publish date.');
-      if (one('SELECT kind FROM resources WHERE id=?', id).kind === 'current-affairs') {
+      if (resource.kind === 'current-affairs') {
         if (typeof body.downloadsEnabled !== 'boolean') fail(422, 'Choose whether downloads are allowed.');
         run('UPDATE resources SET title=?, published_at=?, downloads_enabled=? WHERE id=?',
           text(body.title, 'Title', 120), body.publishedAt, Number(body.downloadsEnabled), id);
       } else {
         run('UPDATE resources SET title=?, summary=?, body=?, published_at=? WHERE id=?', text(body.title, 'Title', 120),
-          text(body.summary, 'Summary', 300), text(body.body, 'Content', 10_000), body.publishedAt, id);
+          body.summary === undefined ? resource.summary : text(body.summary, 'Summary', 300),
+          body.body === undefined ? resource.body : text(body.body, 'Content', 10_000), body.publishedAt, id);
       }
     },
     physicalBooks(id, body) {
@@ -1582,7 +1648,15 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
       rmSync(videoPath(video.fileId || video.id), { force: true });
     },
     videos: id => { found('videos', id, 'Video'); run('DELETE FROM videos WHERE id=?', id); },
-    resources: id => { found('resources', id, 'Resource'); affairs.remove(id); run('DELETE FROM resources WHERE id=?', id); },
+    resources(id) {
+      const resource = one('SELECT kind FROM resources WHERE id=?', id);
+      if (!resource || resource.kind === 'free-tests') fail(404, 'Resource not found.');
+      if (one('SELECT 1 FROM tests WHERE resource_id=?', id)) {
+        fail(409, 'Remove the linked test before deleting this Current Affairs resource.');
+      }
+      affairs.remove(id);
+      run('DELETE FROM resources WHERE id=?', id);
+    },
     schedules: id => { found('schedules', id, 'Timetable session'); run('DELETE FROM schedules WHERE id=?', id); },
     physicalBooks(id) {
       found('physical_books', id, 'Physical book');
@@ -1600,7 +1674,12 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     if (type === 'resources') {
       const resource = one('SELECT kind FROM resources WHERE id=?', req.params.id);
       if (!resource) fail(404, 'Resource not found.');
-      if (resource.kind === 'current-affairs') return res.json(await affairs.edit(req.params.id, req));
+      if (resource.kind === 'current-affairs' || req.body?.uploadId !== undefined ||
+          req.body?.downloadsEnabled !== undefined) {
+        const result = await affairs.edit(req.params.id, req);
+        run('UPDATE tests SET title=? WHERE resource_id=?', text(req.body?.title, 'Title', 120), req.params.id);
+        return res.json(result);
+      }
     }
     editors[type](req.params.id, req.body ?? {});
     res.sendStatus(204);

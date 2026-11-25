@@ -64,6 +64,7 @@ export function registerPublishedRoutes(api, { db, bucket, value, text, byNewest
         course: typeof body.course === 'string' ? body.course : '', videoId};
     },
     resources(body, existing) {
+      if (existing.kind === 'free-tests') fail(404, 'Resource not found.');
       const { publishedAt } = body;
       if (typeof publishedAt !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(publishedAt) ||
           Number.isNaN(Date.parse(publishedAt)) || new Date(publishedAt).toISOString().slice(0, 10) !== publishedAt) {
@@ -73,8 +74,12 @@ export function registerPublishedRoutes(api, { db, bucket, value, text, byNewest
         if (typeof body.downloadsEnabled !== 'boolean') fail(422, 'Choose whether downloads are allowed.');
         return { title: text(body.title, 'Title', 120), publishedAt, downloadsEnabled: body.downloadsEnabled };
       }
-      return { title: text(body.title, 'Title', 120), summary: text(body.summary, 'Summary', 300),
-        body: text(body.body, 'Content', 10_000), publishedAt };
+      return {
+        title: text(body.title, 'Title', 120),
+        summary: body.summary === undefined ? existing.summary || '' : text(body.summary, 'Summary', 300),
+        body: body.body === undefined ? existing.body || '' : text(body.body, 'Content', 10_000),
+        publishedAt,
+      };
     },
     physicalBooks(body) {
       if (!Number.isInteger(body.stock) || body.stock < 0 || body.stock > 10000 || typeof body.active !== 'boolean') {
@@ -108,17 +113,19 @@ export function registerPublishedRoutes(api, { db, bucket, value, text, byNewest
     const tests = tally(data.tests, 'course');
     const materials = tally([...data.books, ...data.chapterVideos], 'course');
     const linkedVideos = tally(data.videos, 'course');
+    const publicCourses = data.courses.filter(item => !item.publicLearning);
     const courseNames = new Map(data.courses.map(item => [item.id, item.title]));
-    const withCourse = item => ({ ...item, courseTitle: courseNames.get(item.course) || '' });
+    const withCourse = item => ({ ...item,
+      courseTitle: item.resourceId ? 'Current Affairs' : courseNames.get(item.course) || '' });
     const withChapter = item => withCourse({ ...item, subject: item.subject || 'General', chapter: item.chapter || 'Chapter 1' });
     res.json({
-      courses: data.courses.map(item => ({ ...item, enrollments: enrollments(item.id), tests: tests(item.id),
+      courses: publicCourses.map(item => ({ ...item, enrollments: enrollments(item.id), tests: tests(item.id),
         materials: materials(item.id), linkedVideos: linkedVideos(item.id) })),
       tests: data.tests.map(item => withCourse({ ...item, attempts: results(item.id) })),
       books: data.books.map(withChapter),
       chapterVideos: data.chapterVideos.map(withChapter),
       videos: data.videos.map(withCourse),
-      resources: data.resources,
+      resources: data.resources.filter(item => item.kind !== 'free-tests'),
       physicalBooks: data.physicalBooks.map(item => ({ ...item, orders: orderedBooks(item.id) })),
       schedules: data.schedules.map(item => ({ ...item, startsAt: item.startsAt || item.starts_at,
         createdAt: item.createdAt || item.created_at })),
@@ -130,7 +137,8 @@ export function registerPublishedRoutes(api, { db, bucket, value, text, byNewest
     if (type === 'resources') {
       const resource = value(await collection(type).doc(req.params.id).get());
       if (!resource) fail(404, 'Resource not found.');
-      if (resource.kind === 'current-affairs') return res.json(await affairs.edit(req.params.id, req));
+      if (resource.kind === 'current-affairs' || req.body?.uploadId !== undefined ||
+          req.body?.downloadsEnabled !== undefined) return res.json(await affairs.edit(req.params.id, req));
     }
     const ref = collection(type).doc(req.params.id);
     const patch = type === 'resources' ? {} : editors[type](req.body ?? {});
@@ -140,6 +148,7 @@ export function registerPublishedRoutes(api, { db, bucket, value, text, byNewest
     await db.runTransaction(async tx => {
       const existing = value(await tx.get(ref));
       if (!existing) fail(404, 'Published item not found.');
+      if (type === 'resources' && existing.kind === 'free-tests') fail(404, 'Published item not found.');
       if (type === 'resources') Object.assign(patch, editors.resources(req.body ?? {}, existing));
       if (type === 'tests' && patch.live === false) {
         Object.assign(patch, {startsAt: '', expiresAt: '', attemptsLimit: 0});
@@ -180,9 +189,13 @@ export function registerPublishedRoutes(api, { db, bucket, value, text, byNewest
     const archived = await db.runTransaction(async tx => {
       const existing = value(await tx.get(ref));
       if (!existing) fail(404, 'Published item not found.');
+      if (type === 'resources' && existing.kind === 'free-tests') fail(404, 'Published item not found.');
       if (type === 'books') object = existing.pdfFile || `books/${id}.pdf`;
       if (type === 'chapterVideos') object = existing.mediaFile || `chapter-videos/${id}`;
       const has = async (name, field) => !(await tx.get(at(name, field, id).limit(1))).empty;
+      if (type === 'resources' && await has('tests', 'resourceId')) {
+        fail(409, 'Remove the linked test before deleting this Current Affairs resource.');
+      }
       if (type === 'courses') {
         const dependents = await Promise.all(['orders', 'tests', 'books', 'chapterVideos', 'videos'].map(name => has(name, 'course')));
         if (dependents[0]) fail(409, 'This course has purchase requests or enrolments and cannot be deleted.');

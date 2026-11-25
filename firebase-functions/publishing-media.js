@@ -62,10 +62,12 @@ export function publishingMedia(api, { bucket, processDocument }) {
         });
     },
     async validate(ids) {
-      if (!Array.isArray(ids) || ids.length < 1 || ids.length > 8 ||
+      if (ids === undefined || ids === null) return [];
+      if (!Array.isArray(ids) || ids.length > 8 ||
           ids.some(id => typeof id !== 'string' || !imageId.test(id)) || new Set(ids).size !== ids.length) {
         fail(422, 'Add 1 to 8 different cover images.');
       }
+      if (!ids.length) return [];
       const existing = await Promise.all(ids.map(id => bucket.file(pathFor(id)).exists()));
       if (existing.some(([exists]) => !exists)) fail(422, 'One or more cover images are missing. Upload them again.');
       return ids;

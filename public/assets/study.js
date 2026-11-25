@@ -9,7 +9,9 @@ const protectedGet = (ctx, path, image = false) => api(path, {ctx, auth: true, i
 export function showTest(main, ctx, courseId, testId, phone) {
   const path = `/tests/${idPart(testId)}`;
   const content = el('div', {class: 'exam-shell'});
-  const back = () => link('Back to Course', `#course/${idPart(courseId)}`, 'back');
+  const isCurrentAffairs = courseId === 'current-affairs';
+  const back = () => link(isCurrentAffairs ? 'Back to Current Affairs' : 'Back to Course',
+    isCurrentAffairs ? '#current-affairs' : `#course/${idPart(courseId)}`, 'back');
   main.append(back(), ...heading('Exam Room'), content);
   loadInto(content, ctx, async () => {
     const test = await protectedGet(ctx, path);
@@ -177,7 +179,8 @@ export function showTest(main, ctx, courseId, testId, phone) {
           control.replaceChildren(icon(iconName, 'line-icon'), el('span', {}, label));
           return control;
         };
-        const returnButton = resultAction('Return to Course', 'back', 'result-action-back');
+        const returnButton = resultAction(isCurrentAffairs ? 'Return to Current Affairs' : 'Return to Course',
+          'back', 'result-action-back');
         const resultButton = result.attemptId ?
           resultAction('Download Result PDF', 'download', 'secondary result-action-download') : null;
         const paperButton = result.questionPaperDownload ?
@@ -199,7 +202,9 @@ export function showTest(main, ctx, courseId, testId, phone) {
               timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short'
             })} IST.`) : null,
           resultActions, feedback));
-        returnButton.addEventListener('click', () => { location.hash = `#course/${idPart(courseId)}`; });
+        returnButton.addEventListener('click', () => {
+          location.hash = isCurrentAffairs ? '#current-affairs' : `#course/${idPart(courseId)}`;
+        });
         if (resultButton) {
           resultButton.addEventListener('click', () => run(resultButton, feedback, async () => {
               const blob = await api(`/attempts/${result.attemptId}/result.pdf`, {ctx, auth: true, blob: true});
@@ -273,7 +278,8 @@ export function showTest(main, ctx, courseId, testId, phone) {
 
 export function showLeaderboard(main, ctx, courseId, testId) {
   const content = el('div', {class: 'leaderboard-shell'});
-  main.append(link('Back to Course', `#course/${idPart(courseId)}`, 'back'),
+  main.append(link(courseId === 'current-affairs' ? 'Back to Current Affairs' : 'Back to Course',
+    courseId === 'current-affairs' ? '#current-affairs' : `#course/${idPart(courseId)}`, 'back'),
     ...heading('Live Test Leaderboard', 'Rankings are finalized when the live window closes.'), content);
   loadInto(content, ctx, async () => {
     const board = await protectedGet(ctx, `/tests/${idPart(testId)}/leaderboard`);

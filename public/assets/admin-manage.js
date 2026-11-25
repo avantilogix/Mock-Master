@@ -1,5 +1,5 @@
 import {api} from './services.js';
-import {contentKinds, uploadCurrentAffairsMedia} from './reports.js?v=current-affairs-media';
+import {contentKinds, uploadCurrentAffairsMedia} from './reports.js?v=public-learning-resources-v3';
 import {coverGallery, coverPicker} from './publishing-media.js';
 import {maxVideoBytes, uploadChapterVideo, videoAccept, videoType} from './chapter-upload.js';
 import {subjectQuestionManager} from './question-sections.js?v=sectionwise-v2';
@@ -77,8 +77,10 @@ function types({ctx, rupeeInput, toPaise, questionData, priceHint, courses}) {
       edit(item) {
         const title = input(item.title, 120);
         const course = el('select', {required: ''},
+          ...(item.resourceId ? [el('option', {value: 'public-current-affairs'}, 'Current Affairs')] : []),
           courses().map(entry => el('option', {value: entry.id}, entry.title)));
         course.value = item.course || '';
+        course.disabled = Boolean(item.resourceId);
         const testType = el('select', {required: ''},
           el('option', {value: 'mock'}, 'Mock Test — Unlimited Attempts'),
           el('option', {value: 'live'}, 'Live Test — Scheduled Window'));
@@ -202,7 +204,7 @@ function types({ctx, rupeeInput, toPaise, questionData, priceHint, courses}) {
     resources: {
       label: 'Learning Resources', noun: 'resource', empty: 'No learning resources published yet.',
       details: item => [contentKinds[item.kind]?.title || item.kind,
-        ...(item.kind === 'current-affairs' && (item.media?.pdf || item.media?.video) ?
+        ...(item.media?.pdf || item.media?.video ?
           [item.media.pdf ? 'PDF' : '', item.media.video ? 'Video' : '',
             item.downloadsEnabled ? 'Downloads on' : 'Downloads off'].filter(Boolean) : [])],
       date: item => item.publishedAt || item.createdAt,
@@ -239,14 +241,26 @@ function types({ctx, rupeeInput, toPaise, questionData, priceHint, courses}) {
             },
           };
         }
-        const summary = area(item.summary, 300, 2);
-        const body = area(item.body, 10000, 7);
         const published = el('input', {type: 'date', required: ''});
         published.value = (item.publishedAt || item.createdAt || '').slice(0, 10);
+        const downloads = el('input', {type: 'checkbox', role: 'switch'});
+        downloads.checked = Boolean(item.downloadsEnabled);
+        const pdf = rule(el('input', {type: 'file', accept: '.pdf,application/pdf'}), (_, control) => {
+          const file = control.files[0];
+          return file && (!/\.pdf$/i.test(file.name) || file.size < 1 || file.size > 12 * 1024 * 1024) ?
+            'Choose a PDF up to 12 MB.' : '';
+        });
         return {
-          fields: [field('Publish Date', published), field('Resource Title', title), field('Short Summary', summary), field('Content', body)],
-          values: () => ({title: textValue(title, 'Title'), summary: textValue(summary, 'Summary'), body: textValue(body, 'Content'),
-            publishedAt: published.value}),
+          fields: [field('Publish Date', published), field('Resource Title', title),
+            field('Replace PDF File (optional)', pdf,
+              item.media?.pdf ? `Current PDF: ${plural(item.media.pdf.pages, 'page')}. Leave blank to keep it.` :
+                'No PDF currently attached.'),
+            el('label', {class: 'choice'}, downloads, 'Allow PDF downloads')],
+          values: async () => {
+            const uploadId = await uploadCurrentAffairsMedia(ctx, {pdf: pdf.files[0]}, {required: false});
+            return {title: textValue(title, 'Title'),
+              publishedAt: published.value, downloadsEnabled: downloads.checked, ...(uploadId ? {uploadId} : {})};
+          },
         };
       },
       remove: () => ({question: 'Delete this learning resource?'}),

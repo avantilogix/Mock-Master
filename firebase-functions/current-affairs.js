@@ -10,7 +10,7 @@ export function currentAffairs(api, { db, bucket, value, text, processDocument }
   const resources = db.collection('resources');
   const resource = async id => {
     const item = value(await resources.doc(id).get());
-    if (!item || item.kind !== 'current-affairs') fail(404, 'Current Affairs resource not found.');
+    if (!item || !['current-affairs', 'pyqs', 'syllabus'].includes(item.kind)) fail(404, 'Learning resource not found.');
     return item;
   };
   const checkDraft = (draft, uid) => {
@@ -76,9 +76,12 @@ export function currentAffairs(api, { db, bucket, value, text, processDocument }
         res.status(201).json({ id, files: output });
       });
     },
-    async publish(req) {
+    async publish(req, kind = 'current-affairs') {
       const { uploadId, publishedAt, downloadsEnabled } = req.body;
       const title = text(req.body.title, 'Resource title', 120);
+      if (!['current-affairs', 'pyqs', 'syllabus'].includes(kind)) fail(422, 'Choose a valid content section.');
+      const summary = kind === 'current-affairs' || req.body.summary === undefined ? '' : text(req.body.summary, 'Summary', 300);
+      const body = kind === 'current-affairs' || req.body.body === undefined ? '' : text(req.body.body, 'Content', 10_000);
       if (typeof publishedAt !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(publishedAt) ||
           Number.isNaN(Date.parse(publishedAt)) || new Date(publishedAt).toISOString().slice(0, 10) !== publishedAt) {
         fail(422, 'Enter a valid publish date.');
@@ -112,8 +115,8 @@ export function currentAffairs(api, { db, bucket, value, text, processDocument }
       }
       await db.runTransaction(async tx => {
         checkDraft(value(await tx.get(ref)), req.user.uid);
-        tx.create(resources.doc(draft.id), { kind: 'current-affairs', title, summary: '', body: '',
-          publishedAt, downloadsEnabled, media, createdAt: new Date().toISOString() });
+        tx.create(resources.doc(draft.id), { kind, title, summary, body, publishedAt, downloadsEnabled, media,
+          createdAt: new Date().toISOString() });
         tx.delete(ref);
       });
       return draft.id;
@@ -121,6 +124,11 @@ export function currentAffairs(api, { db, bucket, value, text, processDocument }
     async edit(id, req) {
       const { uploadId, publishedAt, downloadsEnabled } = req.body;
       const title = text(req.body.title, 'Resource title', 120);
+      const existingResource = await resource(id);
+      const summary = existingResource.kind === 'current-affairs' || req.body.summary === undefined ?
+        existingResource.summary || '' : text(req.body.summary, 'Summary', 300);
+      const body = existingResource.kind === 'current-affairs' || req.body.body === undefined ?
+        existingResource.body || '' : text(req.body.body, 'Content', 10_000);
       if (typeof publishedAt !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(publishedAt) ||
           Number.isNaN(Date.parse(publishedAt)) || new Date(publishedAt).toISOString().slice(0, 10) !== publishedAt) {
         fail(422, 'Enter a valid publish date.');
@@ -178,11 +186,11 @@ export function currentAffairs(api, { db, bucket, value, text, processDocument }
         }
         await db.runTransaction(async tx => {
           const existing = value(await tx.get(resources.doc(id)));
-          if (!existing || existing.kind !== 'current-affairs') fail(404, 'Current Affairs resource not found.');
+          if (!existing || !['current-affairs', 'pyqs', 'syllabus'].includes(existing.kind)) fail(404, 'Learning resource not found.');
           if (ref) checkDraft(value(await tx.get(ref)), req.user.uid);
           superseded = Object.keys(replacements).filter(kind => existing.media?.[kind])
             .map(kind => ({ kind, item: existing.media[kind] }));
-          tx.update(resources.doc(id), { title, publishedAt, downloadsEnabled,
+          tx.update(resources.doc(id), { title, summary, body, publishedAt, downloadsEnabled,
             media: { ...existing.media, ...replacements } });
           if (ref) tx.delete(ref);
         });

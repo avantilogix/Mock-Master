@@ -68,7 +68,6 @@ export function showDashboard(main, ctx, me) {
       el('div', {class: 'shortcut-grid'},
         shortcut('courses', 'My Courses', 'Continue purchased learning', '#my-courses', 'mint'),
         shortcut('test', 'Test Series', 'Practice exam questions', '#test-series', 'blue'),
-        shortcut('star', 'Free Tests', 'Try open practice content', '#free-tests', 'mint'),
         shortcut('courses', 'Book Store', 'Find secure study books', '#book-store', 'orange'),
         shortcut('files', 'Study Materials', 'Open your saved PDFs', '#materials', 'purple'),
         shortcut('news', 'Current Affairs', 'Daily exam updates', '#current-affairs', 'rose'),

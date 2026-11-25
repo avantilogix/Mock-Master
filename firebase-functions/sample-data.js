@@ -57,12 +57,6 @@ export const sampleResources = [
     body: '1. Revise the last 30 days of national and international updates.\n2. Note major economic announcements and government schemes.\n3. Make one-line facts for science, technology, awards, and sports.\n4. Attempt a weekly current-affairs quiz and review incorrect answers.',
   },
   {
-    kind: 'free-tests', id: 'sample-free-test',
-    title: 'Free General Aptitude Practice',
-    summary: 'A compact practice set to begin your Mission Selection journey.',
-    body: '1. What is 25% of 480? Answer: 120.\n2. Find the next number: 2, 6, 12, 20, __. Answer: 30.\n3. Choose the synonym of concise: Brief.\n4. What is the HCF of 18 and 24? Answer: 6.\n5. A train travels 120 km in 2 hours. Its speed is 60 km/h.',
-  },
-  {
     kind: 'pyqs', id: 'sample-pyq',
     title: 'How to revise previous-year questions',
     summary: 'A repeatable method for turning PYQs into an accurate revision system.',

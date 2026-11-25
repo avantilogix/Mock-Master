@@ -17,6 +17,44 @@ function documentError(error) {
   fail(422, 'Could not process this document.');
 }
 
+async function pdfText(file) {
+  if (!Buffer.isBuffer(file) || !file.subarray(0, 5).equals(Buffer.from('%PDF-'))) fail(422, 'Expected a PDF.');
+  let loading;
+  try {
+    loading = getDocument({data: new Uint8Array(file), useSystemFonts: true, isEvalSupported: false});
+    const document = await loading.promise;
+    if (document.numPages < 1 || document.numPages > 500) fail(422, 'Expected an unencrypted PDF with 1–500 pages.');
+    const lines = [];
+    for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber++) {
+      const page = await document.getPage(pageNumber);
+      const content = await page.getTextContent();
+      let line = '';
+      let baseline;
+      for (const item of content.items) {
+        if (typeof item.str !== 'string' || !item.str.trim()) continue;
+        const y = item.transform?.[5];
+        if (Number.isFinite(y) && Number.isFinite(baseline) && Math.abs(y - baseline) > 2 && line) {
+          lines.push(line.trim());
+          line = '';
+        }
+        line = line ? `${line} ${item.str.trim()}` : item.str.trim();
+        if (Number.isFinite(y)) baseline = y;
+        if (item.hasEOL) {
+          lines.push(line.trim());
+          line = '';
+          baseline = undefined;
+        }
+      }
+      if (line) lines.push(line.trim());
+    }
+    return lines.join('\n');
+  } catch (error) {
+    documentError(error);
+  } finally {
+    await loading?.destroy();
+  }
+}
+
 async function docxText(file) {
   const archive = await JSZip.loadAsync(file);
   const xml = await archive.file('word/document.xml')?.async('string');
@@ -188,21 +226,7 @@ export async function importQuestions(file, format) {
   if (!Buffer.isBuffer(file) || !file.length) fail(400, 'Upload a non-empty document.');
   try {
     let text;
-    if (format === 'pdf') {
-      if (!file.subarray(0, 5).equals(Buffer.from('%PDF-'))) fail(422, 'Expected a PDF.');
-      const loading = getDocument({ data: new Uint8Array(file), useSystemFonts: true, isEvalSupported: false });
-      try {
-        const document = await loading.promise;
-        const pages = [];
-        for (let page = 1; page <= document.numPages; page++) {
-          const content = await (await document.getPage(page)).getTextContent();
-          pages.push(content.items.map(item => `${item.str}${item.hasEOL ? '\n' : ' '}`).join(''));
-        }
-        text = pages.join('\n\f');
-      } finally {
-        await loading.destroy();
-      }
-    }
+    if (format === 'pdf') text = await pdfText(file);
     else if (format === 'docx') text = await docxText(file);
     else if (format === 'txt') text = new TextDecoder('utf-8', { fatal: true }).decode(file);
     else fail(400, 'Choose PDF, DOCX or UTF-8 text.');

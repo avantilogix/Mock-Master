@@ -21,8 +21,8 @@ export function currentAffairs(api, { db, directory, text, processDocument, look
   const signature = (id, uid, expires, download) => createHmac('sha256', secret)
     .update(`${id}|${uid}|${expires}|${download}`).digest('base64url');
   const resource = id => {
-    const item = one("SELECT * FROM resources WHERE id=? AND kind='current-affairs'", id);
-    if (!item) fail(404, 'Current Affairs resource not found.');
+    const item = one("SELECT * FROM resources WHERE id=? AND kind IN ('current-affairs','pyqs','syllabus')", id);
+    if (!item) fail(404, 'Learning resource not found.');
     return item;
   };
   const publicResource = item => ({
@@ -118,9 +118,12 @@ export function currentAffairs(api, { db, directory, text, processDocument, look
         res.sendStatus(204);
       });
     },
-    async publish(req) {
+    async publish(req, kind = 'current-affairs') {
       const { uploadId, publishedAt, downloadsEnabled } = req.body;
       const title = text(req.body.title, 'Resource title', 120);
+      if (!['current-affairs', 'pyqs', 'syllabus'].includes(kind)) fail(422, 'Choose a valid content section.');
+      const summary = kind === 'current-affairs' || req.body.summary === undefined ? '' : text(req.body.summary, 'Summary', 300);
+      const body = kind === 'current-affairs' || req.body.body === undefined ? '' : text(req.body.body, 'Content', 10_000);
       if (typeof publishedAt !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(publishedAt) ||
           Number.isNaN(Date.parse(publishedAt)) || new Date(publishedAt).toISOString().slice(0, 10) !== publishedAt) {
         fail(422, 'Enter a valid publish date.');
@@ -143,7 +146,8 @@ export function currentAffairs(api, { db, directory, text, processDocument, look
       db.exec('BEGIN');
       try {
         db.prepare(`INSERT INTO resources (id,kind,title,summary,body,created_at,published_at,media,downloads_enabled)
-          VALUES (?,'current-affairs',?,'','',?,?,?,?)`).run(draft.id, title, new Date().toISOString(), publishedAt, JSON.stringify(media), Number(downloadsEnabled));
+          VALUES (?,?,?,?,?,?,?,?,?)`).run(draft.id, kind, title, summary, body, new Date().toISOString(),
+          publishedAt, JSON.stringify(media), Number(downloadsEnabled));
         db.prepare('DELETE FROM resource_uploads WHERE id=?').run(draft.id);
         db.exec('COMMIT');
       } catch (error) {
@@ -155,12 +159,16 @@ export function currentAffairs(api, { db, directory, text, processDocument, look
     async edit(id, req) {
       const { uploadId, publishedAt, downloadsEnabled } = req.body;
       const title = text(req.body.title, 'Resource title', 120);
+      const existingResource = resource(id);
+      const summary = existingResource.kind === 'current-affairs' || req.body.summary === undefined ?
+        existingResource.summary : text(req.body.summary, 'Summary', 300);
+      const body = existingResource.kind === 'current-affairs' || req.body.body === undefined ?
+        existingResource.body : text(req.body.body, 'Content', 10_000);
       if (typeof publishedAt !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(publishedAt) ||
           Number.isNaN(Date.parse(publishedAt)) || new Date(publishedAt).toISOString().slice(0, 10) !== publishedAt) {
         fail(422, 'Enter a valid publish date.');
       }
       if (typeof downloadsEnabled !== 'boolean') fail(422, 'Choose whether downloads are allowed.');
-      resource(id);
       if (uploadId !== undefined && uploadId !== null && uploadId !== '' && typeof uploadId !== 'string') {
         fail(422, 'Choose files to upload.');
       }
@@ -197,8 +205,8 @@ export function currentAffairs(api, { db, directory, text, processDocument, look
           superseded = Object.keys(replacements).filter(kind => media[kind])
             .map(kind => media[kind].file || kind);
           Object.assign(media, replacements);
-          db.prepare('UPDATE resources SET title=?, published_at=?, downloads_enabled=?, media=? WHERE id=?')
-            .run(title, publishedAt, Number(downloadsEnabled), JSON.stringify(media), id);
+          db.prepare('UPDATE resources SET title=?, summary=?, body=?, published_at=?, downloads_enabled=?, media=? WHERE id=?')
+            .run(title, summary, body, publishedAt, Number(downloadsEnabled), JSON.stringify(media), id);
           if (draft) db.prepare('DELETE FROM resource_uploads WHERE id=?').run(draft.id);
           db.exec('COMMIT');
         } catch (error) {

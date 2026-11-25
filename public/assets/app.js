@@ -1,10 +1,10 @@
-import {showAdmin} from './admin.js?v=sectionwise-v2';
+import {showAdmin} from './admin.js?v=public-learning-resources-v3';
 import {showAdminCourseWorkspace} from './admin-course-workspace.js';
-import {showCatalog, showContentLibrary, showCourse, showDashboard, showMyCourses} from './course.js?v=course-folders-v1';
+import {showCatalog, showContentLibrary, showCourse, showDashboard, showMyCourses} from './course.js?v=public-learning-resources-v3';
 import {api, firebaseAuth} from './services.js?v=persistent-session';
 import {showSignIn} from './signin.js?v=persistent-session';
 import {showBook, showLeaderboard, showTest, showVideo} from './study.js?v=sectionwise-test-ui';
-import {showLearningContent, showNotifications, showProgress, showResource} from './reports.js?v=current-affairs-media';
+import {showLearningContent, showNotifications, showProgress, showResource} from './reports.js?v=public-learning-resources-v3';
 import {showDownloads, showReferrals, showSaved, showTimetable, socialFooter} from './features.js?v=stable-mobile-admin-downloads';
 import {showCourseGroups, showShareRate, showVideos} from './engagement.js?v=youtube-rotate-v2';
 import {showEbook, showEbookDemo, showEbookStore} from './ebooks.js?v=continuous-reader-v2';
@@ -17,7 +17,7 @@ const nav = document.querySelector('#nav');
 const notice = document.querySelector('#notice');
 const routes = new Map([
   ['home', 0], ['catalog', 0], ['my-courses', 0], ['test-series', 0], ['book-store', 0], ['materials', 0],
-  ['free-tests', 0], ['current-affairs', 0], ['pyqs', 0], ['syllabus', 0], ['progress', 0], ['notifications', 0],
+  ['current-affairs', 0], ['pyqs', 0], ['syllabus', 0], ['progress', 0], ['notifications', 0],
   ['timetable', 0], ['referrals', 0], ['downloads', 0],
   ['videos', 0], ['groups', 0], ['share-app', 0], ['about', 0], ['privacy', 0], ['terms', 0], ['copyright', 0], ['saved', 2],
   ['course', 1], ['test', 2], ['book', 2], ['ebook', 1], ['ebook-demo', 1], ['resource', 1], ['video', 2], ['leaderboard', 2], ['signin', 0],
@@ -472,7 +472,7 @@ function render(focus = false) {
     'my-courses': '#home', 'test-series': '#home', 'book-store': '#home', 'materials': '#home',
     'progress': '#profile', 'notifications': '#home', 'timetable': '#home', 'referrals': '#profile',
     'downloads': '#home', 'videos': '#home', 'groups': '#profile', 'share-app': '#profile',
-    'about': '#profile', 'privacy': '#profile', 'terms': '#profile', 'copyright': '#profile', 'free-tests': '#home',
+    'about': '#profile', 'privacy': '#profile', 'terms': '#profile', 'copyright': '#profile',
     'current-affairs': '#home', 'pyqs': '#home', 'syllabus': '#home', 'support': '#profile',
     'profile': '#home', 'course': '#catalog', 'ebook': '#book-store', 'admin': '#home',
     'admin-course': '#admin', 'admin-publish-test': parsed.page === 'admin-publish-test' ?
@@ -523,7 +523,6 @@ function render(focus = false) {
         panel('Student Support', el('p', {},
           'Learners can manage their profile, submit support requests, view notifications, and access protected downloads from their account.')));
       break;
-    case 'free-tests':
     case 'current-affairs':
     case 'pyqs':
     case 'syllabus': showLearningContent(main, ctx, parsed.page, {signInLink}); break;

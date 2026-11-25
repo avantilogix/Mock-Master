@@ -30,6 +30,7 @@ const app = createApp({
   trustLocalProxy: env.TRUST_LOCAL_PROXY === 'true',
   manualPayment: { upiId: env.UPI_ID, payeeName: env.UPI_PAYEE_NAME },
   videoDir: join(directory, 'videos'),
+  authRequestLimit: dummyLogin && env.PLAYWRIGHT_TEST_MODE === '1' ? 1000 : undefined,
 });
 app.listen(port, host, () => {
   console.log(`Mission Selection listening on ${host}:${port}`);

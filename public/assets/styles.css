@@ -433,6 +433,20 @@ fieldset { margin: 0; min-width: 0; border-radius: .7rem; }
 .affairs-month > summary { display: flex; justify-content: space-between; cursor: pointer; color: var(--accent-dark); font-size: 1.05rem; font-weight: 800; }
 .affairs-month > summary small { color: var(--muted); font-weight: 600; }
 .affairs-month .resource-card { margin-top: .7rem; box-shadow: none; background: var(--bg); }
+.affairs-navigation-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr)); gap: .8rem; }
+.affairs-nav-card { display: grid; justify-items: start; gap: .35rem; min-height: 5.2rem; padding: 1rem 1.15rem; border: 1px solid var(--line); border-radius: 1rem; color: var(--ink); background: white; text-align: left; }
+.affairs-nav-card:hover, .affairs-nav-card:focus-visible { border-color: var(--accent); background: var(--accent-soft); }
+.affairs-nav-card strong { color: var(--accent-dark); font-size: 1.2rem; }
+.affairs-nav-card small { color: var(--muted); }
+.affairs-selection-title { margin: 1rem 0; }
+.affairs-back { margin-bottom: .5rem; }
+.affairs-day { margin-top: 1.2rem; }
+.affairs-day > h3 { margin: 0 0 .65rem; color: var(--accent-dark); }
+.affairs-day-resources { display: grid; gap: .75rem; }
+.affairs-resource-card { display: grid; gap: .65rem; box-shadow: none; background: white; }
+.affairs-resource-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: .75rem; flex-wrap: wrap; }
+.affairs-resource-heading h3 { margin: 0; }
+.affairs-resource-card .affairs-media-card { display: flex; align-items: center; justify-content: space-between; gap: .8rem; flex-wrap: wrap; }
 .auth-layout { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(20rem, .8fr); gap: clamp(1.2rem, 5vw, 4rem); align-items: center; min-height: 34rem; }
 .auth-story { padding: clamp(.25rem, 4vw, 2rem); }
 .auth-story h1 { max-width: 12ch; font-size: clamp(2.15rem, 5vw, 3.7rem); }

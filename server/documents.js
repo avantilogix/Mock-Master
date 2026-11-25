@@ -36,9 +36,42 @@ async function documentCommand(file, command, args, encoding = 'utf8') {
   }
 }
 
-function pdfCommand(file, command, args, encoding) {
+async function pdfText(file) {
   if (!Buffer.isBuffer(file) || !file.subarray(0, 5).equals(Buffer.from('%PDF-'))) fail(422, 'Expected a PDF.');
-  return documentCommand(file, command, args, encoding);
+  let loading;
+  try {
+    loading = getDocument({data: new Uint8Array(file), useSystemFonts: true, isEvalSupported: false});
+    const document = await loading.promise;
+    if (document.numPages < 1 || document.numPages > 500) fail(422, 'Expected an unencrypted PDF with 1–500 pages.');
+    const lines = [];
+    for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber++) {
+      const page = await document.getPage(pageNumber);
+      const content = await page.getTextContent();
+      let line = '';
+      let baseline;
+      for (const item of content.items) {
+        if (typeof item.str !== 'string' || !item.str.trim()) continue;
+        const y = item.transform?.[5];
+        if (Number.isFinite(y) && Number.isFinite(baseline) && Math.abs(y - baseline) > 2 && line) {
+          lines.push(line.trim());
+          line = '';
+        }
+        line = line ? `${line} ${item.str.trim()}` : item.str.trim();
+        if (Number.isFinite(y)) baseline = y;
+        if (item.hasEOL) {
+          lines.push(line.trim());
+          line = '';
+          baseline = undefined;
+        }
+      }
+      if (line) lines.push(line.trim());
+    }
+    return lines.join('\n');
+  } catch (error) {
+    documentError(error);
+  } finally {
+    await loading?.destroy();
+  }
 }
 
 async function docxText(file) {
@@ -206,7 +239,7 @@ export async function importQuestions(file, format) {
   if (!Buffer.isBuffer(file) || !file.length) fail(400, 'Upload a non-empty document.');
   try {
     let text;
-    if (format === 'pdf') text = await pdfCommand(file, 'pdftotext', path => ['-enc', 'UTF-8', '-layout', path, '-']);
+    if (format === 'pdf') text = await pdfText(file);
     else if (format === 'docx') text = await docxText(file);
     else if (format === 'txt') text = new TextDecoder('utf-8', { fatal: true }).decode(file);
     else fail(400, 'Choose PDF, DOCX or UTF-8 text.');
