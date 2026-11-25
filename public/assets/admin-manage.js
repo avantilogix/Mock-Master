@@ -1,8 +1,8 @@
 import {api} from './services.js';
 import {contentKinds} from './reports.js?v=current-affairs-media';
 import {coverPicker} from './publishing-media.js';
-import {subjectQuestionManager} from './question-sections.js?v=sectionwise-test-ui';
-import {bindForm, button, confirmDelete, el, field, formatDate, icon, idPart, loadInto, rule, run, say, status, textValue} from './ui.js';
+import {subjectQuestionManager} from './question-sections.js?v=sectionwise-v2';
+import {bindForm, button, confirmDelete, el, field, formatDate, icon, idPart, link, loadInto, rule, run, say, status, textValue} from './ui.js';
 
 const rupees = paise => new Intl.NumberFormat('en-IN', {style: 'currency', currency: 'INR'}).format(paise / 100);
 const plural = (count, word) => `${count} ${word}${count === 1 ? '' : 's'}`;
@@ -336,7 +336,9 @@ export function publishedManager({ctx, onChange, ...helpers}) {
         onChange?.(key);
       }, {label: removal.label || 'Delete', question: removal.question});
     const isTest = active === 'tests';
-    const manageActions = el('div', {class: 'actions manage-actions'}, edit,
+    const openCourse = active === 'courses' ?
+      link('Open Course Content', `#admin-course/${idPart(item.id)}`, 'button secondary') : null;
+    const manageActions = el('div', {class: 'actions manage-actions'}, openCourse, edit,
       isTest && removal.blocked ? null : remove);
     const article = el('article', {class: `manage-item${isTest ? ' manage-test-item' : ''}`},
       el('div', {class: 'manage-main'},

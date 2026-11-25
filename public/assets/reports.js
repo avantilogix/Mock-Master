@@ -1,5 +1,5 @@
 import {api} from './services.js';
-import {pdfReader} from './ebooks.js?v=current-affairs-media';
+import {pdfReader} from './ebooks.js?v=continuous-reader-v2';
 import {bindForm, button, el, entries, field, heading, icon, idPart, link, loadInto, panel, run, say, status, textValue} from './ui.js';
 
 export const contentKinds = {

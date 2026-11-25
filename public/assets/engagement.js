@@ -54,14 +54,44 @@ export function showVideos(main) {
   main.append(list);
   loadInto(list, {current: () => true}, async () => {
     const rows = await api('/videos');
-    list.replaceChildren(...(rows.length ? rows.map(video => el('article', {class: 'video-card'},
-      el('div', {class: 'video-frame'},
+    list.replaceChildren(...(rows.length ? rows.map(video => {
+      const player = el('div', {class: 'video-frame', tabindex: '0', 'aria-label': `${video.title} video player`},
         el('iframe', {src: `https://www.youtube-nocookie.com/embed/${encodeURIComponent(video.videoId)}`,
           title: video.title, loading: 'lazy',
           allow: 'accelerometer; autoplay; clipboard-write; encrypted-media; fullscreen; gyroscope; picture-in-picture; web-share',
-          allowfullscreen: '', referrerpolicy: 'strict-origin-when-cross-origin'})),
-      el('div', {class: 'video-copy'}, el('span', {class: 'badge'}, video.courseTitle || 'Mission Selection'),
-        el('h2', {}, video.title), el('p', {class: 'muted'}, video.description)))) :
+          allowfullscreen: '', referrerpolicy: 'strict-origin-when-cross-origin'}));
+      const feedback = status();
+      const rotate = button('Rotate for landscape', 'secondary');
+      rotate.addEventListener('click', () => run(rotate, feedback, async () => {
+        if (document.fullscreenElement === player) {
+          await document.exitFullscreen();
+          screen.orientation?.unlock?.();
+          return;
+        }
+        if (!player.requestFullscreen) throw new Error('Landscape fullscreen is not supported on this device. Use the YouTube player’s fullscreen control instead.');
+        await player.requestFullscreen();
+        if (typeof screen.orientation?.lock !== 'function') {
+          say(feedback, 'Fullscreen opened. Rotate your device to switch to landscape.');
+          return;
+        }
+        try {
+          await screen.orientation.lock('landscape');
+          say(feedback, 'Landscape mode enabled. Press Escape or Back to return.');
+        } catch {
+          say(feedback, 'Fullscreen opened. Rotate your device to switch to landscape.');
+        }
+      }, 'Opening landscape video…'));
+      const exit = button('Exit fullscreen', 'secondary video-exit-fullscreen');
+      exit.addEventListener('click', () => rotate.click());
+      player.addEventListener('fullscreenchange', () => {
+        if (document.fullscreenElement !== player) screen.orientation?.unlock?.();
+      });
+      player.append(exit);
+      return el('article', {class: 'video-card'}, player,
+        el('div', {class: 'video-copy'}, el('span', {class: 'badge'}, video.courseTitle || 'Mission Selection'),
+          el('h2', {}, video.title), el('p', {class: 'muted'}, video.description),
+          el('div', {class: 'video-controls'}, rotate, feedback)));
+    }) :
       [el('div', {class: 'empty-library'}, el('h2', {}, 'Videos Coming Soon'),
         el('p', {class: 'muted'}, 'New lessons will appear here after the admin publishes them.'))]));
   });

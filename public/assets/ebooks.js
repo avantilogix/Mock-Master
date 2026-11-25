@@ -147,8 +147,12 @@ export function showEbookDemo(main, ctx, bookId) {
 
 export function pdfReader(main, ctx, book) {
   let page = 1;
-  let objectUrl;
-  const imageArea = el('div', {class: 'panel'});
+  const objectUrls = new Map();
+  const loadingPages = new Set();
+  const visiblePages = new Set();
+  const pageNodes = Array.from({length: book.pages}, (_, index) =>
+    el('article', {class: 'pdf-page-shell', 'data-page': String(index + 1),
+      'aria-label': `Page ${index + 1} of ${book.pages}`}));
   const counter = status();
   const previous = button('Previous Page', 'secondary');
   const next = button('Next Page', 'secondary');
@@ -158,25 +162,80 @@ export function pdfReader(main, ctx, book) {
     download.addEventListener('click', () => buttonDownload(ctx, book, download, counter));
     controls.append(download);
   }
+  const imageArea = el('div', {class: 'pdf-reader-pages', role: 'region', 'aria-label': `${book.title} PDF pages`},
+    pageNodes);
   main.append(controls, imageArea);
-  const render = () => {
-    previous.disabled = next.disabled = true;
-    loadInto(imageArea, ctx, async () => {
-      const blob = await api(`${book.pagePath}/${page}`, {ctx, auth: book.auth !== false, image: true});
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-      objectUrl = URL.createObjectURL(blob);
-      const image = el('img', {class: 'book-page protected-reader', src: objectUrl,
-        alt: `${book.title}, page ${page}`, draggable: 'false'});
-      imageArea.replaceChildren(image);
-      say(counter, `Page ${page} of ${book.pages}`);
-      previous.disabled = page === 1;
-      next.disabled = page === book.pages;
-    });
+  const placeholder = pageNumber => el('div', {class: 'pdf-page-placeholder', 'aria-hidden': 'true'},
+    `Page ${pageNumber} · loading as you read`);
+  const setPage = pageNumber => {
+    page = Math.max(1, Math.min(book.pages, pageNumber));
+    say(counter, `Page ${page} of ${book.pages}`);
+    previous.disabled = page === 1;
+    next.disabled = page === book.pages;
   };
-  previous.addEventListener('click', () => { if (page > 1) { page--; render(); } });
-  next.addEventListener('click', () => { if (page < book.pages) { page++; render(); } });
-  ctx.signal.addEventListener('abort', () => { if (objectUrl) URL.revokeObjectURL(objectUrl); }, {once: true});
-  render();
+  const loadPage = async pageNumber => {
+    const node = pageNodes[pageNumber - 1];
+    if (!node || objectUrls.has(pageNumber) || loadingPages.has(pageNumber)) return;
+    loadingPages.add(pageNumber);
+    node.replaceChildren(placeholder(pageNumber));
+    try {
+      const blob = await api(`${book.pagePath}/${pageNumber}`, {ctx, auth: book.auth !== false, image: true});
+      if (!ctx.current()) return;
+      const objectUrl = URL.createObjectURL(blob);
+      objectUrls.set(pageNumber, objectUrl);
+      node.replaceChildren(el('img', {class: 'book-page protected-reader', src: objectUrl,
+        alt: `${book.title}, page ${pageNumber}`, draggable: 'false', decoding: 'async'}));
+    } catch (error) {
+      if (error.name === 'AbortError' || !ctx.current()) return;
+      const retry = button('Retry page', 'secondary');
+      retry.addEventListener('click', () => loadPage(pageNumber));
+      node.replaceChildren(el('div', {class: 'pdf-page-error', role: 'alert'},
+        el('span', {}, `Could not load page ${pageNumber}: ${error.message}`), retry));
+    } finally {
+      loadingPages.delete(pageNumber);
+    }
+  };
+  const observer = 'IntersectionObserver' in window ? new IntersectionObserver(entries => {
+    for (const entry of entries) {
+      const pageNumber = Number(entry.target.dataset.page);
+      if (entry.isIntersecting) visiblePages.add(pageNumber);
+      else visiblePages.delete(pageNumber);
+    }
+    const visible = entries.filter(entry => entry.isIntersecting)
+      .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top)[0];
+    if (visible) setPage(Number(visible.target.dataset.page));
+    const nearby = new Set([...visiblePages].flatMap(number =>
+      [number - 1, number, number + 1].filter(value => value > 0 && value <= book.pages)));
+    for (const pageNumber of nearby) loadPage(pageNumber);
+    for (const [pageNumber, objectUrl] of objectUrls) {
+      if (Math.abs(pageNumber - page) > 3 && !visiblePages.has(pageNumber)) {
+        URL.revokeObjectURL(objectUrl);
+        objectUrls.delete(pageNumber);
+        pageNodes[pageNumber - 1].replaceChildren(placeholder(pageNumber));
+      }
+    }
+  }, {rootMargin: '900px 0px'}) : null;
+  for (const pageNode of pageNodes) {
+    observer?.observe(pageNode);
+    pageNode.append(placeholder(Number(pageNode.dataset.page)));
+  }
+  const scrollToPage = pageNumber => {
+    const target = Math.max(1, Math.min(book.pages, pageNumber));
+    pageNodes[target - 1]?.scrollIntoView({behavior: 'smooth', block: 'start'});
+    if (!observer) {
+      setPage(target);
+      loadPage(target);
+    }
+  };
+  previous.addEventListener('click', () => scrollToPage(page - 1));
+  next.addEventListener('click', () => scrollToPage(page + 1));
+  ctx.signal.addEventListener('abort', () => {
+    observer?.disconnect();
+    for (const objectUrl of objectUrls.values()) URL.revokeObjectURL(objectUrl);
+    objectUrls.clear();
+  }, {once: true});
+  setPage(1);
+  if (!observer) loadPage(1);
 }
 
 async function buttonDownload(ctx, book, control, feedback) {

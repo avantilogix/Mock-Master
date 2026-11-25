@@ -1,9 +1,9 @@
 import {api} from './services.js';
-import {publishedManager, weekdays} from './admin-manage.js?v=sectionwise-test-ui';
+import {publishedManager, weekdays} from './admin-manage.js?v=course-folders';
 import {adminContentForm} from './reports.js?v=current-affairs-media';
 import {coverPicker} from './publishing-media.js';
 import {manualQuestions} from './manual-questions.js';
-import {subjectQuestionManager} from './question-sections.js?v=sectionwise-test-ui';
+import {subjectQuestionManager} from './question-sections.js?v=sectionwise-v2';
 import {bindForm, button, el, entries, field, fieldError, formatDate, heading, icon, idPart, loadInto, panel, rule, run, say, status, textValue} from './ui.js';
 
 const pdfAccept = '.pdf,application/pdf';
@@ -490,7 +490,8 @@ export function showAdmin(main, ctx) {
   const example = JSON.stringify([{prompt: 'What is 2 + 2?', options: ['3', '4'], answer: 1}], null, 2);
   const creationMethod = el('select', {},
     el('option', {value: 'existing'}, 'Import File / Questions (JSON)'),
-    el('option', {value: 'manual'}, 'Create Test Manually'));
+    el('option', {value: 'manual'}, 'Create Test Manually'),
+    el('option', {value: 'sectionwise'}, 'Create Section-Wise Mock'));
   const manual = manualQuestions();
   const editor = el('textarea', {class: 'json', rows: '12', required: '', spellcheck: 'false', placeholder: example});
   const importFile = rule(el('input', {type: 'file', accept: '.pdf,.docx,.txt', required: ''}), (_, control) =>
@@ -499,6 +500,10 @@ export function showAdmin(main, ctx) {
   const importStatus = status();
   const importForm = el('form', {}, field('Question File', importFile, 'PDF, DOCX, or TXT. Importing replaces the JSON draft below.'),
     importButton, importStatus);
+  importFile.addEventListener('change', () => {
+    const file = importFile.files[0];
+    say(importStatus, file ? `${file.name} selected. Choose Import Questions to continue.` : '');
+  });
   bindForm(importForm, importButton, importStatus, async () => {
     const file = importFile.files[0];
     const format = file?.name.split('.').pop().toLowerCase();
@@ -530,6 +535,12 @@ export function showAdmin(main, ctx) {
   const questionPaperDownload = el('input', {type: 'checkbox'});
   const marksPerQuestion = el('input', {type: 'number', min: '0.25', max: '10', step: '0.25', value: '1'});
   const negativeMark = el('input', {type: 'number', min: '0', max: '5', step: '0.25', value: '0'});
+  const sectionWiseSize = el('select', {},
+    el('option', {value: '100'}, '100 questions · 100 marks'),
+    el('option', {value: '200'}, '200 questions · 200 marks'));
+  const sectionWiseSizeField = field('Section-Wise Mock Size', sectionWiseSize,
+    'Upload questions separately for each subject. The combined test must contain exactly the selected number of questions, at 1 mark each.');
+  sectionWiseSizeField.hidden = true;
   const liveFields = el('div', {class: 'live-test-fields', hidden: ''},
     field('Live Start Date and Time (IST)', startsAt), field('Attempts Allowed Until Expiry', attemptsLimit),
     field('Live Window Expiry Date and Time (IST)', expiresAt));
@@ -538,6 +549,8 @@ export function showAdmin(main, ctx) {
     liveFields.hidden = !isLive;
     startsAt.required = expiresAt.required = attemptsLimit.required = isLive;
   };
+  const testTypeField = field('Test Type', testType,
+    'Mock tests allow unlimited attempts. Attempt limits apply only to live tests.');
   testType.addEventListener('change', updateTestType);
   updateTestType();
   const jsonField = field('Questions (JSON)', editor,
@@ -545,36 +558,46 @@ export function showAdmin(main, ctx) {
   const importSection = el('div', {}, el('h3', {}, 'Import Questions (optional)'), importForm);
   const updateCreationMethod = () => {
     const isManual = creationMethod.value === 'manual';
+    const isSectionWise = creationMethod.value === 'sectionwise';
+    if (isSectionWise) testType.value = 'mock';
+    testTypeField.hidden = isSectionWise;
     manual.node.hidden = manual.node.disabled = !isManual;
-    jsonField.hidden = editor.disabled = isManual;
+    jsonField.hidden = editor.disabled = isManual || isSectionWise;
     subjectManager.node.hidden = isManual;
     subjectManager.node.querySelectorAll('input, button').forEach(control => { control.disabled = isManual; });
-    importSection.hidden = isManual;
+    importSection.hidden = isManual || isSectionWise;
     importFile.disabled = importButton.disabled = isManual;
+    sectionWiseSizeField.hidden = !isSectionWise;
+    negativeMark.max = isSectionWise ? '1' : '5';
+    updateTestType();
   };
   creationMethod.addEventListener('change', updateCreationMethod);
   updateCreationMethod();
   const testStatus = status();
   const testFields = el('fieldset', {class: 'upload-fields'}, testField, field('Test Title', testTitle),
-    field('Test Type', testType, 'Mock tests allow unlimited attempts. Attempt limits apply only to live tests.'), liveFields,
+    testTypeField, liveFields,
     field('Duration (minutes)', durationMinutes, 'Used for every attempt.'),
     field('Marks Per Correct Answer', marksPerQuestion),
     field('Negative Mark Per Wrong Answer', negativeMark),
     el('label', {class: 'choice'}, questionPaperDownload, 'Enable Question Paper Download after first completed attempt'),
-    subjectManager.node, jsonField, manual.node);
+    sectionWiseSizeField, subjectManager.node, jsonField, manual.node);
   const testForm = el('form', {}, testFields, publish, testStatus);
   bindForm(testForm, publish, testStatus, async () => {
+    const sectionWise = creationMethod.value === 'sectionwise';
     const questions = questionData(creationMethod.value === 'manual' ? JSON.stringify(manual.values()) : editor.value);
+    if (sectionWise && questions.length !== Number(sectionWiseSize.value)) {
+      throw new Error(`This ${sectionWiseSize.value}-mark mock needs exactly ${sectionWiseSize.value} imported questions across its sections. Current total: ${questions.length}.`);
+    }
     testFields.disabled = creationMethod.disabled = importButton.disabled = true;
     try {
       await post(`/admin/courses/${idPart(testCourse.value)}/tests`, {json: {
-        title: textValue(testTitle, 'Test title'), questions, live: testType.value === 'live',
-        startsAt: testType.value === 'live' ? startsAt.value : undefined,
-        expiresAt: testType.value === 'live' ? expiresAt.value : undefined,
+        title: textValue(testTitle, 'Test title'), questions, live: !sectionWise && testType.value === 'live',
+        startsAt: !sectionWise && testType.value === 'live' ? startsAt.value : undefined,
+        expiresAt: !sectionWise && testType.value === 'live' ? expiresAt.value : undefined,
         durationMinutes: durationMinutes.valueAsNumber,
-        attemptsLimit: testType.value === 'live' ? attemptsLimit.valueAsNumber : 0,
+        attemptsLimit: !sectionWise && testType.value === 'live' ? attemptsLimit.valueAsNumber : 0,
         questionPaperDownload: questionPaperDownload.checked,
-        marksPerQuestion: marksPerQuestion.valueAsNumber, negativeMark: negativeMark.valueAsNumber,
+        marksPerQuestion: sectionWise ? 1 : marksPerQuestion.valueAsNumber, negativeMark: negativeMark.valueAsNumber,
       }});
       testForm.reset();
       manual.reset();

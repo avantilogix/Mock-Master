@@ -1,3 +1,5 @@
+import {restoreCompletedSession} from './auth-persistence.js';
+
 const firebaseBase = 'https://www.gstatic.com/firebasejs/11.10.0/';
 
 export async function api(path, {ctx, auth = false, method = 'GET', json, binary, image = false, blob = false, imageUpload} = {}) {
@@ -50,7 +52,12 @@ export async function firebaseAuth() {
     import(`${firebaseBase}firebase-app.js`),
     import(`${firebaseBase}firebase-auth.js`)
   ]);
-  return {sdk, auth: sdk.getAuth(initializeApp(config.firebase)), personalTimetable: config.personalTimetable,
+  const auth = sdk.getAuth(initializeApp(config.firebase));
+  const passwordAuth = sdk.getAuth(initializeApp(config.firebase, 'password-verification'));
+  await restoreCompletedSession(sdk, auth);
+  await sdk.setPersistence(passwordAuth, sdk.inMemoryPersistence);
+  await sdk.signOut(passwordAuth);
+  return {sdk, auth, passwordAuth, personalTimetable: config.personalTimetable,
     publishingMedia: config.publishingMedia === true};
 }
 

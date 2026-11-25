@@ -1,12 +1,13 @@
-import {showAdmin} from './admin.js?v=sectionwise-test-ui';
-import {showCatalog, showContentLibrary, showCourse, showDashboard, showMyCourses} from './course.js?v=mock-test-ui';
-import {api, firebaseAuth} from './services.js?v=ebook-store-final';
-import {showSignIn} from './signin.js?v=multi-exam-selection';
+import {showAdmin} from './admin.js?v=sectionwise-v2';
+import {showAdminCourseWorkspace} from './admin-course-workspace.js';
+import {showCatalog, showContentLibrary, showCourse, showDashboard, showMyCourses} from './course.js?v=course-folders-v1';
+import {api, firebaseAuth} from './services.js?v=persistent-session';
+import {showSignIn} from './signin.js?v=persistent-session';
 import {showBook, showLeaderboard, showTest, showVideo} from './study.js?v=sectionwise-test-ui';
 import {showLearningContent, showNotifications, showProgress, showResource} from './reports.js?v=current-affairs-media';
 import {showDownloads, showReferrals, showTimetable, socialFooter} from './features.js?v=stable-mobile-admin-downloads';
-import {showCourseGroups, showShareRate, showVideos} from './engagement.js?v=youtube-fullscreen';
-import {showEbook, showEbookDemo, showEbookStore} from './ebooks.js?v=current-affairs-media';
+import {showCourseGroups, showShareRate, showVideos} from './engagement.js?v=youtube-rotate-v2';
+import {showEbook, showEbookDemo, showEbookStore} from './ebooks.js?v=continuous-reader-v2';
 import {examPreferenceField, normalizeExamPreferences} from './exam-preferences.js';
 import {bindForm, button, el, field, heading, icon, idPart, link, loadInto, panel, run, say, status, textValue} from './ui.js';
 
@@ -19,13 +20,14 @@ const routes = new Map([
   ['timetable', 0], ['referrals', 0], ['downloads', 0],
   ['videos', 0], ['groups', 0], ['share-app', 0], ['about', 0], ['privacy', 0], ['terms', 0],
   ['course', 1], ['test', 2], ['book', 2], ['ebook', 1], ['ebook-demo', 1], ['resource', 1], ['video', 2], ['leaderboard', 2], ['signin', 0],
-  ['profile', 0], ['support', 0], ['admin', 0]
+  ['profile', 0], ['support', 0], ['admin', 0], ['admin-course', 1]
 ]);
 let firebase;
 let session;
 let view;
 let authState = 'idle';
 let signingOut = false;
+let phoneLoginPending = false;
 let activeHash;
 
 function route(hash = location.hash) {
@@ -58,6 +60,7 @@ async function startAuth() {
   try {
     firebase = await firebaseAuth();
     firebase.sdk.onAuthStateChanged(firebase.auth, user => {
+      if (phoneLoginPending) return;
       const first = authState !== 'ready';
       authState = 'ready';
       if (signingOut && user) return;
@@ -86,6 +89,12 @@ function setSession(user) {
   render(true);
 }
 
+function completePhoneLogin(user) {
+  phoneLoginPending = false;
+  authState = 'ready';
+  setSession(user);
+}
+
 async function refreshProfile(current) {
   const me = await api('/me', {ctx: current, auth: true});
   if (current.current()) current.me = me;
@@ -94,6 +103,10 @@ async function refreshProfile(current) {
 async function initializeProfile(current) {
   try {
     await refreshProfile(current);
+    if (!current.me?.name && current.user.displayName) {
+      await api('/me', {ctx: current, auth: true, method: 'PUT', json: {name: current.user.displayName}});
+      if (current.current()) current.me.name = current.user.displayName;
+    }
     let localExams = [];
     try { localExams = JSON.parse(localStorage.getItem('missionExams') || '[]'); }
     catch { localExams = normalizeExamPreferences(localStorage.getItem('missionExam')); }
@@ -108,7 +121,10 @@ async function initializeProfile(current) {
     if (current.current()) {
       current.pending = false;
       const parsed = route();
-      if (parsed.page === 'signin' && current.me?.admin) location.replace('#admin');
+      if (parsed.page === 'signin' && current.me?.admin) {
+        const next = nextAfterSignIn(parsed);
+        location.replace(next === '#home' ? '#admin' : next);
+      }
       else render(main.contains(document.activeElement));
     }
   }
@@ -123,7 +139,8 @@ function renderNav(parsed) {
     navLink('My Courses', 'My', 'courses', '#my-courses', parsed.page === 'my-courses'),
     navLink('Downloads', 'Downloads', 'download', '#downloads', parsed.page === 'downloads'),
     session ? navLink('Profile', 'Me', 'profile', '#profile', parsed.page === 'profile') : navLink('Sign In', 'Sign in', 'profile', '#signin', parsed.page === 'signin'));
-  if (session?.me?.admin) nav.append(navLink('Admin', 'Admin', 'admin', '#admin', parsed.page === 'admin'));
+  if (session?.me?.admin) nav.append(navLink('Admin', 'Admin', 'admin', '#admin',
+    parsed.page === 'admin' || parsed.page === 'admin-course'));
   nav.style.setProperty('--nav-count', nav.children.length);
 }
 
@@ -296,15 +313,15 @@ function receiptList(ctx) {
 function showLegalPage(type) {
   if (type === 'privacy') {
     main.append(
-      ...heading('Privacy Policy', 'Last updated: 23 November 2026'),
+      ...heading('Privacy Policy', 'Last updated: 25 November 2026'),
       panel('Our Commitment', el('p', {}, 'Mission Selection respects your privacy and uses personal information only to operate, secure, and improve the learning service. This policy explains what we collect, why we collect it, and the choices available to you.')),
       panel('Information We Collect', el('ul', {class: 'legal-list'},
-        el('li', {}, el('strong', {}, 'Account information: '), 'verified mobile number, Firebase account identifier, display name, and target exam.'),
+        el('li', {}, el('strong', {}, 'Account information: '), 'verified mobile number, username, Firebase account identifier, display name, and target exam. Password credentials are managed by Firebase Authentication; Mission Selection does not collect an email address or receive or store your plaintext password.'),
         el('li', {}, el('strong', {}, 'Learning information: '), 'course purchases, test attempts, scores, saved progress, timetable entries, and support requests.'),
         el('li', {}, el('strong', {}, 'Payment information: '), 'UPI transaction reference, amount, payment note, and approval status. Mission Selection does not collect your UPI PIN, bank password, or complete bank-account credentials.'),
         el('li', {}, el('strong', {}, 'Technical information: '), 'basic device, security, error, and service-log information required to keep the application reliable.'))),
       panel('How Information Is Used', el('ul', {class: 'legal-list'},
-        el('li', {}, 'Verify your identity and restore purchases on the same mobile number.'),
+        el('li', {}, 'Verify your identity with phone OTP and your account password, and restore purchases on the same mobile number.'),
         el('li', {}, 'Provide courses, mock tests, protected books, videos, groups, downloads, notifications, and progress reports.'),
         el('li', {}, 'Review payment proof, approve access, prevent misuse, and support refunds or disputes where applicable.'),
         el('li', {}, 'Detect fraud, protect paid content, respond to support requests, and meet legal or security obligations.'))),
@@ -320,10 +337,10 @@ function showLegalPage(type) {
       panel('Contact', el('p', {}, 'For privacy questions or requests, open the Support section and send a message from your signed-in account.'), link('Contact Support', '#support', 'button')));
   } else {
     main.append(
-      ...heading('Terms & Conditions', 'Last updated: 23 November 2026'),
+      ...heading('Terms & Conditions', 'Last updated: 25 November 2026'),
       panel('Acceptance and Eligibility', el('p', {}, 'By creating an account or using Mission Selection, you agree to these terms. You must provide a genuine, verified Indian mobile number and use the application lawfully. If you are a minor or require guardian consent, use the service under appropriate supervision.')),
       panel('Account Responsibilities', el('ul', {class: 'legal-list'},
-        el('li', {}, 'Keep control of your mobile number, device, and one-time passwords.'),
+        el('li', {}, 'Keep control of your verified mobile number, one-time passwords, username, and password. Sign-in requires a phone OTP and your account password.'),
         el('li', {}, 'Do not share, sell, rent, transfer, or provide access to another person’s paid account.'),
         el('li', {}, 'Provide accurate profile, payment, and support information.'),
         el('li', {}, 'Mission Selection may restrict or disable accounts involved in abuse, fraud, security risks, or repeated violations.'))),
@@ -368,7 +385,12 @@ function showSupport(ctx) {
 }
 
 function render(focus = false) {
-  const parsed = route();
+  let parsed = route();
+  if (!session && parsed.page !== 'signin') {
+    const next = location.hash || '#home';
+    history.replaceState(null, '', `#signin?${new URLSearchParams({next})}`);
+    parsed = route();
+  }
   activeHash = location.hash;
   view?.abort();
   view = new AbortController();
@@ -387,10 +409,12 @@ function render(focus = false) {
     'about': '#profile', 'privacy': '#profile', 'terms': '#profile', 'free-tests': '#home',
     'current-affairs': '#home', 'pyqs': '#home', 'syllabus': '#home', 'support': '#profile',
     'profile': '#home', 'course': '#catalog', 'ebook': '#book-store', 'admin': '#home',
+    'admin-course': '#admin',
   };
   if (backTargets[parsed.page]) {
     const back = link('', backTargets[parsed.page], 'page-back');
-    back.append(icon('back', 'line-icon'), el('span', {}, parsed.page === 'admin' ? 'Back to Home' : 'Back'));
+    const label = parsed.page === 'admin' ? 'Back to Home' : parsed.page === 'admin-course' ? 'Back to Admin' : 'Back';
+    back.append(icon('back', 'line-icon'), el('span', {}, label));
     main.append(back);
   }
   const needSignIn = () => main.append(...heading('Sign In to Continue', 'This area is available after you sign in with your mobile number.'), signInLink());
@@ -455,7 +479,11 @@ function render(focus = false) {
         main.append(...heading('You’re Signed In'), link('Continue', next, 'button'));
         location.replace(next);
       } else {
-        showSignIn(main, ctx, firebase, startAuth, authState);
+        showSignIn(main, ctx, firebase, startAuth, authState, {
+          begin: () => { phoneLoginPending = true; },
+          cancel: () => { phoneLoginPending = false; },
+          complete: completePhoneLogin,
+        });
       }
       break;
     case 'support': showSupport(ctx); break;
@@ -482,6 +510,14 @@ function render(focus = false) {
           el('div', {class: 'actions'}, refresh, link('Back to Missions', '#catalog', 'button')), feedback);
       }
       else showAdmin(main, ctx);
+      break;
+    case 'admin-course':
+      if (!current) needSignIn();
+      else if (!current.me) main.append(...heading('Course Workspace'), profileUnavailable());
+      else if (!current.me.admin) {
+        main.append(...heading('Admin Access Required',
+          'The server must verify your account before you can organize course content.'));
+      } else showAdminCourseWorkspace(main, ctx, courseId);
       break;
     default: main.append(...heading('Page Not Found'), link('Back to Courses', '#catalog', 'button'));
   }

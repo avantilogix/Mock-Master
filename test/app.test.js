@@ -265,7 +265,7 @@ test('chapter videos upload for admins and stream only through signed links for 
 
   const material = await (await request(`/courses/${id}`, 'admin')).json();
   assert.deepEqual(material.videos, [{ id: videoId, title: 'Algebra Lesson', subject: 'Maths', chapter: 'Chapter 4',
-    type: 'video/mp4', size: mp4.length }]);
+    type: 'video/mp4', size: mp4.length, folderId: null }]);
   assert.equal((await request(`/videos/${videoId}/link`, 'buyer')).status, 403);
 
   for (const uid of ['buyer', 'other']) db.prepare('INSERT OR IGNORE INTO students (uid, phone) VALUES (?, ?)').run(uid, users.get(uid).phone);

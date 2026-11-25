@@ -140,6 +140,50 @@ function chapterFolders(subjects, courseId) {
           videos.map(video => link(`Video · ${video.title}`, `#video/${idPart(courseId)}/${idPart(video.id)}`, 'chapter-link video-link'))))))));
 }
 
+function folderTree(folders, items, renderItems) {
+  if (!folders?.length) return renderItems(items);
+  const folderIds = new Set(folders.map(folder => folder.id));
+  const children = new Map();
+  for (const folder of folders) {
+    const parentId = folderIds.has(folder.parentId) ? folder.parentId : '';
+    if (!children.has(parentId)) children.set(parentId, []);
+    children.get(parentId).push(folder);
+  }
+  const itemGroups = new Map();
+  for (const item of items) {
+    const folderId = folderIds.has(item.folderId) ? item.folderId : '';
+    if (!itemGroups.has(folderId)) itemGroups.set(folderId, []);
+    itemGroups.get(folderId).push(item);
+  }
+  const renderGroup = group => group?.length ? renderItems(group) : null;
+  const renderChildren = parentId => (children.get(parentId) || [])
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map(folder => el('details', {class: 'course-content-folder'},
+      el('summary', {}, el('strong', {}, folder.name)),
+      renderGroup(itemGroups.get(folder.id)),
+      ...renderChildren(folder.id)));
+  return el('div', {class: 'course-folder-tree'},
+    renderGroup(itemGroups.get('')),
+    ...renderChildren(''));
+}
+
+function testRows(ctx, items, courseId) {
+  return entries(items, 'No practice tests have been published for this course yet.', test => {
+    const leaderboard = test.live && Date.parse(test.expiresAt) <= Date.now() ?
+      link('Leaderboard', `#leaderboard/${idPart(courseId)}/${idPart(test.id)}`,
+        'button secondary test-series-action test-series-leaderboard') : null;
+    leaderboard?.prepend(icon('leaderboard', 'line-icon'));
+    return el('div', {class: 'test-series-row'},
+      el('div', {}, link(test.title, `#test/${idPart(courseId)}/${idPart(test.id)}`, 'material-link'),
+        test.live ? el('span', {class: 'badge live-badge'},
+          `Live · ${formatDate(test.startsAt)} IST · ${test.durationMinutes} min`) : null),
+      el('div', {class: 'actions test-row-actions'},
+        leaderboard,
+        test.questionPaperDownload && test.completedAttempt ? questionPaperButton(ctx, test) : null,
+        iconStartTest(courseId, test.id)));
+  });
+}
+
 export function showContentLibrary(main, ctx, me, kind, action) {
   const config = {
     'test-series': { title: 'Test Series', icon: 'test', description: 'Choose a purchased mission and start a published mock test.', empty: 'Tests become available after you purchase a mission.', item: 'tests' },
@@ -175,18 +219,28 @@ export function showContentLibrary(main, ctx, me, kind, action) {
       if (config.item === 'books') {
         const subjects = chapterGroups(material.books, material.videos || []);
         const chapterCount = [...subjects.values()].reduce((sum, chapters) => sum + chapters.size, 0);
+        const content = folderTree(material.folders?.filter(folder => folder.kind === 'content'),
+          [...material.books, ...(material.videos || [])],
+          folderItems => chapterFolders(chapterGroups(
+            folderItems.filter(item => material.books.some(book => book.id === item.id)),
+            folderItems.filter(item => (material.videos || []).some(video => video.id === item.id))), course.id));
         return el('article', {class: 'course-material'},
           el('div', {class: 'course-material-head'},
             el('span', {class: 'folder-icon', 'aria-hidden': 'true'}, libraryIcon()),
             el('div', {}, el('h2', {}, course.title), el('p', {class: 'muted'},
               `${subjects.size} subjects · ${chapterCount} chapters`))),
-          chapterFolders(subjects, course.id));
+          content);
       }
+      const testContent = folderTree(material.folders?.filter(folder => folder.kind === 'tests'),
+        config.item === 'tests' ? material.tests : material[config.item],
+        folderItems => config.item === 'tests' ? testRows(ctx, folderItems, course.id) :
+          entries(folderItems, config.empty, item => el('div', {class: 'test-series-row'},
+            el('strong', {}, item.title))));
       return el('article', {class: 'library-folder'},
         el('span', {class: 'folder-icon', 'aria-hidden': 'true'}, libraryIcon()),
         el('div', {class: 'library-folder-content'},
           el('h2', {}, course.title),
-          entries(material[config.item], config.empty, item => {
+          config.item === 'tests' ? testContent : entries(material[config.item], config.empty, item => {
             const leaderboard = item.live && Date.parse(item.expiresAt) <= Date.now() ?
               link('Leaderboard', `#leaderboard/${idPart(course.id)}/${idPart(item.id)}`,
                 'button secondary test-series-action test-series-leaderboard') : null;
@@ -252,6 +306,7 @@ export function showCourse(main, ctx, session, action) {
   const access = el('section', {class: 'panel section course-access'});
   const reviews = el('div');
   const owned = owns(session?.me, id);
+  const admin = Boolean(session?.me?.admin);
   main.append(link('All Courses', '#catalog', 'back'), intro, media, access, panel('Course Reviews', reviews));
 
   loadInto(access, ctx, async () => {
@@ -270,14 +325,14 @@ export function showCourse(main, ctx, session, action) {
       media.hidden = false;
       media.append(gallery);
     }
-    if (course.expired) {
+    if (course.expired && !admin) {
       access.replaceChildren(el('h2', {}, 'Course Expired'),
         el('p', {}, 'This course is closed to new purchases and study access.'),
         link('Explore Active Courses', '#catalog', 'button secondary'));
-    } else if (owned) {
+    } else if (owned || admin) {
       access.className = 'section';
       showMaterials(access, ctx, path, id);
-      showReviewForm();
+      if (owned) showReviewForm();
     } else {
       access.replaceChildren(el('h2', {}, 'Course Access'));
       if (!session) {
@@ -321,7 +376,7 @@ export function showCourse(main, ctx, session, action) {
 
 function showMaterials(access, ctx, path, id) {
   loadInto(access, ctx, async () => {
-    const {tests, books, videos = [], messages} = await api(path, {ctx, auth: true});
+    const {tests, books, videos = [], folders = [], messages} = await api(path, {ctx, auth: true});
     const receipt = button('Download Purchase Receipt', 'secondary');
     const receiptFeedback = status();
     receipt.addEventListener('click', () => run(receipt, receiptFeedback, async () => {
@@ -354,15 +409,19 @@ function showMaterials(access, ctx, path, id) {
         say(feedback, 'Message posted. Reopen this course to refresh the discussion.', true);
       }
     }, 'Posting message…');
+    const testFolders = folders.filter(folder => folder.kind === 'tests');
+    const contentFolders = folders.filter(folder => folder.kind === 'content');
+    const testsContent = folderTree(testFolders, tests, items => testRows(ctx, items, id));
+    const studyItems = [...books, ...videos];
+    const courseContent = folderTree(contentFolders, studyItems, items => {
+      const bookIds = new Set(books.map(book => book.id));
+      return chapterFolders(chapterGroups(items.filter(item => bookIds.has(item.id)),
+        items.filter(item => !bookIds.has(item.id))), id);
+    });
     access.replaceChildren(panel('Course Documents', el('div', {class: 'actions'}, receipt), receiptFeedback),
-    panel('Practice & Live Tests', entries(tests, 'No practice tests have been published for this course yet.', test =>
-      el('div', {class: 'test-series-row'},
-        el('div', {}, link(test.title, `#test/${idPart(id)}/${idPart(test.id)}`, 'material-link'),
-          test.live ? el('span', {class: 'badge live-badge'},
-            `Live · ${formatDate(test.startsAt)} IST · ${test.durationMinutes} min`) : null),
-        link('Start', `#test/${idPart(id)}/${idPart(test.id)}`, 'button secondary')))),
-    panel('Study Materials by Chapter', chapterFolders(chapterGroups(books, videos), id)),
-    panel('Course Discussion', messageList, form));
+      panel('Practice & Live Tests', testsContent),
+      panel('Study Materials by Chapter', courseContent),
+      panel('Course Discussion', messageList, form));
   });
 }
 

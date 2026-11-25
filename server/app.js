@@ -12,6 +12,7 @@ import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import { fail, importQuestions, mobile, pageCount, renderDemoPage, renderPage, validateQuestions } from './documents.js';
 import { paymentReference, upiDetails, upiPaymentUri } from './manual-payments.js';
 import { currentAffairs } from './current-affairs.js';
+import { folderBody, folderView, idInput, itemFolderBody, itemTypeInput, kindInput, validateFolder, validateItemFolder } from '../firebase-functions/workspace.js';
 
 function text(value, label, max) {
   if (typeof value !== 'string' || !value.trim() || value.length > max) fail(422, `${label} is required (maximum ${max} characters).`);
@@ -534,12 +535,13 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     requirePurchase(req, id);
     res.json({
       downloadsEnabled: Boolean(downloadsEnabled),
-      tests: all(`SELECT t.id, t.title, t.live, t.starts_at AS startsAt, t.expires_at AS expiresAt,
+      folders: all('SELECT id, name, parent_id AS parentId, kind FROM course_folders WHERE course=? ORDER BY rowid', id),
+      tests: all(`SELECT t.id, t.title, t.folder_id AS folderId, t.live, t.starts_at AS startsAt, t.expires_at AS expiresAt,
         t.duration_minutes AS durationMinutes, t.question_paper_download AS questionPaperDownload,
         EXISTS(SELECT 1 FROM attempts a WHERE a.test=t.id AND a.uid=?) AS completedAttempt
         FROM tests t WHERE t.course=? ORDER BY t.rowid`, req.user.uid, id),
-      books: all('SELECT id, title, pages, subject, chapter FROM books WHERE course=? ORDER BY subject, chapter, rowid', id),
-      videos: all('SELECT id, title, subject, chapter, type, size FROM chapter_videos WHERE course=? ORDER BY subject, chapter, rowid', id),
+      books: all('SELECT id, title, pages, subject, chapter, folder_id AS folderId FROM books WHERE course=? ORDER BY subject, chapter, rowid', id),
+      videos: all('SELECT id, title, subject, chapter, type, size, folder_id AS folderId FROM chapter_videos WHERE course=? ORDER BY subject, chapter, rowid', id),
       messages: all(`SELECT COALESCE(NULLIF(s.name, ''), 'Student') AS name, m.text
         FROM messages m JOIN students s USING (uid) WHERE m.course=? ORDER BY m.id DESC LIMIT 100`, id).reverse(),
     });
@@ -989,6 +991,52 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
   });
 
   api.use('/admin', admin);
+  const workspaceFolders = id => all('SELECT id, name, parent_id AS parentId, kind FROM course_folders WHERE course=? ORDER BY rowid', id);
+  api.get('/admin/courses/:id/workspace', (req, res) => {
+    const id = course(idInput(req.params.id)).id;
+    const kind = kindInput(req.query.kind);
+    const types = kind === 'tests' ? ['test'] : ['book', 'chapterVideo'];
+    const items = types.flatMap(type => all(`SELECT id, title, folder_id AS folderId FROM ${itemTypeInput(type).table} WHERE course=? ORDER BY rowid`, id)
+      .map(item => ({ ...item, type })));
+    res.json({ folders: workspaceFolders(id).filter(folder => folder.kind === kind), items });
+  });
+  api.post('/admin/courses/:id/folders', (req, res) => {
+    const id = course(idInput(req.params.id)).id;
+    const folder = { id: randomUUID(), ...folderBody(req.body, true) };
+    transaction(() => {
+      validateFolder(workspaceFolders(id), folder);
+      run('INSERT INTO course_folders (id, course, kind, name, parent_id) VALUES (?, ?, ?, ?, ?)',
+        folder.id, id, folder.kind, folder.name, folder.parentId);
+    });
+    res.status(201).json(folderView(folder));
+  });
+  api.patch('/admin/courses/:id/folders/:folderId', (req, res) => {
+    const id = course(idInput(req.params.id)).id;
+    idInput(req.params.folderId);
+    const patch = folderBody(req.body);
+    const folder = transaction(() => {
+      const folders = workspaceFolders(id);
+      const current = folders.find(item => item.id === req.params.folderId);
+      if (!current) fail(404, 'Folder not found.');
+      const updated = { ...current, ...patch };
+      validateFolder(folders, updated);
+      run('UPDATE course_folders SET name=?, parent_id=? WHERE id=?', updated.name, updated.parentId, updated.id);
+      return updated;
+    });
+    res.json(folderView(folder));
+  });
+  api.patch('/admin/courses/:id/workspace-items/:type/:itemId', (req, res) => {
+    const id = course(idInput(req.params.id)).id;
+    idInput(req.params.itemId);
+    const type = itemTypeInput(req.params.type);
+    const folderId = itemFolderBody(req.body);
+    transaction(() => {
+      if (!one(`SELECT id FROM ${type.table} WHERE id=? AND course=?`, req.params.itemId, id)) fail(404, 'Item not found.');
+      validateItemFolder(workspaceFolders(id), folderId, type.kind);
+      run(`UPDATE ${type.table} SET folder_id=? WHERE id=?`, folderId, req.params.itemId);
+    });
+    res.json({ id: req.params.itemId, type: req.params.type, folderId });
+  });
   api.get('/admin/analytics', (_req, res) => {
     const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
     res.json({
@@ -1281,7 +1329,7 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
         },
       }), createWriteStream(path, { mode: 0o600 }));
       if (!size || !looksLikeVideo(path, type)) fail(422, 'The file is not a valid MP4, WebM, or MOV video.');
-      run('INSERT INTO chapter_videos VALUES (?, ?, ?, ?, ?, ?, ?, ?)', id, courseId, title, subject, chapter, type, size,
+      run('INSERT INTO chapter_videos (id, course, title, subject, chapter, type, size, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', id, courseId, title, subject, chapter, type, size,
         new Date().toISOString());
     } catch (error) {
       rmSync(path, { force: true });
@@ -1416,9 +1464,9 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
           fail(422, 'Live expiry must be after the start time, with 1–100 attempts allowed.');
         }
       }
-      run(`UPDATE tests SET course=?, title=?, questions=?, live=?, duration_minutes=?, marks_per_question=?,
+      run(`UPDATE tests SET folder_id=CASE WHEN course != ? THEN NULL ELSE folder_id END, course=?, title=?, questions=?, live=?, duration_minutes=?, marks_per_question=?,
         negative_mark=?, question_paper_download=?, starts_at=?, expires_at=?, attempts_limit=? WHERE id=?`,
-      selectedCourse.id, text(body.title, 'Title', 120), JSON.stringify(validateQuestions(body.questions)),
+      selectedCourse.id, selectedCourse.id, text(body.title, 'Title', 120), JSON.stringify(validateQuestions(body.questions)),
       live ? 1 : 0,
       body.durationMinutes ?? row.duration_minutes, body.marksPerQuestion ?? row.marks_per_question,
       body.negativeMark ?? row.negative_mark, body.questionPaperDownload ? 1 : 0,
@@ -1485,7 +1533,7 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
       }
       const files = all('SELECT id FROM chapter_videos WHERE course=?', id);
       transaction(() => {
-        for (const table of ['attempts', 'messages', 'reviews', 'tests', 'books', 'chapter_videos']) {
+        for (const table of ['attempts', 'messages', 'reviews', 'tests', 'books', 'chapter_videos', 'course_folders']) {
           run(`DELETE FROM ${table} WHERE course=?`, id);
         }
         run("UPDATE videos SET course='' WHERE course=?", id);

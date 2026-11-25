@@ -16,6 +16,8 @@ import { registerVideoRoutes } from './chapter-videos.js';
 import { registerPublishedRoutes } from './published.js';
 import { courseCutoff, expiryInput, publishingMedia, requireActive } from './publishing-media.js';
 import { currentAffairs } from './current-affairs.js';
+import { registerWorkspaceRoutes } from './workspace-routes.js';
+import { folderView } from './workspace.js';
 
 initializeApp();
 
@@ -633,22 +635,23 @@ function createApp() {
     const completed = (await db.collection('attempts').where('uid', '==', req.user.uid)
       .where('course', '==', id).get()).docs.map(value);
     const completedTests = new Set(completed.map(attempt => attempt.test));
-    const tests = rawTests.map(item => ({ id: item.id, title: item.title, live: Boolean(item.live),
+    const tests = rawTests.map(item => ({ id: item.id, title: item.title, folderId: item.folderId ?? null, live: Boolean(item.live),
       startsAt: item.startsAt || '', expiresAt: item.expiresAt || '', durationMinutes: item.durationMinutes || 0,
       questionPaperDownload: Boolean(item.questionPaperDownload),
       completedAttempt: completedTests.has(item.id) }));
     const books = (await db.collection('books').where('course', '==', id).get()).docs.map(value)
       .sort((a, b) => `${a.subject || ''}${a.chapter || ''}`.localeCompare(`${b.subject || ''}${b.chapter || ''}`))
-      .map(item => ({ id: item.id, title: item.title, pages: item.pages,
+      .map(item => ({ id: item.id, title: item.title, folderId: item.folderId ?? null, pages: item.pages,
         subject: item.subject || 'General', chapter: item.chapter || 'Chapter 1', images: item.images || [] }));
     const videos = (await db.collection('chapterVideos').where('course', '==', id).get()).docs.map(value).sort(byNewest)
-      .map(({ id, title, subject, chapter, type, size }) => ({ id, title, subject, chapter, type, size }));
+      .map(({ id, title, subject, chapter, type, size, folderId }) => ({ id, title, subject, chapter, type, size, folderId: folderId ?? null }));
+    const folders = (await db.collection('courseFolders').where('course', '==', id).get()).docs.map(value).map(folderView);
     const messages = (await db.collection('messages').where('course', '==', id).get()).docs.map(value).sort(byNewest).slice(0, 100);
     const namedMessages = await Promise.all(messages.map(async message => {
       const student = value(await db.collection('students').doc(message.uid).get());
       return { name: student?.name || 'Student', text: message.text };
     }));
-    res.json({ tests, books, videos, messages: namedMessages.reverse() });
+    res.json({ tests, books, videos, folders, messages: namedMessages.reverse() });
   });
   api.post('/courses/:id/messages', async (req, res) => {
     const { id } = await course(req.params.id);
@@ -1200,6 +1203,7 @@ function createApp() {
   });
 
   api.use('/admin', admin);
+  registerWorkspaceRoutes(api, { db, value, course });
   api.get('/admin/analytics', async (_req, res) => {
     const [students, courses, orders, ebookOrders, attempts, liveTests] = await Promise.all([
       queryCollection('students'), queryCollection('courses'), queryCollection('orders'),

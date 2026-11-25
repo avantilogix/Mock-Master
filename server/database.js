@@ -89,6 +89,12 @@ export function openDatabase(path) {
       subject TEXT NOT NULL, chapter TEXT NOT NULL, type TEXT NOT NULL, size INTEGER NOT NULL,
       created_at TEXT NOT NULL
     ) STRICT;
+    CREATE TABLE IF NOT EXISTS course_folders (
+      id TEXT PRIMARY KEY, course TEXT NOT NULL REFERENCES courses, kind TEXT NOT NULL CHECK(kind IN ('content', 'tests')),
+      name TEXT NOT NULL, parent_id TEXT
+    ) STRICT;
+    CREATE UNIQUE INDEX IF NOT EXISTS course_folder_siblings
+      ON course_folders (course, kind, COALESCE(parent_id, ''), name);
     CREATE TABLE IF NOT EXISTS student_schedules (
       id TEXT PRIMARY KEY, uid TEXT NOT NULL REFERENCES students, title TEXT NOT NULL, day TEXT NOT NULL,
       starts_at TEXT NOT NULL, duration INTEGER NOT NULL, description TEXT NOT NULL,
@@ -101,6 +107,10 @@ export function openDatabase(path) {
     ) STRICT;
     CREATE INDEX IF NOT EXISTS student_schedules_uid ON student_schedules (uid);
   `);
+  for (const table of ['tests', 'books', 'chapter_videos']) {
+    const columns = new Set(db.prepare(`PRAGMA table_info(${table})`).all().map(column => column.name));
+    if (!columns.has('folder_id')) db.exec(`ALTER TABLE ${table} ADD COLUMN folder_id TEXT`);
+  }
   // Rows created before this column existed keep '' and are shown as "Date not recorded".
   for (const table of ['courses', 'tests', 'books']) {
     const columns = new Set(db.prepare(`PRAGMA table_info(${table})`).all().map(column => column.name));

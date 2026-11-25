@@ -59,6 +59,10 @@ export function subjectQuestionManager(questionsEditor, importFile) {
       const name = el('input', {required: '', maxlength: '100', value: subject.name, 'aria-label': 'Subject name'});
       const file = el('input', {type: 'file', accept: '.pdf,.docx,.txt', 'aria-label': `Question file for ${subject.name}`});
       const importFeedback = status();
+      file.addEventListener('change', () => {
+        const selected = file.files[0];
+        say(importFeedback, selected ? `${selected.name} selected. Import it to replace this section’s questions.` : '');
+      });
       const importButton = button('Import Questions for Subject', 'secondary');
       const count = el('small', {class: 'subject-question-count'});
       subject.countElement = count;

@@ -161,6 +161,7 @@ export function registerPublishedRoutes(api, { db, bucket, value, text, byNewest
       if (['videos', 'tests'].includes(type) && patch.course && !(await tx.get(collection('courses').doc(patch.course))).exists) {
         fail(404, 'Course not found.');
       }
+      if (type === 'tests' && patch.course && patch.course !== existing.course) patch.folderId = null;
       tx.update(ref, patch);
     });
     res.sendStatus(204);
@@ -177,6 +178,8 @@ export function registerPublishedRoutes(api, { db, bucket, value, text, byNewest
         const dependents = await Promise.all(['orders', 'tests', 'books', 'chapterVideos', 'videos'].map(name => has(name, 'course')));
         if (dependents[0]) fail(409, 'This course has purchase requests or enrolments and cannot be deleted.');
         if (dependents.some(Boolean)) fail(409, 'Remove or unlink this course’s published content before deleting it.');
+        const folders = await tx.get(at('courseFolders', 'course', id));
+        for (const folder of folders.docs) tx.delete(folder.ref);
       }
       if (type === 'tests' && await has('attempts', 'test')) {
         fail(409, 'This test has student results and cannot be deleted.');

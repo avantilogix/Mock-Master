@@ -189,6 +189,11 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px
 .reader-controls { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .5rem; }
 .reader-controls .status { grid-area: 1 / 1 / 2 / -1; text-align: center; }
 .book-page { border-radius: var(--radius-sm); }
+.pdf-reader-pages { display: grid; gap: 1rem; margin-block: 1rem; }
+.pdf-page-shell { scroll-margin-block: 1rem; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); }
+.pdf-page-placeholder, .pdf-page-error { display: grid; place-items: center; gap: .75rem; min-height: 18rem; padding: 1.5rem; color: var(--muted); text-align: center; }
+.pdf-page-placeholder { aspect-ratio: 1 / 1.414; }
+.pdf-page-error { color: var(--danger); }
 .score-trend { overflow-x: auto; }
 .trend-point { min-width: max(1.8rem, 7%); }
 .trend-point > span { background: var(--accent); }
