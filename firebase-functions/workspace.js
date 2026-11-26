@@ -68,6 +68,23 @@ export function validateItemFolder(folders, folderId, kind) {
   }
 }
 
+export function folderSubtree(folders, folderId) {
+  const root = folders.find(folder => folder.id === folderId);
+  if (!root) fail(404, 'Folder not found.');
+  const ids = new Set([root.id]);
+  const pending = [root.id];
+  while (pending.length) {
+    const parentId = pending.pop();
+    for (const folder of folders) {
+      if (folder.parentId === parentId && !ids.has(folder.id)) {
+        ids.add(folder.id);
+        pending.push(folder.id);
+      }
+    }
+  }
+  return { root, ids };
+}
+
 export function validateFolderSnapshot(snapshot, courseId, folderId, kind, value) {
   const folder = snapshot && value(snapshot);
   validateItemFolder(folder && folder.course === courseId ? [folder] : [], folderId, kind);

@@ -32,9 +32,17 @@ export const status = () => el('p', {class: 'status', role: 'status', 'aria-atom
 export const panel = (title, ...children) => el('section', {class: 'panel section'}, el('h2', {}, title), children);
 export const idPart = id => encodeURIComponent(String(id));
 
+export function friendlyMessage(text) {
+  const message = String(text || '');
+  if (/failed to fetch|network(?:error|[ -]request[ -]failed)|load failed|net::err_|err_(?:name|internet|connection)|\b(?:type|syntax)error\b|stack trace|api route not found|(?:request|upload|download|response|server|http).{0,30}\(\d{3}\)/i.test(message)) {
+    return 'Could not connect. Please check your internet connection and try again.';
+  }
+  return message;
+}
+
 export function say(node, text, error = false) {
   node.classList.toggle('error', error);
-  node.textContent = text;
+  node.textContent = error ? friendlyMessage(text) : text;
 }
 
 const controlSelector = 'input:not([type="radio"]):not([type="checkbox"]), select, textarea';
@@ -137,7 +145,10 @@ export async function run(control, feedback, action, busy = 'Working…') {
   try {
     await action();
   } catch (error) {
-    if (error.name !== 'AbortError' && feedback.isConnected) say(feedback, error.message, true);
+    if (error.name !== 'AbortError' && feedback.isConnected) {
+      say(feedback, ['TypeError', 'SyntaxError'].includes(error.name) ?
+        'Something went wrong. Please try again.' : error.message, true);
+    }
   } finally {
     control.disabled = false;
   }

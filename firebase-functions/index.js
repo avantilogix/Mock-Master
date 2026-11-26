@@ -12,13 +12,13 @@ import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import { fail, importQuestions, mobile, pageCount, renderDemoPage, renderPage, renderUnmarkedPage, validateQuestions } from './documents.js';
 import { paymentReference, upiDetails, upiPaymentUri } from './manual-payments.js';
 import { sampleBookPdf, sampleCourses, sampleResources } from './sample-data.js';
-import { registerVideoRoutes } from './chapter-videos.js';
+import { registerVideoFileRoute, registerVideoRoutes } from './chapter-videos.js';
 import { registerPublishedRoutes } from './published.js';
 import { courseCutoff, expiryInput, publishingMedia, requireActive } from './publishing-media.js';
 import { currentAffairs } from './current-affairs.js';
 import { registerWorkspaceRoutes } from './workspace-routes.js';
 import { folderView, idInput, validateFolderSnapshot } from './workspace.js';
-import { approvedCourseOrder } from './course-entitlements.js';
+import { approvedCourseOrder, isPublicResourceTest, legacyCourseOrder } from './course-entitlements.js';
 
 initializeApp();
 
@@ -31,6 +31,9 @@ const normalizedAdminPhones = new Set([
   '9131463747', '9499772876', '7016660896', '9664651421',
 ]);
 const normalizePhone = value => String(value || '').replace(/\D/g, '').replace(/^91(?=\d{10}$)/, '');
+const isAdmin = (uid, phone) => parameterValue(adminUidsParameter).split(',').map(value => value.trim()).includes(uid) ||
+  normalizedAdminPhones.has(normalizePhone(phone)) ||
+  parameterValue(adminPhonesParameter).split(',').map(normalizePhone).filter(Boolean).includes(normalizePhone(phone));
 const upiIdParameter = defineString('UPI_ID', { default: '' });
 const upiPayeeNameParameter = defineString('UPI_PAYEE_NAME', { default: '' });
 const firebaseProjectIdParameter = defineString('PUBLIC_PROJECT_ID', { default: '' });
@@ -355,10 +358,7 @@ function createApp() {
     if (student?.disabled) {
       fail(403, 'This account is disabled. Contact support to request reactivation.');
     }
-    const admins = new Set(parameterValue(adminUidsParameter).split(',').map(uid => uid.trim()).filter(Boolean));
-    const configuredAdminPhones = parameterValue(adminPhonesParameter).split(',').map(normalizePhone);
-    const admin = admins.has(user.uid) || normalizedAdminPhones.has(normalizePhone(user.phone)) ||
-      configuredAdminPhones.includes(normalizePhone(user.phone));
+    const admin = isAdmin(user.uid, user.phone);
     req.user = { uid: user.uid, phone: user.phone, admin };
     next();
   };
@@ -465,20 +465,42 @@ function createApp() {
       stock: book.stock, images: book.images || [] })));
   });
   api.get('/videos', async (_req, res) => {
-    res.json(await Promise.all((await queryCollection('videos')).sort(byNewest).map(async video => ({
+    res.json((await queryCollection('videos')).filter(video => !video.course).sort(byNewest).map(video => ({
       id: video.id,
       title: video.title,
       description: video.description,
       videoId: video.videoId,
-      courseTitle: video.course ? value(await db.collection('courses').doc(video.course).get())?.title : '',
+      courseTitle: '',
       createdAt: video.createdAt,
-    }))));
+    })));
   });
 
   const media = publishingMedia(api, { bucket, processDocument });
   const affairs = currentAffairs(api, { db, bucket, value, text, processDocument });
+  registerVideoFileRoute(api, { db, bucket, value, requirePurchase, videoUser: async uid => {
+    const student = value(await db.collection('students').doc(uid).get());
+    if (!student || student.disabled || typeof student.phone !== 'string' || !mobile.test(student.phone)) {
+      fail(403, 'This account is unavailable or disabled.');
+    }
+    return { uid, phone: student.phone, admin: isAdmin(uid, student.phone) };
+  } });
   api.use(authLimit, login);
   affairs.routes();
+  api.get('/videos/accessible', async (req, res) => {
+    const [videos, courses, orders] = await Promise.all([
+      queryCollection('videos'), queryCollection('courses'),
+      db.collection('orders').where('uid', '==', req.user.uid).get(),
+    ]);
+    const ownedCourses = new Set(orders.docs.map(value).filter(approvedCourseOrder).map(order => order.course));
+    const courseMap = new Map(courses.map(item => [item.id, item]));
+    res.json(videos.filter(video => {
+      if (!video.course) return true;
+      const selected = courseMap.get(video.course);
+      return selected && !selected.publicLearning &&
+        (req.user.admin || (ownedCourses.has(video.course) && (courseCutoff(selected.expiresOn) ?? Infinity) > Date.now()));
+    }).sort(byNewest).map(video => ({id: video.id, title: video.title, description: video.description,
+      videoId: video.videoId, courseTitle: courseMap.get(video.course)?.title || '', createdAt: video.createdAt})));
+  });
   api.get('/me', async (req, res) => {
     const { uid, phone, admin: isAdmin } = req.user;
     const student = value(await db.collection('students').doc(uid).get());
@@ -694,8 +716,10 @@ function createApp() {
     const selected = await courseForSale(req.params.id);
     requireActive(selected);
     const { id, price } = selected;
-    const snapshot = await db.collection('orders').where('uid', '==', req.user.uid).where('course', '==', id).limit(1).get();
-    const item = snapshot.docs.map(value)[0];
+    const snapshot = await db.collection('orders').where('uid', '==', req.user.uid).where('course', '==', id).get();
+    const orders = snapshot.docs.map(value);
+    const item = orders.find(approvedCourseOrder) ||
+      orders.find(order => order.paymentStatus === 'pending' || legacyCourseOrder(order)) || orders[0];
     const referral = value(await db.collection('referrals').doc(req.user.uid).get());
     res.json({
       downloadsEnabled: Boolean(selected.downloadsEnabled),
@@ -705,8 +729,8 @@ function createApp() {
       order: item ? {
         id: item.id,
         amount: item.amount,
-        status: item.paymentStatus,
-        reference: item.transactionRef,
+        status: legacyCourseOrder(item) ? 'pending' : item.paymentStatus,
+        reference: item.transactionRef || (legacyCourseOrder(item) ? item.payment : ''),
         note: item.paymentNote,
         reviewNote: item.reviewNote,
         submittedAt: item.submittedAt,
@@ -725,23 +749,28 @@ function createApp() {
     const note = (req.body?.note || '').trim();
     const submittedAt = new Date().toISOString();
     const orderId = idFor(uid, id);
-    const orderRef = db.collection('orders').doc(orderId);
+    const orders = db.collection('orders');
+    const orderRef = orders.doc(orderId);
     const referralRef = db.collection('referrals').doc(uid);
     let result;
     await db.runTransaction(async transaction => {
-      const [snapshot, referralSnapshot, courseSnapshot] = await Promise.all([
-        transaction.get(orderRef), transaction.get(referralRef), transaction.get(db.collection('courses').doc(id)),
+      const [orderSnapshots, referralSnapshot, courseSnapshot] = await Promise.all([
+        transaction.get(orders.where('uid', '==', uid).where('course', '==', id)),
+        transaction.get(referralRef), transaction.get(db.collection('courses').doc(id)),
       ]);
       const currentCourse = value(courseSnapshot);
       if (!currentCourse) fail(404, 'Course not found.');
       requireActive(currentCourse);
       const { price } = currentCourse;
-      const existing = value(snapshot);
+      const existingOrders = orderSnapshots.docs.map(value);
+      const existing = existingOrders.find(approvedCourseOrder) ||
+        existingOrders.find(order => order.paymentStatus === 'pending' || legacyCourseOrder(order)) || existingOrders[0];
+      const currentOrderRef = existing ? orders.doc(existing.id) : orderRef;
       const referral = value(referralSnapshot);
       if (approvedCourseOrder(existing)) {
         fail(409, 'You already own this course.');
       }
-      if (existing?.paymentStatus === 'pending') {
+      if (existing?.paymentStatus === 'pending' || legacyCourseOrder(existing)) {
         throw Object.assign(new Error('A payment request is already waiting for admin review.'), { status: 409 });
       }
       const creditsUsed = req.body?.useCredits === true ?
@@ -752,11 +781,11 @@ function createApp() {
       if (amountDue > 0 && !reference) fail(422, 'Enter a valid UPI transaction reference (4–80 characters).');
       if (creditsUsed) transaction.update(referralRef, { credits: Number(referral.credits) - creditsUsed });
       result = {
-        id: orderId, amount: amountDue, creditsUsed,
+        id: currentOrderRef.id, amount: amountDue, creditsUsed,
         status: 'pending',
         reference: reference || 'CREDITS', submittedAt,
       };
-      transaction.set(orderRef, {
+      transaction.set(currentOrderRef, {
         uid,
         course: id,
         amount: amountDue,
@@ -845,7 +874,7 @@ function createApp() {
     return item;
   }
   async function requireTestAccess(user, item) {
-    if (item.resourceId) {
+    if (isPublicResourceTest(item.course, item.resourceId)) {
       const resource = value(await db.collection('resources').doc(item.resourceId).get());
       if (!resource || resource.kind !== 'current-affairs') fail(404, 'Current Affairs resource not found.');
       return;
@@ -921,6 +950,7 @@ function createApp() {
     res.status(201).json({ id, startedAt });
   });
   api.put('/tests/:id/progress', async (req, res) => {
+    await requireTestAccess(req.user, await test(req.params.id));
     const active = await db.collection('examSessions').where('uid', '==', req.user.uid)
       .where('test', '==', req.params.id).where('active', '==', true).limit(1).get();
     if (active.empty) fail(409, 'Start the test before saving progress.');
@@ -1006,6 +1036,7 @@ function createApp() {
     const [selectedTest, selectedCourse, student] = await Promise.all([
       test(attempt.test), course(attempt.course), db.collection('students').doc(req.user.uid).get(),
     ]);
+    await requireTestAccess(req.user, selectedTest);
     const linkedResource = selectedTest.resourceId ?
       value(await db.collection('resources').doc(selectedTest.resourceId).get()) : null;
     const questions = selectedTest.questions;
@@ -1170,7 +1201,7 @@ function createApp() {
     if (!Number.isSafeInteger(page) || page < 1 || page > book.pages) fail(404, 'Page not found.');
     let pdf;
     try {
-      [pdf] = await bucket.file(`books/${book.id}.pdf`).download();
+      [pdf] = await bucket.file(book.pdfFile || `books/${book.id}.pdf`).download();
     } catch (error) {
       console.error('Book storage download failed', { book: book.id, message: error.message, code: error.code });
       throw error;
@@ -1189,7 +1220,7 @@ function createApp() {
   api.get('/books/:id/download', () => fail(403, 'Save this book inside the app instead.'));
 
   api.use('/admin', admin);
-  registerWorkspaceRoutes(api, { db, value, course });
+  registerWorkspaceRoutes(api, { db, bucket, value, course });
   api.get('/admin/analytics', async (_req, res) => {
     const [students, courses, orders, ebookOrders, attempts, liveTests] = await Promise.all([
       queryCollection('students'), queryCollection('courses'), queryCollection('orders'),
@@ -1796,7 +1827,8 @@ function createApp() {
   api.get('/admin/payments', async (_req, res) => {
     const [courseOrders, ebookOrders] = await Promise.all([queryCollection('orders'), queryCollection('ebookOrders')]);
     const orders = courseOrders.sort((a, b) => {
-      const pending = Number(a.paymentStatus !== 'pending') - Number(b.paymentStatus !== 'pending');
+      const pending = Number(a.paymentStatus !== 'pending' && !legacyCourseOrder(a)) -
+        Number(b.paymentStatus !== 'pending' && !legacyCourseOrder(b));
       return pending || String(b.submittedAt || '').localeCompare(String(a.submittedAt || ''));
     }).slice(0, 200);
     const courseRows = await Promise.all(orders.map(async order => {
@@ -1807,9 +1839,9 @@ function createApp() {
       return {
         id: order.id,
         amount: order.amount,
-        reference: order.transactionRef,
+        reference: order.transactionRef || (legacyCourseOrder(order) ? order.payment : ''),
         note: order.paymentNote,
-        status: order.paymentStatus,
+        status: legacyCourseOrder(order) ? 'pending' : order.paymentStatus,
         submittedAt: order.submittedAt,
         reviewNote: order.reviewNote,
         name: value(student)?.name || 'Student',
@@ -1841,7 +1873,9 @@ function createApp() {
       const order = value(snapshot);
       if (!order) fail(404, 'Payment request not found.');
       if (order.paymentStatus === 'approved') return;
-      if (order.paymentStatus !== 'pending') fail(409, 'Only pending requests can be approved.');
+      if (order.paymentStatus !== 'pending' && !(ref.path === orderRef.path && legacyCourseOrder(order))) {
+        fail(409, 'Only pending requests can be approved.');
+      }
       if (ref.id === orderRef.id && ref.path === orderRef.path) {
         const selected = value(await transaction.get(db.collection('courses').doc(order.course)));
         if (!selected) fail(404, 'Course not found.');
@@ -1870,7 +1904,8 @@ function createApp() {
       const snapshot = await transaction.get(ref);
       const order = value(snapshot);
       if (!order) fail(404, 'Payment request not found.');
-      if (!['pending', 'approved'].includes(order.paymentStatus)) fail(409, 'This payment was already rejected.');
+      if (!['pending', 'approved'].includes(order.paymentStatus) &&
+          !(ref.path === orderRef.path && legacyCourseOrder(order))) fail(409, 'This payment was already rejected.');
       const referralRef = order.creditsUsed ? db.collection('referrals').doc(order.uid) : null;
       if (referralRef) {
         const referral = value(await transaction.get(referralRef));

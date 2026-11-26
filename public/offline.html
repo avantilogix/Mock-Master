@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#1779df">
+  <title>Mission Selection</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; color: #17233d; background: #f4f8fc; font-family: Inter, Roboto, system-ui, sans-serif; }
+    header { padding: 1rem max(1rem, env(safe-area-inset-left)); color: white; background: linear-gradient(105deg, #0d6fda, #2ca4ef); }
+    header strong { display: block; font-size: 1.15rem; }
+    header small { color: #e1f2ff; }
+    main { max-width: 76rem; margin: 1.5rem auto; padding: 0 1rem; }
+    .offline-notice { display: flex; align-items: center; gap: 1rem; padding: 1rem; border: 1px solid #d64550; border-radius: 1rem; background: #f9eaec; }
+    svg { flex: 0 0 2rem; color: #d64550; }
+    .copy { flex: 1; min-width: 0; }
+    h1 { margin: 0; font-size: 1.15rem; }
+    p { margin: .35rem 0 0; color: #66748a; font-size: .9rem; }
+    button { padding: .65rem 1rem; border: 2px solid #2468bf; border-radius: .75rem; background: white; color: #2468bf; font: inherit; font-weight: 700; cursor: pointer; }
+    @media (max-width: 360px) { .offline-notice { gap: .6rem; padding: .8rem; } button { padding: .55rem; } }
+  </style>
+</head>
+<body>
+  <header><strong>Mission Selection</strong><small>Choose · Prepare · Achieve</small></header>
+  <main>
+    <div class="offline-notice" role="status">
+      <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M2 2l20 20M8.5 8.5A13 13 0 0 1 22 9M3 9a13 13 0 0 1 2.5-1.6M6 13a9 9 0 0 1 6-2 9 9 0 0 1 4.5 1.2M9 17a5 5 0 0 1 6 0M12 21h.01"/>
+      </svg>
+      <div class="copy"><h1>No internet connection</h1><p>An internet connection is required to log in.</p></div>
+      <button type="button" id="retry">Retry</button>
+    </div>
+  </main>
+  <script>
+    let checking = false;
+    async function retry() {
+      if (checking || !navigator.onLine) return;
+      checking = true;
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 5000);
+      try {
+        const response = await fetch('/api/config', {cache: 'no-store', signal: controller.signal});
+        if (response.ok && navigator.onLine) {
+          location.replace('/?reconnected=' + Date.now() + location.hash);
+        }
+      } catch {
+        // Keep the offline screen visible until the app can be reached.
+      } finally {
+        clearTimeout(timeout);
+        checking = false;
+      }
+    }
+    document.getElementById('retry').addEventListener('click', retry);
+    window.addEventListener('online', retry);
+    setInterval(retry, 5000);
+  </script>
+</body>
+</html>

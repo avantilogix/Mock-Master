@@ -16,7 +16,7 @@ export default defineConfig({
     reuseExistingServer: process.env.PLAYWRIGHT_REUSE_SERVER === '1',
     timeout: 120_000,
     env: {
-      DATA_DIR: './data/playwright-admin-audit-tests',
+      DATA_DIR: process.env.PLAYWRIGHT_DATA_DIR || './data/playwright-admin-audit-tests',
       HOST: '127.0.0.1',
       PORT: '3011',
       UPI_ID: 'missionselection@upi',

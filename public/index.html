@@ -29,6 +29,15 @@
     </div>
   </header>
   <div class="shell notice-area"><p id="notice" role="status" aria-atomic="true"></p></div>
+  <div class="shell" id="offline-area" hidden>
+    <div class="offline-notice" role="status">
+      <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M2 2l20 20M8.5 8.5A13 13 0 0 1 22 9M3 9a13 13 0 0 1 2.5-1.6M6 13a9 9 0 0 1 6-2 9 9 0 0 1 4.5 1.2M9 17a5 5 0 0 1 6 0M12 21h.01"/>
+      </svg>
+      <div class="offline-copy"><strong>No internet connection</strong><p id="offline-message">An internet connection is required to log in.</p></div>
+      <button type="button" class="offline-retry">Retry</button>
+    </div>
+  </div>
   <main id="main" class="shell" tabindex="-1">
     <h1>Mission Selection</h1>
     <p>Loading courses…</p>

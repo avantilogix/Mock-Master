@@ -12,7 +12,8 @@ import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import { fail, importQuestions, mobile, pageCount, renderDemoPage, renderPage, renderUnmarkedPage, validateQuestions } from './documents.js';
 import { paymentReference, upiDetails, upiPaymentUri } from './manual-payments.js';
 import { currentAffairs } from './current-affairs.js';
-import { folderBody, folderView, idInput, itemFolderBody, itemTypeInput, kindInput, validateFolder, validateItemFolder } from '../firebase-functions/workspace.js';
+import { folderBody, folderSubtree, folderView, idInput, itemFolderBody, itemTypeInput, kindInput, validateFolder, validateItemFolder } from '../firebase-functions/workspace.js';
+import { isPublicResourceTest } from '../firebase-functions/course-entitlements.js';
 
 function text(value, label, max) {
   if (typeof value !== 'string' || !value.trim() || value.length > max) fail(422, `${label} is required (maximum ${max} characters).`);
@@ -358,7 +359,7 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     if (id === CURRENT_AFFAIRS_COURSE_ID) fail(404, 'Course not found.');
     return row;
   }
-  const owns = (uid, id) => one("SELECT 1 FROM orders WHERE uid=? AND course=? AND payment_status='approved' AND payment IS NOT NULL AND payment!=''", uid, id);
+  const owns = (uid, id) => one("SELECT 1 FROM orders WHERE uid=? AND course=? AND payment_status='approved' AND payment IS NOT NULL AND TRIM(payment)!=''", uid, id);
   function requirePurchase(req, id, allowAdmin = true) {
     if (id === CURRENT_AFFAIRS_COURSE_ID) fail(404, 'Course not found.');
     if (!(allowAdmin && req.user.admin) && !owns(req.user.uid, id)) fail(403, 'Purchase this course to unlock it.');
@@ -432,6 +433,7 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
   api.get('/physical-books', (_req, res) => res.json(all('SELECT id, title, description, price, stock FROM physical_books WHERE active=1 ORDER BY rowid DESC')));
   api.get('/videos', (_req, res) => res.json(all(`SELECT v.id, v.title, v.description, v.video_id AS videoId,
     v.created_at AS createdAt, c.title AS courseTitle FROM videos v LEFT JOIN courses c ON c.id=v.course
+    WHERE v.course=''
     ORDER BY v.created_at DESC`)));
   // <video> and download links cannot send an Authorization header, so they use a short-lived signed link.
   api.get('/videos/:id/file', (req, res) => {
@@ -443,21 +445,32 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     if (!(Number(expires) > Date.now() / 1000)) fail(403, 'This video link has expired. Open the video again.');
     const video = one('SELECT * FROM chapter_videos WHERE id=?', req.params.id);
     if (!video) fail(404, 'Video not found.');
-    if (one('SELECT 1 FROM students WHERE uid=? AND disabled', uid)) fail(403, 'This account is disabled. Contact support to request reactivation.');
-    if (!admins.has(uid) && !owns(uid, video.course)) fail(403, 'Purchase this course to unlock it.');
+    const student = one('SELECT phone, disabled FROM students WHERE uid=?', uid);
+    if (!student || student.disabled) fail(403, 'This account is disabled. Contact support to request reactivation.');
+    if (!admins.has(uid) && !adminMobiles.has(normalizePhone(student.phone)) && !owns(uid, video.course)) {
+      fail(403, 'Purchase this course to unlock it.');
+    }
     if (req.query.download === '1') fail(403, 'Save this video inside the app instead.');
-    res.sendFile(videoPath(video.file_id || video.id), { headers: { 'Content-Type': video.type } });
+    res.sendFile(videoPath(video.file_id || video.id), { dotfiles: 'allow', headers: { 'Content-Type': video.type } });
   });
   const affairs = currentAffairs(api, { db, directory: join(videoDir, 'current-affairs'), text, processDocument,
     looksLikeVideo });
   api.use(authLimit, login);
   affairs.routes();
+  api.get('/videos/accessible', (req, res) => {
+    res.json(all(`SELECT v.id, v.title, v.description, v.video_id AS videoId,
+      v.created_at AS createdAt, c.title AS courseTitle FROM videos v LEFT JOIN courses c ON c.id=v.course
+      WHERE v.course='' OR (?=1 AND c.id IS NOT NULL) OR EXISTS
+        (SELECT 1 FROM orders o WHERE o.uid=? AND o.course=v.course AND o.payment_status='approved'
+          AND o.payment IS NOT NULL AND TRIM(o.payment)!='')
+      ORDER BY v.created_at DESC`, Number(req.user.admin), req.user.uid));
+  });
   api.get('/me', (req, res) => {
     const { uid, phone, admin } = req.user;
     const { name, exam_preference: examPreference } = one('SELECT name, exam_preference FROM students WHERE uid=?', uid);
     res.json({ uid, name, phone, admin, examPreference,
       examPreferences: examPreference ? examPreference.split(',').map(item => item.trim()).filter(Boolean) : [],
-      purchases: all("SELECT course FROM orders WHERE uid=? AND payment_status='approved' AND payment IS NOT NULL AND payment!=''", uid).map(p => p.course) });
+      purchases: all("SELECT course FROM orders WHERE uid=? AND payment_status='approved' AND payment IS NOT NULL AND TRIM(payment)!=''", uid).map(p => p.course) });
   });
   api.put('/me', (req, res) => {
     const current = one('SELECT name, exam_preference FROM students WHERE uid=?', req.user.uid);
@@ -558,7 +571,8 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
   });
   api.get('/courses/:id/payment', (req, res) => {
     const { id, price } = courseForSale(req.params.id);
-    const order = one(`SELECT id, amount, payment_status AS status, transaction_ref AS reference,
+    const order = one(`SELECT id, amount, payment_status AS status,
+      CASE WHEN transaction_ref='' AND payment_status='pending' THEN COALESCE(payment, '') ELSE transaction_ref END AS reference,
       payment_note AS note, review_note AS reviewNote, submitted_at AS submittedAt FROM orders
       WHERE uid=? AND course=?`, req.user.uid, id);
     const credits = one('SELECT credits FROM referrals WHERE uid=?', req.user.uid)?.credits || 0;
@@ -694,7 +708,7 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     values.questionPaperDownload ? 1 : 0, folderId, resourceId);
   }
   function requireTestAccess(req, row) {
-    if (row.resource_id) {
+    if (isPublicResourceTest(row.course, row.resource_id)) {
       if (!one("SELECT 1 FROM resources WHERE id=? AND kind='current-affairs'", row.resource_id)) {
         fail(404, 'Current Affairs resource not found.');
       }
@@ -752,6 +766,7 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     res.status(201).json({ id, startedAt: now });
   });
   api.put('/tests/:id/progress', (req, res) => {
+    requireTestAccess(req, test(req.params.id));
     const session = one('SELECT id FROM exam_sessions WHERE uid=? AND test=? AND active=1', req.user.uid, req.params.id);
     if (!session) fail(409, 'Start the test before saving progress.');
     run('UPDATE exam_sessions SET answers=?, marked=? WHERE id=?', JSON.stringify(req.body?.answers || []),
@@ -805,6 +820,7 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
       LEFT JOIN resources r ON r.id=t.resource_id
       WHERE a.id=? AND a.uid=?`, req.params.id, req.user.uid);
     if (!attempt) fail(404, 'Test result not found.');
+    requireTestAccess(req, test(attempt.test));
     const answers = JSON.parse(attempt.answers || '[]');
     const questions = JSON.parse(attempt.questions || '[]');
     attempt.correct = questions.filter((question, index) => answers[index] === question.answer).length;
@@ -819,7 +835,7 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     res.type('pdf').attachment(`${attempt.testTitle}-result.pdf`).send(pdf);
   });
   api.get('/courses/:id/receipt.pdf', async (req, res) => {
-    const order = one(`SELECT * FROM orders WHERE uid=? AND course=? AND payment_status='approved' AND payment IS NOT NULL AND payment!=''`, req.user.uid, req.params.id);
+    const order = one(`SELECT * FROM orders WHERE uid=? AND course=? AND payment_status='approved' AND payment IS NOT NULL AND TRIM(payment)!=''`, req.user.uid, req.params.id);
     if (!order) fail(404, 'Approved purchase receipt not found.');
     const selectedCourse = course(req.params.id);
     const student = one('SELECT name, phone FROM students WHERE uid=?', req.user.uid);
@@ -830,7 +846,7 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     res.json(all(`SELECT o.id, o.course, c.title AS title, o.amount, o.transaction_ref AS reference,
       o.reviewed_at AS reviewedAt, o.submitted_at AS submittedAt
       FROM orders o JOIN courses c ON c.id=o.course
-      WHERE o.uid=? AND o.payment_status='approved' AND o.payment IS NOT NULL AND o.payment!=''
+      WHERE o.uid=? AND o.payment_status='approved' AND o.payment IS NOT NULL AND TRIM(o.payment)!=''
       ORDER BY COALESCE(NULLIF(o.reviewed_at,''), o.submitted_at) DESC`, req.user.uid));
   });
   api.get('/tests/:id/question-paper.pdf', async (req, res) => {
@@ -924,7 +940,7 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     }));
     const testNotices = all(`SELECT t.id, t.title, t.starts_at AS startsAt, t.expires_at AS expiresAt, t.course
       FROM tests t JOIN orders o ON o.course=t.course
-      WHERE t.live=1 AND o.uid=? AND o.payment_status='approved' AND o.payment IS NOT NULL AND o.payment!=''
+      WHERE t.live=1 AND o.uid=? AND o.payment_status='approved' AND o.payment IS NOT NULL AND TRIM(o.payment)!=''
         AND (t.expires_at='' OR datetime(t.expires_at)>datetime('now','localtime'))
       ORDER BY t.starts_at LIMIT 20`, req.user.uid).map(test => ({
       id: `live-test-${test.id}`,
@@ -1055,6 +1071,32 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     });
     res.json(folderView(folder));
   });
+  api.delete('/admin/courses/:id/folders/:folderId', (req, res) => {
+    const id = course(idInput(req.params.id)).id;
+    idInput(req.params.folderId);
+    const files = transaction(() => {
+      const { root, ids } = folderSubtree(workspaceFolders(id), req.params.folderId);
+      if (root.kind !== 'content') fail(422, 'Only course content folders can be deleted here.');
+      const videos = [];
+      for (const folderId of ids) {
+        videos.push(...all('SELECT id, file_id AS fileId FROM chapter_videos WHERE course=? AND folder_id=?', id, folderId));
+        run('DELETE FROM books WHERE course=? AND folder_id=?', id, folderId);
+        run('DELETE FROM chapter_videos WHERE course=? AND folder_id=?', id, folderId);
+        run('DELETE FROM course_folders WHERE course=? AND id=?', id, folderId);
+      }
+      return videos;
+    });
+    let warning = '';
+    for (const file of files) {
+      try {
+        rmSync(videoPath(file.fileId || file.id), { force: true });
+      } catch (error) {
+        console.error('Folder media cleanup failed:', file.id, error.code);
+        warning = 'The folder was deleted, but some stored video files could not be removed.';
+      }
+    }
+    res.json({ deleted: true, ...(warning ? { warning } : {}) });
+  });
   api.patch('/admin/courses/:id/workspace-items/:type/:itemId', (req, res) => {
     const id = course(idInput(req.params.id)).id;
     idInput(req.params.itemId);
@@ -1072,9 +1114,9 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     res.json({
       students: one('SELECT COUNT(*) AS count FROM students').count,
       courses: one('SELECT COUNT(*) AS count FROM courses WHERE id!=?', CURRENT_AFFAIRS_COURSE_ID).count,
-      purchases: one("SELECT COUNT(*) AS count FROM orders WHERE payment_status='approved' AND payment IS NOT NULL AND payment!=''").count +
+      purchases: one("SELECT COUNT(*) AS count FROM orders WHERE payment_status='approved' AND payment IS NOT NULL AND TRIM(payment)!=''").count +
         one("SELECT COUNT(*) AS count FROM ebook_orders WHERE payment<>''").count,
-      revenue: one("SELECT COALESCE(SUM(amount),0) AS amount FROM orders WHERE payment_status='approved' AND payment IS NOT NULL AND payment!=''").amount +
+      revenue: one("SELECT COALESCE(SUM(amount),0) AS amount FROM orders WHERE payment_status='approved' AND payment IS NOT NULL AND TRIM(payment)!=''").amount +
         one("SELECT COALESCE(SUM(amount),0) AS amount FROM ebook_orders WHERE payment<>''").amount,
       attempts24h: one('SELECT COUNT(*) AS count FROM attempts WHERE created_at>=?', since).count,
       attempts: one('SELECT COUNT(*) AS count FROM attempts').count,
@@ -1423,7 +1465,8 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     res.status(201).json({ id, size });
   });
   api.get('/admin/payments', (req, res) => {
-    const courses = all(`SELECT o.id, o.amount, o.transaction_ref AS reference, o.payment_note AS note,
+    const courses = all(`SELECT o.id, o.amount,
+      CASE WHEN o.transaction_ref='' AND o.payment_status='pending' THEN COALESCE(o.payment, '') ELSE o.transaction_ref END AS reference, o.payment_note AS note,
       o.payment_status AS status, o.submitted_at AS submittedAt, o.review_note AS reviewNote,
       COALESCE(NULLIF(s.name, ''), 'Student') AS name, s.phone, c.title AS course, 'course' AS type
       FROM orders o JOIN students s ON s.uid=o.uid JOIN courses c ON c.id=o.course
@@ -1459,12 +1502,14 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     if (!['pending', 'approved'].includes(order.payment_status)) fail(409, 'This payment was already rejected.');
     const reviewNote = typeof req.body?.note === 'string' ? req.body.note.trim() : '';
     if (!reviewNote || reviewNote.length > 500) fail(422, 'Enter a rejection reason (maximum 500 characters).');
-    if (order.credits_used) run('UPDATE referrals SET credits=credits+? WHERE uid=?',
-      order.credits_used, order.uid);
-    run(`UPDATE ${courseOrder ? 'orders' : 'ebook_orders'} SET payment='', payment_status='rejected',
-      ${courseOrder ? 'credits_used=0, ' : ''}reviewed_at=?, reviewed_by=?, review_note=?
-      WHERE id=? AND payment_status IN ('pending','approved')`,
-    new Date().toISOString(), req.user.uid, reviewNote, order.id);
+    transaction(() => {
+      if (order.credits_used) run('UPDATE referrals SET credits=credits+? WHERE uid=?',
+        order.credits_used, order.uid);
+      run(`UPDATE ${courseOrder ? 'orders' : 'ebook_orders'} SET payment=${courseOrder ? 'NULL' : "''"}, payment_status='rejected',
+        ${courseOrder ? 'credits_used=0, ' : ''}reviewed_at=?, reviewed_by=?, review_note=?
+        WHERE id=? AND payment_status IN ('pending','approved')`,
+      new Date().toISOString(), req.user.uid, reviewNote, order.id);
+    });
     res.sendStatus(204);
   });
   const priceInput = value => {

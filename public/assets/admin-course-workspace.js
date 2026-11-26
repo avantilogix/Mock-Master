@@ -69,19 +69,26 @@ export function showAdminCourseWorkspace(main, ctx, courseId) {
       tab.tabIndex = selected ? 0 : -1;
     }
 
-    const folderOptions = [
-      el('option', {value: ''}, 'Course root'),
-      ...folders.map(folder => el('option', {value: folder.id}, folderLabel(folder))),
-    ];
-    const folderForm = el('form', {class: 'folder-create-form'},
-      field('New Folder Name', el('input', {required: '', maxlength: '100', autocomplete: 'off'})),
-      field('Create Inside', el('select', {}, ...folderOptions.map(option => option.cloneNode(true)))),
-      button('Create Folder', null, 'submit'));
+    const makeFolderForm = (folder, excluded = new Set()) => {
+      const name = el('input', {required: '', maxlength: '100', autocomplete: 'off', value: folder?.name || ''});
+      const parent = el('select', {}, el('option', {value: ''}, 'Course root'),
+        ...folders.filter(candidate => !excluded.has(candidate.id))
+          .map(candidate => el('option', {value: candidate.id}, folderLabel(candidate))));
+      parent.value = folder?.parentId || '';
+      const testEdit = folder && activeKind === 'tests';
+      if (testEdit) {
+        name.setAttribute('aria-label', `Folder name: ${folder.name}`);
+        parent.setAttribute('aria-label', `Parent folder for ${folder.name}`);
+      }
+      return el('form', {class: folder ? 'folder-edit-form' : 'folder-create-form'},
+        field(testEdit ? 'Name' : 'New Folder Name', name), field(testEdit ? 'Move inside' : 'Create Inside', parent),
+        button(folder ? 'Save' : 'Create Folder', folder ? 'secondary' : null, 'submit'));
+    };
+    const folderForm = makeFolderForm();
     const nameInput = folderForm.querySelector('input');
     const parentSelect = folderForm.querySelector('select');
     const createButton = folderForm.querySelector('button');
     const renderTree = parentId => (byParent.get(parentId) || []).map(folder => {
-      const renameInput = el('input', {required: '', maxlength: '100', value: folder.name, 'aria-label': `Folder name: ${folder.name}`});
       const descendants = new Set([folder.id]);
       const collectDescendants = id => {
         for (const child of byParent.get(id) || []) {
@@ -90,14 +97,43 @@ export function showAdminCourseWorkspace(main, ctx, courseId) {
         }
       };
       collectDescendants(folder.id);
-      const parentChoice = el('select', {'aria-label': `Parent folder for ${folder.name}`},
-        el('option', {value: ''}, 'Course root'),
-        ...folders.filter(candidate => !descendants.has(candidate.id))
-          .map(candidate => el('option', {value: candidate.id}, folderLabel(candidate))));
-      parentChoice.value = folder.parentId || '';
-      const save = button('Save', 'secondary', 'submit');
-      const folderForm = el('form', {class: 'folder-edit-form'},
-        field('Name', renameInput), field('Move inside', parentChoice), save);
+      const folderForm = makeFolderForm(folder, descendants);
+      const renameInput = folderForm.querySelector('input');
+      const parentChoice = folderForm.querySelector('select');
+      const save = folderForm.querySelector('button');
+      let actions = null;
+      if (activeKind === 'content') {
+        folderForm.hidden = true;
+        const edit = button('Edit Folder', 'secondary');
+        edit.setAttribute('aria-expanded', 'false');
+        edit.addEventListener('click', () => {
+          folderForm.hidden = !folderForm.hidden;
+          edit.setAttribute('aria-expanded', String(!folderForm.hidden));
+          edit.textContent = folderForm.hidden ? 'Edit Folder' : 'Cancel Edit';
+          if (!folderForm.hidden) renameInput.focus();
+          else {
+            folderForm.reset();
+            renameInput.value = folder.name;
+            parentChoice.value = folder.parentId || '';
+          }
+        });
+        const remove = button('Delete Folder', 'danger secondary');
+        remove.addEventListener('click', () => {
+          if (!window.confirm(`Delete “${folder.name}” and all its subfolders, books, and videos? This cannot be undone.`)) return;
+          run(remove, feedback, async () => {
+            const result = await api(`${coursePath}/folders/${idPart(folder.id)}`, {ctx, auth: true, method: 'DELETE'});
+            try {
+              await load();
+            } catch (error) {
+              if (error.name === 'AbortError') throw error;
+              say(feedback, `${result.warning || 'Folder deleted.'} The workspace could not refresh: ${error.message}`, true);
+              return;
+            }
+            say(feedback, result.warning || 'Folder deleted.', Boolean(result.warning));
+          }, 'Deleting folder…');
+        });
+        actions = el('div', {class: 'actions'}, edit, remove);
+      }
       folderForm.addEventListener('submit', event => {
         event.preventDefault();
         run(save, feedback, async () => {
@@ -174,6 +210,7 @@ export function showAdminCourseWorkspace(main, ctx, courseId) {
         el('details', {open: ''},
           el('summary', {}, el('strong', {}, folder.name),
             el('span', {class: 'muted'}, `${items.filter(item => item.folderId === folder.id).length} items`)),
+          actions,
           folderForm,
           uploadForm,
           activeKind === 'tests' ? link('Import Questions to Folder',
@@ -182,13 +219,13 @@ export function showAdminCourseWorkspace(main, ctx, courseId) {
     });
 
     const tree = renderTree('');
+    const rootRefresh = folders.length ? button('Refresh', 'secondary') : null;
     const folderSection = el('section', {class: 'panel folder-manager'},
       el('h2', {}, 'Folders'),
       folderForm,
       tree.length ? el('ul', {class: 'workspace-folder-list'}, ...tree) :
         el('p', {class: 'muted'}, 'No folders yet. Create one above; folders can be nested.'),
-      folders.length ? button('Refresh', 'secondary') : null);
-    const rootRefresh = folderSection.querySelector('button[type="button"]');
+      rootRefresh);
     rootRefresh?.addEventListener('click', () => run(rootRefresh, feedback, load, 'Refreshing folders…'));
     folderForm.addEventListener('submit', event => {
       event.preventDefault();

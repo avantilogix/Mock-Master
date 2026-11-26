@@ -1,4 +1,5 @@
 import {restoreCompletedSession} from './auth-persistence.js';
+import {connectionFailed} from './connection.js';
 
 const firebaseBase = 'https://www.gstatic.com/firebasejs/11.10.0/';
 
@@ -11,7 +12,15 @@ export async function api(path, {ctx, auth = false, method = 'GET', json, binary
   const headers = new Headers();
   if (auth) {
     if (!ctx?.user) throw new Error('Sign in to continue.');
-    const token = await ctx.user.getIdToken();
+    let token;
+    try {
+      token = await ctx.user.getIdToken();
+    } catch (error) {
+      check();
+      console.error('Could not verify the current session:', error);
+      if (error.code === 'auth/network-request-failed' || !navigator.onLine) connectionFailed();
+      throw new Error('Could not verify your account. Please check your connection and try again.');
+    }
     headers.set('Authorization', 'Bearer ' + token);
     check();
   }
@@ -26,21 +35,31 @@ export async function api(path, {ctx, auth = false, method = 'GET', json, binary
   } catch (error) {
     check();
     if (error.name === 'AbortError') throw error;
+    connectionFailed();
     throw new Error('Could not reach Mission Selection. Check your connection and try again.');
   }
   check();
   if (!response.ok) {
     const body = await response.json().catch(() => null);
     check();
-    throw new Error(typeof body?.error === 'string' && body.error ? body.error :
-      response.status === 401 ? 'Your session has expired. Sign in again to continue.' :
-      `The request failed (${response.status}). Please try again.`);
+    throw new Error(response.status === 401 ? 'Your session has expired. Sign in again to continue.' :
+      response.status >= 500 ? 'Something went wrong. Please try again later.' :
+      typeof body?.error === 'string' && body.error ? body.error : 'Could not complete the request. Please try again.');
   }
   if (image && !/^image\//i.test(response.headers.get('Content-Type') || '')) {
     throw new Error('The server did not return a book image.');
   }
-  const body = image || blob ? await response.blob() : (response.status === 204 ? null :
-    await response.text().then(text => text ? JSON.parse(text) : null));
+  let body;
+  try {
+    body = image || blob ? await response.blob() : (response.status === 204 ? null :
+      await response.text().then(text => text ? JSON.parse(text) : null));
+  } catch (error) {
+    check();
+    if (error.name === 'AbortError') throw error;
+    console.error('Could not read the response:', error);
+    if (error.name === 'TypeError') connectionFailed();
+    throw new Error('Could not complete the request. Please try again.');
+  }
   check();
   return body;
 }

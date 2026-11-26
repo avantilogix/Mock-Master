@@ -201,7 +201,7 @@ export function pdfReader(main, ctx, book) {
     });
     updateZoom();
     main.append(controls, tools);
-    if (book.savedItem) main.append(el('p', {class: 'muted'}, 'Saved content is available inside this app while access remains active.'));
+    if (book.savedItem) main.append(el('p', {class: 'muted'}, 'This download is available inside the app while access remains active.'));
     main.append(el('div', {class: 'pdf-reader-scroll'}, imageArea));
   } else main.append(controls, imageArea);
   const placeholder = pageNumber => el('div', {class: 'pdf-page-placeholder', 'aria-hidden': 'true'},
@@ -230,7 +230,7 @@ export function pdfReader(main, ctx, book) {
       const retry = button('Retry page', 'secondary');
       retry.addEventListener('click', () => loadPage(pageNumber));
       node.replaceChildren(el('div', {class: 'pdf-page-error', role: 'alert'},
-        el('span', {}, `Could not load page ${pageNumber}: ${error.message}`), retry));
+        el('span', {}, `Could not load page ${pageNumber}. Please check your connection and try again.`), retry));
     } finally {
       loadingPages.delete(pageNumber);
     }

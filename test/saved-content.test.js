@@ -74,7 +74,7 @@ test('saved content is account-scoped, revalidated, removed, and cleaned up on f
   await assert.rejects(savedPart(saved, 1), /incomplete/);
   enabled = true;
   failPage = true;
-  await assert.rejects(saveContent(ctx, item), /Page unavailable/);
+  await assert.rejects(saveContent(ctx, item), /Something went wrong/);
   assert.deepEqual(await savedItems('buyer'), []);
 });
 

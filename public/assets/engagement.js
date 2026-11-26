@@ -48,12 +48,12 @@ export function showCourseGroups(main, ctx, me, action) {
   });
 }
 
-export function showVideos(main) {
+export function showVideos(main, ctx) {
   main.append(...heading('YouTube Videos', 'Learn from videos published by the Mission Selection team.'));
   const list = el('div', {class: 'video-grid'});
   main.append(list);
-  loadInto(list, {current: () => true}, async () => {
-    const rows = await api('/videos');
+  loadInto(list, ctx, async () => {
+    const rows = await api(ctx.user ? '/videos/accessible' : '/videos', {ctx, auth: Boolean(ctx.user)});
     list.replaceChildren(...(rows.length ? rows.map(video => {
       const player = el('div', {class: 'video-frame', tabindex: '0', 'aria-label': `${video.title} video player`},
         el('iframe', {src: `https://www.youtube-nocookie.com/embed/${encodeURIComponent(video.videoId)}`,

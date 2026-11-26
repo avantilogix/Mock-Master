@@ -317,7 +317,7 @@ export function showCourse(main, ctx, session, action) {
     }
     intro.replaceChildren(el('div', {}, el('span', {class: 'eyebrow'}, 'Mock tests · E-books · Discussion'),
       ...heading(course.title), expiryLabel(course), el('p', {class: 'lead description'}, course.description)),
-      ...(owned ? [el('span', {class: 'badge'}, 'Purchased')] :
+      ...(owned ? [el('span', {class: 'badge'}, 'Purchased · Approved')] :
         course.expired ? [] : [el('p', {class: 'price'}, priceText(course.price))]));
     const gallery = coverGallery(course);
     if (gallery) {
@@ -340,7 +340,7 @@ export function showCourse(main, ctx, session, action) {
       } else if (!session.me) {
         access.append(action.profileUnavailable());
       } else {
-        access.append(el('p', {}, 'Pay by UPI, submit the transaction reference, and unlock the course after admin approval.'));
+        access.append(el('p', {}, 'Not Purchased. Pay by UPI, submit the transaction reference, and unlock the course after admin approval.'));
         showManualPayment(access, ctx, session, course, path, action);
       }
     }
@@ -433,10 +433,11 @@ function showManualPayment(target, ctx, session, course, path, action) {
       refresh.addEventListener('click', () => run(refresh, feedback, async () => {
         await action.refreshProfile(session);
         if (owns(session.me, course.id)) action.purchased(course.title);
-        else say(feedback, 'Your payment is still waiting for admin approval.');
+        else showManualPayment(target, ctx, session, course, path, action);
       }, 'Checking status…'));
       target.replaceChildren(el('div', {class: 'payment-status pending'},
         el('span', {class: 'status-icon', 'aria-hidden': 'true'}, '◷'), el('h2', {}, 'Payment Submitted'),
+        el('p', {}, 'Awaiting Admin Approval'),
         el('p', {}, 'Your request is with the admin. Course access is unlocked after confirmation.'),
         el('dl', {class: 'payment-summary'}, el('dt', {}, 'Amount'), el('dd', {}, priceText(order.amount)),
           el('dt', {}, 'UPI reference'), el('dd', {}, order.reference)), refresh, feedback));
@@ -444,6 +445,8 @@ function showManualPayment(target, ctx, session, course, path, action) {
     }
     if (!payment.configured && credits * 100 < amount) {
       target.replaceChildren(el('div', {class: 'payment-status'},
+        el('p', {class: 'muted'}, order?.status === 'rejected' ? 'Rejected' : 'Not Purchased'),
+        order?.status === 'rejected' ? el('p', {class: 'rejection'}, order.reviewNote || 'Check the payment and submit again.') : null,
         el('h2', {}, 'Payments Are Being Configured'),
         el('p', {}, 'UPI details are not available yet. Contact support before making a payment.'),
         link('Contact Support', '#support', 'button secondary')));
@@ -506,6 +509,8 @@ function showManualPayment(target, ctx, session, course, path, action) {
     target.replaceChildren(el('div', {class: 'manual-payment'},
       el('div', {class: 'payment-steps'}, el('span', {}, '1'),
         el('div', {}, el('h2', {}, `Pay ${priceText(amount)}`),
+          !order ? el('p', {class: 'muted'}, 'Not Purchased') : null,
+          el('p', {class: 'muted'}, order?.status === 'rejected' ? 'Rejected' : 'Payment Pending'),
           el('p', {class: 'muted'}, payment.configured ? `Use your preferred UPI app to pay ${payment.payeeName}.` :
             'Your available credits cover this course. Submit the request for admin approval.'))),
       el('div', {class: 'payment-grid'},

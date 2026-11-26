@@ -1,15 +1,22 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { paymentReference, upiDetails, upiPaymentUri } from '../server/manual-payments.js';
-import { approvedCourseOrder } from '../firebase-functions/course-entitlements.js';
+import { approvedCourseOrder, isPublicResourceTest } from '../firebase-functions/course-entitlements.js';
 
-test('Firebase course entitlement requires approval, preserving legacy paid orders', () => {
+test('Firebase course entitlement requires explicit approval', () => {
   assert.equal(approvedCourseOrder({ payment: 'paid', paymentStatus: 'approved' }), true);
-  assert.equal(approvedCourseOrder({ payment: 'legacy' }), true);
+  assert.equal(approvedCourseOrder({ payment: 'legacy' }), false);
   for (const order of [null, {}, {payment: ''}, {payment: 'paid', paymentStatus: 'pending'},
-    {payment: 'paid', paymentStatus: 'rejected'}, {payment: '', paymentStatus: 'approved'}]) {
+    {payment: 'paid', paymentStatus: 'rejected'}, {payment: '', paymentStatus: 'approved'},
+    {payment: '   ', paymentStatus: 'approved'}]) {
     assert.equal(approvedCourseOrder(order), false);
   }
+});
+
+test('only tests in the public Current Affairs course can bypass course ownership', () => {
+  assert.equal(isPublicResourceTest('public-current-affairs', 'resource'), true);
+  assert.equal(isPublicResourceTest('paid-course', 'resource'), false);
+  assert.equal(isPublicResourceTest('public-current-affairs', null), false);
 });
 
 test('normalizes valid UPI transaction references', () => {

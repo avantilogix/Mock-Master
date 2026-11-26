@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { randomUUID } from 'node:crypto';
-import { rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, rmdirSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import { createApp } from '../server/app.js';
@@ -13,7 +15,11 @@ test('course workspaces enforce scope, hierarchy and item placement', async t =>
     admin: { uid: 'admin', phone: '+919000000001' },
     student: { uid: 'student', phone: '+919000000002' },
   };
-  const server = createApp({ db, verifyToken: async token => users[token], adminUids: ['admin'] }).listen(0, '127.0.0.1');
+  const videoDir = mkdtempSync(join(tmpdir(), 'workspace-videos-'));
+  const videoFile = join(videoDir, 'v');
+  writeFileSync(videoFile, 'video');
+  t.after(() => { rmSync(videoFile, { force: true }); rmdirSync(videoDir); });
+  const server = createApp({ db, videoDir, verifyToken: async token => users[token], adminUids: ['admin'] }).listen(0, '127.0.0.1');
   await once(server, 'listening');
   t.after(() => new Promise(resolve => server.close(() => { db.close(); resolve(); })));
   const base = `http://127.0.0.1:${server.address().port}/api`;
@@ -81,6 +87,17 @@ test('course workspaces enforce scope, hierarchy and item placement', async t =>
   assert.equal(studentDetail.books[0].folderId, b.id);
   await json(`${root}/workspace-items/book/b`, 'PATCH', { folderId: null });
   assert.equal((await json('/courses/one')).books[0].folderId, null);
+  assert.equal((await request(`${root}/folders/${a.id}`, 'DELETE', undefined, 'student')).status, 403);
+  assert.equal((await request(`${root}/folders/${other.id}`, 'DELETE')).status, 404);
+  assert.equal((await request(`${root}/folders/${testFolder.id}`, 'DELETE')).status, 422);
+  assert.equal((await request(`${root}/folders/${a.id}`, 'DELETE')).status, 200);
+  assert.equal((await request(`${root}/folders/${a.id}`, 'DELETE')).status, 404);
+  assert.deepEqual((await json(`${root}/workspace?kind=content`)).folders.map(folder => folder.name), ['Renamed']);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM chapter_videos WHERE id='v'").get().count, 0);
+  assert.equal(existsSync(videoFile), false);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM books WHERE id='b'").get().count, 1);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM course_folders WHERE id=?").get(b.id).count, 0);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM course_folders WHERE id=?").get(testFolder.id).count, 1);
   const edited = await request('/admin/published/tests/t', 'PUT', {
     course: 'two', title: 'Test', questions: [{ prompt: 'Question?', options: ['A', 'B'], answer: 0 }],
     questionPaperDownload: false,
@@ -110,7 +127,7 @@ test('legacy SQLite databases migrate and retain workspace data after reopening'
   `);
   old.close();
   let db = openDatabase(path);
-  assert.equal(db.prepare("SELECT payment_status FROM orders WHERE id='o'").get().payment_status, 'approved');
+  assert.equal(db.prepare("SELECT payment_status FROM orders WHERE id='o'").get().payment_status, 'pending');
   db.prepare("UPDATE orders SET payment_status='rejected' WHERE id='o'").run();
   assert.equal(db.prepare("SELECT folder_id FROM tests WHERE id='t'").get().folder_id, null);
   db.prepare("INSERT INTO course_folders VALUES ('f','c','tests','Folder',NULL)").run();

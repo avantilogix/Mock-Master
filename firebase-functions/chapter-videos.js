@@ -1,10 +1,51 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { pipeline } from 'node:stream/promises';
 import { fail } from './documents.js';
 import { idInput, validateFolderSnapshot } from './workspace.js';
 
 const types = new Map([['video/mp4', 'mp4'], ['video/webm', 'webm'], ['video/quicktime', 'mov']]);
 const maxBytes = 300 * 1024 * 1024;
 const pathFor = id => `chapter-videos/${id}`;
+const digest = value => createHash('sha256').update(value).digest('hex');
+const ticketId = (uid, videoId) => digest(JSON.stringify([uid, videoId]));
+
+export function registerVideoFileRoute(api, { db, bucket, value, videoUser, requirePurchase }) {
+  api.get('/videos/:id/file', async (req, res) => {
+    const ticket = typeof req.query.ticket === 'string' ? /^([a-f0-9]{64})\.([a-f0-9]{64})$/.exec(req.query.ticket) : null;
+    if (!ticket) fail(403, 'This video link is invalid.');
+    const access = value(await db.collection('videoAccessTickets').doc(ticket[1]).get());
+    const actual = Buffer.from(digest(ticket[2]), 'hex');
+    const valid = Array.isArray(access?.tickets) && access.tickets.some(entry => {
+      const expected = Buffer.from(entry.secretHash || '', 'hex');
+      return entry.expires > Date.now() && actual.length === expected.length && timingSafeEqual(actual, expected);
+    });
+    if (!valid || access.video !== req.params.id) fail(403, 'This video link expired or is invalid.');
+    const item = value(await db.collection('chapterVideos').doc(req.params.id).get());
+    if (!item) fail(404, 'Chapter video not found.');
+    const user = await videoUser(access.uid);
+    await requirePurchase(user, item.course);
+    if (req.query.download === '1') fail(403, 'Save this video inside the app instead.');
+    if (!Number.isSafeInteger(item.size) || item.size < 1) fail(500, 'Video size is invalid.');
+    let start = 0;
+    let end = item.size - 1;
+    const range = req.get('Range');
+    if (range) {
+      const match = /^bytes=(\d*)-(\d*)$/.exec(range);
+      if (!match || (!match[1] && !match[2])) return res.status(416).set('Content-Range', `bytes */${item.size}`).end();
+      if (!match[1]) start = Math.max(0, item.size - Number(match[2]));
+      else {
+        start = Number(match[1]);
+        if (match[2]) end = Math.min(end, Number(match[2]));
+      }
+      if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start > end || start >= item.size) {
+        return res.status(416).set('Content-Range', `bytes */${item.size}`).end();
+      }
+      res.status(206).set('Content-Range', `bytes ${start}-${end}/${item.size}`);
+    }
+    res.set({ 'Accept-Ranges': 'bytes', 'Content-Type': item.type, 'Content-Length': String(end - start + 1) });
+    await pipeline(bucket.file(item.mediaFile || pathFor(item.id)).createReadStream({start, end, validation: false}), res);
+  });
+}
 
 export function registerVideoRoutes(api, { db, bucket, value, text, course, requirePurchase }) {
   const videos = db.collection('chapterVideos');
@@ -13,14 +54,21 @@ export function registerVideoRoutes(api, { db, bucket, value, text, course, requ
   api.get('/videos/:id/link', async (req, res) => {
     const item = value(await videos.doc(req.params.id).get());
     if (!item) fail(404, 'Chapter video not found.');
-    const cutoff = await requirePurchase(req.user, item.course);
+    await requirePurchase(req.user, item.course);
     const download = req.query.download === '1';
     if (download) fail(403, 'Save this video inside the app instead.');
-    const filename = item.title.replace(/[^\w .-]+/g, '_').trim() || 'chapter-video';
-    const [url] = await bucket.file(item.mediaFile || pathFor(item.id)).getSignedUrl({
-      version: 'v4', action: 'read', expires: Math.min(Date.now() + 60 * 60_000, cutoff ?? Infinity),
-      responseDisposition: `inline; filename="${filename}.${types.get(item.type)}"`,
+    const secret = randomBytes(32).toString('hex');
+    const id = ticketId(req.user.uid, item.id);
+    const ref = db.collection('videoAccessTickets').doc(id);
+    await db.runTransaction(async tx => {
+      const current = value(await tx.get(ref));
+      const now = Date.now();
+      const tickets = (Array.isArray(current?.tickets) ? current.tickets : [])
+        .filter(ticket => ticket.expires > now).slice(-31);
+      tickets.push({secretHash: digest(secret), expires: now + 60 * 60_000});
+      tx.set(ref, {uid: req.user.uid, video: item.id, tickets});
     });
+    const url = `/api/videos/${encodeURIComponent(item.id)}/file?ticket=${id}.${secret}`;
     res.json({ url, title: item.title });
   });
 

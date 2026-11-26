@@ -109,7 +109,8 @@ test('admin approval grants only the confirmed student access to their course, t
   const createdTest = await request(`/admin${path}/tests`, 'admin', 'POST',
     { title: 'Practice test', questions: numberedQuestions, folderId: testFolder.id });
   assert.equal(createdTest.status, 201);
-  const testPath = `/tests/${(await createdTest.json()).id}`;
+  const createdTestId = (await createdTest.json()).id;
+  const testPath = `/tests/${createdTestId}`;
   const withPdf = true;
   let pagePath;
   let bookDownloadPath;
@@ -149,6 +150,10 @@ test('admin approval grants only the confirmed student access to their course, t
   assert.equal((await request(path, 'buyer')).status, 403);
   assert.equal((await request(testPath, 'buyer')).status, 403);
   assert.equal((await request(`${path}/messages`, 'buyer', 'POST', { text: 'Hello' })).status, 403);
+  db.prepare("INSERT INTO resources (id,kind,title,summary,body,created_at) VALUES ('public-resource','current-affairs','Public','','','')").run();
+  db.prepare("UPDATE tests SET resource_id='public-resource' WHERE id=?").run(createdTestId);
+  assert.equal((await request(testPath, 'buyer')).status, 403);
+  db.prepare('UPDATE tests SET resource_id=NULL WHERE id=?').run(createdTestId);
 
   db.prepare(`INSERT INTO referrals (uid, code, credits) VALUES (?, ?, ?)
     ON CONFLICT (uid) DO UPDATE SET credits=excluded.credits`).run('buyer', 'MSBUYER1', 100);
@@ -211,7 +216,9 @@ test('admin approval grants only the confirmed student access to their course, t
   assert.equal((await request('/admin/videos', 'admin', 'POST', {
     title: 'Lesson', description: 'Practice lesson', url: 'https://youtu.be/dQw4w9WgXcQ', course: id,
   })).status, 201);
-  assert.equal((await (await request('/videos')).json())[0].videoId, 'dQw4w9WgXcQ');
+  assert.equal((await (await request('/videos')).json()).length, 0);
+  assert.equal((await (await request('/videos/accessible', 'other')).json()).length, 0);
+  assert.equal((await (await request('/videos/accessible', 'buyer')).json())[0].videoId, 'dQw4w9WgXcQ');
   assert.deepEqual(Object.keys(progress.summary).sort(),
     ['accuracy', 'attempts', 'best', 'correct', 'courses', 'questions'].sort());
   const schedule = await request('/admin/timetable', 'admin', 'POST', {
@@ -276,6 +283,7 @@ test('credit-covered course requests remain locked until admin approval', async 
   const users = {
     admin: {uid: 'admin', phone: '+919000000001'},
     buyer: {uid: 'buyer', phone: '+919000000002'},
+    other: {uid: 'other', phone: '+919000000003'},
   };
   const server = createApp({db, verifyToken: async token => users[token], adminUids: ['admin']})
     .listen(0, '127.0.0.1');
@@ -304,6 +312,10 @@ test('credit-covered course requests remain locked until admin approval', async 
   db.prepare("UPDATE orders SET payment='unexpected' WHERE id=?").run(order.id);
   assert.equal((await request(`/courses/${course.id}`, 'buyer')).status, 403);
   assert.deepEqual(await (await request('/receipts', 'buyer')).json(), []);
+  db.prepare("UPDATE orders SET payment='   ', payment_status='approved' WHERE id=?").run(order.id);
+  assert.equal((await request(`/courses/${course.id}`, 'buyer')).status, 403);
+  assert.deepEqual((await (await request('/me', 'buyer')).json()).purchases, []);
+  db.prepare("UPDATE orders SET payment=NULL, payment_status='pending' WHERE id=?").run(order.id);
   assert.equal((await request(`/admin/payments/${order.id}/approve`, 'admin', 'POST')).status, 204);
   assert.equal((await request(`/courses/${course.id}`, 'buyer')).status, 200);
   assert.equal((await request(`/tests/${test.id}`, 'buyer')).status, 200);
@@ -311,6 +323,11 @@ test('credit-covered course requests remain locked until admin approval', async 
   assert.equal((await request(`/admin/payments/${order.id}/reject`, 'admin', 'POST', {note: 'Revoked'})).status, 204);
   assert.equal((await request(`/courses/${course.id}`, 'buyer')).status, 403);
   assert.equal(db.prepare('SELECT credits FROM referrals WHERE uid=?').get('buyer').credits, 100);
+  await request('/me', 'other');
+  db.prepare('INSERT INTO referrals (uid,code,credits) VALUES (?,?,?)').run('other', 'OTHER', 100);
+  const second = await (await request(`/courses/${course.id}/payment`, 'other', 'POST', {useCredits: true})).json();
+  assert.equal((await request(`/admin/payments/${second.id}/reject`, 'admin', 'POST', {note: 'Rejected'})).status, 204);
+  assert.equal(db.prepare('SELECT credits FROM referrals WHERE uid=?').get('other').credits, 100);
 });
 
 test('chapter videos upload for admins and stream only through signed links for buyers', async t => {

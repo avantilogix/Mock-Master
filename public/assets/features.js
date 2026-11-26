@@ -165,7 +165,7 @@ export function showDownloads(main, ctx, action) {
       el('button', {type: 'button', class: 'tab', role: 'tab', 'aria-selected': 'false'}, 'Video')),
     content));
   if (!ctx.user) {
-    content.append(el('p', {}, 'Sign in to view saved content.'), action.signInLink());
+    content.append(el('p', {}, 'Sign in to view your downloads.'), action.signInLink());
     return;
   }
   let activeType = 'pdf';

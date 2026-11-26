@@ -1,7 +1,8 @@
 import {bindForm, button, el, field, heading, rule, say, status} from './ui.js';
 import {examPreferenceField} from './exam-preferences.js';
-import {hasPhoneSignIn, verifyPasswordForPhoneUser} from './password-verification.js';
+import {hasPhoneSignIn, resetPasswordForPhoneUser, verifyPasswordForPhoneUser} from './password-verification.js';
 import {beginTemporaryPhoneSession, persistCompletedPhoneSession} from './auth-persistence.js';
+import {requireLoginConnection} from './connection.js';
 
 const usernameEmail = username => `${username.toLowerCase()}@accounts.mission-selection.invalid`;
 
@@ -16,17 +17,17 @@ function authError(error) {
     'auth/operation-not-allowed': 'Phone verification is not available right now. Please contact support.',
     'auth/network-request-failed': 'Check your connection and try again.',
     'auth/captcha-check-failed': 'We could not securely verify this request. Please try again.',
-    'auth/unauthorized-domain': 'This domain is not authorized in Firebase. Add it under Authentication → Settings → Authorized domains.',
+    'auth/unauthorized-domain': 'Phone sign-in is unavailable right now. Please contact support.',
     'auth/invalid-app-credential': 'We could not securely verify this app. Please contact support.',
     'auth/app-not-authorized': 'Phone sign-in is unavailable for this app. Please contact support.',
-    'auth/billing-not-enabled': 'Firebase SMS delivery requires a billing-enabled project. Upgrade to the Blaze plan and retry.',
+    'auth/billing-not-enabled': 'Phone sign-in is unavailable right now. Please contact support.',
     'auth/missing-client-identifier': 'Phone verification could not identify this browser. Reload the page and retry.'
   };
   const raw = String(error.message || '').toLowerCase();
   const detail = /region|country|unsupported sms/i.test(raw)
     ? 'SMS delivery to this mobile number is not available right now. Please contact support.'
     : messages[error.code] || 'We could not send your code. Please try again or contact support.';
-  return new Error(`${detail}${error.code && !messages[error.code] ? ` (${error.code})` : ''}`);
+  return new Error(detail);
 }
 
 export function showSignIn(main, ctx, firebase, startAuth, initState, authFlow = {}) {
@@ -91,6 +92,7 @@ export function showSignIn(main, ctx, firebase, startAuth, initState, authFlow =
     section.replaceChildren(form);
     if (focus) phone.focus();
     bindForm(form, submit, feedback, async () => {
+      await requireLoginConnection();
       if (!exams.value().length) throw new Error('Choose at least one exam to continue.');
       const localNumber = phone.value.replace(/\D/g, '');
       if (!/^[6-9]\d{9}$/.test(localNumber)) throw new Error('Enter a 10-digit Indian mobile number starting with 6, 7, 8, or 9.');
@@ -122,6 +124,7 @@ export function showSignIn(main, ctx, firebase, startAuth, initState, authFlow =
     code.focus();
     resend.addEventListener('click', () => showPhone(true));
     bindForm(form, submit, feedback, async () => {
+      await requireLoginConnection();
       resend.disabled = true;
       authFlow.begin?.();
       try {
@@ -129,6 +132,12 @@ export function showSignIn(main, ctx, firebase, startAuth, initState, authFlow =
         const result = await confirmation.confirm(code.value);
         const user = result?.user || auth.currentUser;
         if (!user) throw new Error('Phone verification completed without an account. Retry sign-in.');
+        try {
+          await requireLoginConnection();
+        } catch (error) {
+          await sdk.signOut(auth);
+          throw error;
+        }
         if (!ctx.current()) {
           await sdk.signOut(auth);
           authFlow.cancel?.();
@@ -168,6 +177,7 @@ export function showSignIn(main, ctx, firebase, startAuth, initState, authFlow =
     section.replaceChildren(form);
     username.focus();
     bindForm(form, submit, feedback, async () => {
+      await requireLoginConnection();
       if (password.value !== confirmPassword.value) throw new Error('The passwords do not match.');
       const selectedUsername = username.value.trim().toLowerCase();
       try {
@@ -194,6 +204,7 @@ export function showSignIn(main, ctx, firebase, startAuth, initState, authFlow =
     section.replaceChildren(form);
     password.focus();
     bindForm(form, submit, feedback, async () => {
+      await requireLoginConnection();
       const selectedUsername = username.value.trim().toLowerCase();
       if (user.email !== usernameEmail(selectedUsername)) throw new Error('That username does not match this verified mobile account.');
       try {
@@ -220,9 +231,10 @@ export function showSignIn(main, ctx, firebase, startAuth, initState, authFlow =
     password.focus();
     back.addEventListener('click', () => showPasswordCheck(user));
     bindForm(form, submit, feedback, async () => {
+      await requireLoginConnection();
       if (password.value !== confirmPassword.value) throw new Error('The passwords do not match.');
       try {
-        await sdk.updatePassword(user, password.value);
+        await resetPasswordForPhoneUser(sdk, auth, user, password.value);
         await completeVerifiedLogin(user);
       } catch (error) {
         throw accountError(error);
@@ -231,6 +243,7 @@ export function showSignIn(main, ctx, firebase, startAuth, initState, authFlow =
   }
 
   async function completeVerifiedLogin(user) {
+    await requireLoginConnection();
     if (await hasPhoneSignIn(user)) {
       try {
         await persistCompletedPhoneSession(sdk, auth, user);
@@ -238,6 +251,13 @@ export function showSignIn(main, ctx, firebase, startAuth, initState, authFlow =
         throw Object.assign(new Error('Could not save your sign-in on this device. Please try again.'), {
           code: 'auth/session-persistence-failed', cause: error,
         });
+      }
+      try {
+        await requireLoginConnection();
+      } catch (error) {
+        await sdk.signOut(auth);
+        authFlow.cancel?.();
+        throw error;
       }
       authFlow.complete?.(user);
       return;
@@ -275,5 +295,5 @@ function accountError(error) {
     'auth/session-persistence-failed': 'Could not save your sign-in on this device. Please try again.',
     'auth/network-request-failed': 'Check your connection and try again.',
   };
-  return new Error(messages[error.code] || `Account setup failed${error.code ? ` (${error.code})` : ''}. Please try again.`);
+  return new Error(messages[error.code] || 'Account setup failed. Please try again.');
 }

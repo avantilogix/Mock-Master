@@ -9,12 +9,14 @@ import {showDownloads, showReferrals, showSaved, showTimetable, socialFooter} fr
 import {showCourseGroups, showShareRate, showVideos} from './engagement.js?v=youtube-rotate-v2';
 import {showEbook, showEbookDemo, showEbookStore} from './ebooks.js?v=continuous-reader-v2';
 import {examPreferenceField, normalizeExamPreferences} from './exam-preferences.js';
-import {verifyPasswordForPhoneUser} from './password-verification.js';
+import {changePasswordForPhoneUser} from './password-verification.js';
+import {checkConnection, isConnected} from './connection.js';
 import {bindForm, button, el, field, heading, icon, idPart, link, loadInto, panel, run, say, status, textValue} from './ui.js';
 
 const main = document.querySelector('#main');
 const nav = document.querySelector('#nav');
 const notice = document.querySelector('#notice');
+const offlineArea = document.querySelector('#offline-area');
 const routes = new Map([
   ['home', 0], ['catalog', 0], ['my-courses', 0], ['test-series', 0], ['book-store', 0], ['materials', 0],
   ['current-affairs', 0], ['pyqs', 0], ['syllabus', 0], ['progress', 0], ['notifications', 0],
@@ -56,6 +58,10 @@ function signInLink(label = 'Sign In') {
 
 async function startAuth() {
   if (authState === 'loading') return;
+  if (!isConnected()) {
+    authState = 'error';
+    return;
+  }
   authState = 'loading';
   if (route().page === 'signin') render();
   try {
@@ -68,8 +74,10 @@ async function startAuth() {
       if (user !== (session?.user ?? null)) setSession(user);
       else if (first && ['signin', 'timetable'].includes(route().page)) render();
     });
-  } catch {
+  } catch (error) {
+    console.error('Sign-in initialization failed:', error);
     authState = 'error';
+    await checkConnection();
     if (route().page === 'signin') render();
   }
 }
@@ -288,13 +296,9 @@ function showProfile(ctx) {
     if (currentPassword.value === newPassword.value) throw new Error('The new password must be different from the current password.');
     const user = firebase.auth.currentUser;
     if (!user?.email) throw new Error('This account does not have a password credential.');
-    const tokenResult = await user.getIdTokenResult();
-    if (tokenResult.signInProvider !== 'phone') {
-      throw new Error('Phone verification is required before changing your password.');
-    }
     try {
-      await verifyPasswordForPhoneUser(firebase.sdk, firebase.passwordAuth, user, user.email, currentPassword.value);
-      await firebase.sdk.updatePassword(user, newPassword.value);
+      await changePasswordForPhoneUser(firebase.sdk, firebase.auth, firebase.passwordAuth, user,
+        currentPassword.value, newPassword.value);
       passwordDialog.close();
       say(feedback, 'Password updated. Use your new password at the next sign-in.');
     } catch (error) {
@@ -500,7 +504,7 @@ function render(focus = false) {
     case 'timetable': showTimetable(main, ctx, {signInLink, personalTimetable: firebase?.personalTimetable}); break;
     case 'referrals': showReferrals(main, ctx, {signInLink}); break;
     case 'downloads': showDownloads(main, ctx, {signInLink}); break;
-    case 'videos': showVideos(main); break;
+    case 'videos': showVideos(main, ctx); break;
     case 'groups': showCourseGroups(main, ctx, current?.me, {signInLink}); break;
     case 'share-app': showShareRate(main); break;
     case 'privacy':
@@ -600,6 +604,28 @@ window.addEventListener('hashchange', () => {
     render(true);
   }
 });
+function updateConnection(connected) {
+  offlineArea.hidden = connected;
+  main.hidden = !connected;
+  document.querySelector('#offline-message').textContent = session ?
+    'Please check your connection and try again.' : 'An internet connection is required to log in.';
+  if (connected) {
+    if (authState === 'error') startAuth();
+    else if (session?.error && !session.pending) {
+      session.error = null;
+      session.pending = true;
+      initializeProfile(session);
+    }
+  }
+}
+window.addEventListener('mission-connection-change', event => updateConnection(event.detail.connected));
+document.querySelector('.offline-retry').addEventListener('click', checkConnection);
+updateConnection(isConnected());
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/offline-worker.js').catch(error => {
+    console.error('Offline screen registration failed:', error);
+  });
+}
 document.querySelector('.skip').addEventListener('click', event => {
   event.preventDefault();
   main.focus();

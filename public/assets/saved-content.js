@@ -9,7 +9,7 @@ const database = () => new Promise((resolve, reject) => {
   };
   request.onsuccess = () => resolve(request.result);
   request.onerror = () => reject(request.error);
-  request.onblocked = () => reject(new Error('Saved content storage is blocked. Close other app tabs and retry.'));
+  request.onblocked = () => reject(new Error('Downloads are unavailable. Close other app tabs and retry.'));
 });
 
 async function operation(store, mode, action) {
@@ -19,7 +19,7 @@ async function operation(store, mode, action) {
       const tx = db.transaction(store, mode);
       const request = action(tx.objectStore(store));
       tx.oncomplete = () => resolve(request.result);
-      tx.onabort = () => reject(tx.error || new Error('Saved content storage failed.'));
+      tx.onabort = () => reject(tx.error || new Error('Downloads are unavailable. Please try again.'));
       tx.onerror = () => {};
     });
   } finally { db.close(); }
@@ -113,12 +113,12 @@ async function validateAccess(ctx, item) {
     }
   } else if (type === 'test-pdf' || type === 'test-result-pdf') {
     await api(item.validatePath, {ctx, auth: true, blob: true});
-  } else throw new Error('Unknown saved content type.');
+  } else throw new Error('This download is unavailable.');
 }
 
 export async function savedPart(item, page) {
   const entry = await operation('files', 'readonly', store => store.get(partKey(item.key, page)));
-  if (!entry?.blob) throw new Error('This saved content is incomplete. Remove it and save it again.');
+  if (!entry?.blob) throw new Error('This download is incomplete. Remove it and save it again.');
   return entry.blob;
 }
 

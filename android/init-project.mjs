@@ -26,6 +26,7 @@ const manifestPath = resolve(target, 'twa-manifest.json');
 await manifest.saveToFile(manifestPath);
 await new TwaGenerator().createTwaProject(target, manifest, new ConsoleLog('Generating Android project'));
 const launcher = resolve(target, 'app/src/main/java/com/avantilogix/missionselection/LauncherActivity.java');
+const offlineHtml = await readFile(resolve('public/offline.html'), 'utf8');
 await writeFile(launcher, `package com.avantilogix.missionselection;
 
 import android.app.Activity;
@@ -42,6 +43,7 @@ import android.webkit.MimeTypeMap;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
+import android.webkit.WebResourceError;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
@@ -54,6 +56,7 @@ import java.util.Locale;
 public class LauncherActivity extends Activity {
     private static final String HOST = "mission-selection-ba819.web.app";
     private static final String START_URL = "https://" + HOST + "/";
+    private static final String OFFLINE_HTML = ${JSON.stringify(offlineHtml)};
     private static final int CHOOSE_FILES = 2401;
     private WebView webView;
     private FrameLayout content;
@@ -152,6 +155,14 @@ public class LauncherActivity extends Activity {
         settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
         settings.setUserAgentString(settings.getUserAgentString() + " MissionSelectionSecureApp/19");
         webView.setWebViewClient(new WebViewClient() {
+            @Override
+            public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
+                if (request.isForMainFrame() && HOST.equals(request.getUrl().getHost())) {
+                    view.stopLoading();
+                    view.loadDataWithBaseURL(START_URL, OFFLINE_HTML, "text/html", "UTF-8", START_URL);
+                }
+            }
+
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 Uri uri = request.getUrl();

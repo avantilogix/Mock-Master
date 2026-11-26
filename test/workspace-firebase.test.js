@@ -30,6 +30,7 @@ function fakeFirestore() {
         async get(ref) { return ref.field ? query(ref) : snapshot(ref); },
         create(ref, value) { writes.push(() => data.set(`${ref.collectionName}/${ref.id}`, value)); },
         update(ref, patch) { writes.push(() => data.set(`${ref.collectionName}/${ref.id}`, { ...snapshot(ref).data(), ...patch })); },
+        delete(ref) { writes.push(() => data.delete(`${ref.collectionName}/${ref.id}`)); },
       };
       const result = await work(tx);
       writes.forEach(write => write());
@@ -54,7 +55,12 @@ test('Firebase workspace routes persist validated folders and item moves transac
   const value = snap => snap.exists ? { id: snap.id, ...snap.data() } : null;
   const app = express();
   app.use(express.json());
-  registerWorkspaceRoutes(app, { db, value, course: async id => {
+  const deletedFiles = [];
+  const bucket = { file: name => ({ delete: async () => {
+    if (name === 'broken.pdf') throw Object.assign(new Error('Storage unavailable'), { code: 'unavailable' });
+    deletedFiles.push(name);
+  } }) };
+  registerWorkspaceRoutes(app, { db, bucket, value, course: async id => {
     if (!data.has(`courses/${id}`)) throw Object.assign(new Error('Course not found.'), { status: 404 });
     return { id };
   } });
@@ -88,4 +94,29 @@ test('Firebase workspace routes persist validated folders and item moves transac
   });
   assert.equal((await request('/workspace-items/book/b', 'PATCH', { folderId: null })).status, 200);
   assert.equal(data.get('books/b').folderId, null);
+  data.set('books/b2', { course: 'c', title: 'Nested book', folderId: b.id, pdfFile: 'custom/book.pdf' });
+  data.set('chapterVideos/v2', { course: 'c', title: 'Video', folderId: a.id, mediaFile: 'custom/video' });
+  data.set('books/other', { course: 'other', title: 'Other', folderId: a.id });
+  assert.equal((await request(`/folders/${tests.id}`, 'DELETE')).status, 422);
+  assert.equal((await request('/folders/missing', 'DELETE')).status, 404);
+  assert.equal((await request(`/folders/${a.id}`, 'DELETE')).status, 200);
+  assert.equal(data.has(`courseFolders/${a.id}`), false);
+  assert.equal(data.has(`courseFolders/${b.id}`), false);
+  assert.equal(data.has('books/b2'), false);
+  assert.equal(data.has('chapterVideos/v2'), false);
+  assert.equal(data.has('books/b'), true);
+  assert.equal(data.has('books/other'), true);
+  assert.equal(data.has(`courseFolders/${tests.id}`), true);
+  assert.deepEqual(deletedFiles.sort(), ['custom/book.pdf', 'custom/video']);
+  const large = await create({ kind: 'content', name: 'Large' });
+  for (let i = 0; i < 499; i++) data.set(`books/large${i}`, { course: 'c', folderId: large.id });
+  assert.equal((await request(`/folders/${large.id}`, 'DELETE')).status, 409);
+  assert.equal(data.has(`courseFolders/${large.id}`), true);
+  assert.equal(data.has('books/large0'), true);
+  const broken = await create({ kind: 'content', name: 'Broken file' });
+  data.set('books/broken', { course: 'c', folderId: broken.id, pdfFile: 'broken.pdf' });
+  const response = await request(`/folders/${broken.id}`, 'DELETE');
+  assert.equal(response.status, 200);
+  assert.match((await response.json()).warning, /stored files could not be removed/);
+  assert.equal(data.has(`courseFolders/${broken.id}`), false);
 });
