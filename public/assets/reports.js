@@ -1,7 +1,7 @@
 import {api} from './services.js';
 import {pdfReader} from './ebooks.js?v=minimal-reader-v6';
 import {saveControl} from './saved-content.js';
-import {manualQuestions} from './manual-questions.js?v=publish-icons-v1';
+import {importQuestionReview, manualQuestions} from './manual-questions.js?v=bilingual-import-v1';
 import {subjectQuestionManager} from './question-sections.js?v=subject-import-label-v1';
 import {questionData} from './question-data.js';
 import {bindForm, button, el, entries, field, heading, icon, iconAction, idPart, link, loadInto, panel, rule, run, say, status, textValue} from './ui.js?v=refresh-icons-v3';
@@ -356,6 +356,7 @@ export function adminContentForm(post, refresh, ctx) {
     try { questionData(value); return ''; } catch (error) { return error.message; }
   });
   const manual = manualQuestions();
+  const review = importQuestionReview(editor);
   const subjectManager = subjectQuestionManager(editor, (file, format) =>
     api(`/admin/import?format=${format}`, {ctx, auth: true, method: 'POST', binary: file}));
   const questionFile = el('input', {type: 'file', accept: '.pdf,.docx,.txt'});
@@ -372,7 +373,9 @@ export function adminContentForm(post, refresh, ctx) {
     if (!Array.isArray(result?.questions) || !result.questions.length) throw new Error('No questions were imported.');
     editor.value = JSON.stringify(result.questions, null, 2);
     editor.dispatchEvent(new Event('input', {bubbles: true}));
-    say(importFeedback, `${result.questions.length} questions imported. Review or edit them before publishing.`);
+    const pending = result.questions.filter(question => question.reviewIssues?.length).length;
+    say(importFeedback, `${result.questions.length} questions imported.${pending ?
+      ` ${pending} highlighted questions need review below.` : ' Review or edit them before publishing.'}`);
   }, 'Importing questions…'));
   const liveFields = el('div', {class: 'test-live-fields'},
     field('Live Test Opens (IST)', startsAt), field('Live Test Closes (IST)', expiresAt),
@@ -381,7 +384,7 @@ export function adminContentForm(post, refresh, ctx) {
     'Review extracted questions and edit prompts, options, answers, and sections before publishing.');
   const questionFields = el('fieldset', {class: 'current-affairs-test-questions upload-fields'},
     field('Question Creation', questionEntryType), importPanel, subjectManager.node,
-    questionEditorField, manual.node);
+    review.node, questionEditorField, manual.node);
   const testFields = el('fieldset', {class: 'current-affairs-test-fields upload-fields', hidden: '', disabled: ''},
     field('Test Type', testType), liveFields,
     field('Duration (minutes)', duration), field('Marks Per Correct Answer', marks),
@@ -397,6 +400,7 @@ export function adminContentForm(post, refresh, ctx) {
     editor.disabled = manualMode;
     manual.node.hidden = !manualMode;
     manual.node.disabled = !manualMode;
+    review.node.hidden = review.node.disabled = manualMode;
   };
   testType.addEventListener('change', updateTestFields);
   questionEntryType.addEventListener('change', updateTestFields);

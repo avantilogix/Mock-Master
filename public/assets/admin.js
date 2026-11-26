@@ -2,7 +2,7 @@ import {api} from './services.js';
 import {publishedManager, weekdays} from './admin-manage.js?v=ebook-demo-plus-v1';
 import {adminContentForm} from './reports.js?v=refresh-icons-v3';
 import {coverPicker} from './publishing-media.js';
-import {manualQuestions} from './manual-questions.js?v=publish-icons-v1';
+import {importQuestionReview, manualQuestions} from './manual-questions.js?v=bilingual-import-v1';
 import {subjectQuestionManager} from './question-sections.js?v=subject-import-label-v1';
 import {questionData} from './question-data.js';
 import {maxVideoBytes, uploadChapterVideo, videoAccept, videoType} from './chapter-upload.js';
@@ -549,11 +549,12 @@ export function showAdmin(main, ctx, folderTarget = null) {
     el('option', {value: 'sectionwise'}, 'Create Section-Wise Mock'));
   const manual = manualQuestions();
   const editor = el('textarea', {class: 'json', rows: '12', required: '', spellcheck: 'false', placeholder: example});
+  const review = importQuestionReview(editor);
   const importFile = rule(el('input', {type: 'file', accept: '.pdf,.docx,.txt', required: ''}), (_, control) =>
     /\.(pdf|docx|txt)$/i.test(control.files[0]?.name || '') ? '' : 'Choose a PDF, DOCX, or TXT file.');
   const importButton = button('Import', 'secondary', 'submit');
   const importStatus = status();
-  const importForm = el('form', {}, field('Question File', importFile, 'PDF, DOCX, or TXT. Importing replaces the JSON draft below.'),
+  const importForm = el('form', {}, field('Question File', importFile, 'English or Gujarati PDF, DOCX, or TXT, up to 12 MB. Importing replaces the draft below.'),
     importButton, importStatus);
   importFile.addEventListener('change', () => {
     const file = importFile.files[0];
@@ -569,7 +570,9 @@ export function showAdmin(main, ctx, folderTarget = null) {
     if (editor.value !== original) throw new Error('The JSON draft changed during import. Import again when you are ready to replace it.');
     editor.value = JSON.stringify(result.questions, null, 2);
     editor.dispatchEvent(new Event('input', {bubbles: true}));
-    say(importStatus, `Imported ${result.questions.length} questions. Review and edit the JSON before publishing.`);
+    const pending = result.questions.filter(question => question.reviewIssues?.length).length;
+    say(importStatus, `Imported ${result.questions.length} questions. ${pending ? `${pending} highlighted questions need review.` :
+      'Review the questions below before publishing.'}`);
   }, 'Importing questions…');
 
   const subjectManager = subjectQuestionManager(editor, (file, format) =>
@@ -620,6 +623,7 @@ export function showAdmin(main, ctx, folderTarget = null) {
     if (isSectionWise) testType.value = 'mock';
     testTypeField.hidden = isSectionWise;
     manual.node.hidden = manual.node.disabled = !isManual;
+    review.node.hidden = review.node.disabled = isManual;
     jsonField.hidden = editor.disabled = isManual || isSectionWise;
     subjectManager.node.hidden = isManual;
     subjectManager.node.querySelectorAll('input, button').forEach(control => { control.disabled = isManual; });
@@ -638,7 +642,7 @@ export function showAdmin(main, ctx, folderTarget = null) {
     field('Marks Per Correct Answer', marksPerQuestion),
     field('Negative Mark Per Wrong Answer', negativeMark),
     el('label', {class: 'choice'}, questionPaperDownload, 'Enable Question Paper Download after first completed attempt'),
-    sectionWiseSizeField, subjectManager.node, jsonField, manual.node);
+    sectionWiseSizeField, subjectManager.node, review.node, jsonField, manual.node);
   const testForm = el('form', {class: 'publish-test-form'}, testFields, publish, testStatus);
   bindForm(testForm, publish, testStatus, async () => {
     const sectionWise = creationMethod.value === 'sectionwise';
@@ -661,6 +665,7 @@ export function showAdmin(main, ctx, folderTarget = null) {
       testForm.reset();
       if (folderTarget) testCourse.value = folderTarget.courseId;
       manual.reset();
+      review.reset();
       subjectManager.reset();
       updateTestType();
       say(testStatus, 'Test published.');

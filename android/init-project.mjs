@@ -14,8 +14,8 @@ manifest.startUrl = '/';
 manifest.name = 'Mission Selection';
 manifest.launcherName = 'Mission';
 manifest.packageId = 'com.avantilogix.missionselection';
-manifest.appVersionCode = 19;
-manifest.appVersionName = '19';
+manifest.appVersionCode = 20;
+manifest.appVersionName = '20';
 manifest.display = 'standalone';
 manifest.orientation = 'default';
 manifest.minSdkVersion = 24;
@@ -75,10 +75,10 @@ public class LauncherActivity extends Activity {
         webView = new WebView(this);
         SharedPreferences preferences = getSharedPreferences("mission_selection", MODE_PRIVATE);
         int cachedVersion = preferences.getInt("web_cache_version", 0);
-        if (cachedVersion < 19) {
+        if (cachedVersion < 20) {
             webView.clearCache(true);
             webView.clearHistory();
-            preferences.edit().putInt("web_cache_version", 19).apply();
+            preferences.edit().putInt("web_cache_version", 20).apply();
         }
         webView.setLongClickable(false);
         webView.setOnLongClickListener(view -> true);
@@ -153,7 +153,7 @@ public class LauncherActivity extends Activity {
         settings.setAllowContentAccess(true);
         settings.setMediaPlaybackRequiresUserGesture(true);
         settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
-        settings.setUserAgentString(settings.getUserAgentString() + " MissionSelectionSecureApp/19");
+        settings.setUserAgentString(settings.getUserAgentString() + " MissionSelectionSecureApp/20");
         webView.setWebViewClient(new WebViewClient() {
             @Override
             public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {

@@ -1,4 +1,4 @@
-import {showAdmin} from './admin.js?v=student-actions-v2';
+import {showAdmin} from './admin.js?v=bilingual-import-v1';
 import {showAdminCourseWorkspace} from './admin-course-workspace.js?v=workspace-refresh-v1';
 import {showCatalog, showContentLibrary, showCourse, showDashboard, showMyCourses} from './course.js?v=purchased-course-no-overview-v1';
 import {api, firebaseAuth} from './services.js?v=persistent-session';

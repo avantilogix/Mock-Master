@@ -100,8 +100,11 @@ export function subjectQuestionManager(questionsEditor, importFile) {
         const firstIndex = questions.findIndex(question => sectionOf(question) === subject.name);
         const remaining = questions.filter(question => sectionOf(question) !== subject.name);
         remaining.splice(firstIndex < 0 ? remaining.length : firstIndex, 0, ...sectionQuestions);
+        if (remaining.length > 200) throw new Error(`This import would create ${remaining.length} questions. A test can contain at most 200.`);
         updateQuestions(remaining);
-        say(importFeedback, `${sectionQuestions.length} questions imported into ${subject.name}.`);
+        const pending = sectionQuestions.filter(question => question.reviewIssues?.length).length;
+        say(importFeedback, `${sectionQuestions.length} questions imported into ${subject.name}.${pending ?
+          ` ${pending} highlighted questions need review below.` : ' Review the questions below before publishing.'}`);
       }, 'Importing questions…'));
       const remove = confirmDelete(importFeedback, async () => {
         const questions = questionData().filter(question => sectionOf(question) !== subject.name);

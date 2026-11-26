@@ -35,10 +35,12 @@ function fixturePdf(mediaBox = '0 0 612 792') {
   return Buffer.from(`${pdf}xref\n0 6\n0000000000 65535 f \n${offsets.join('')}trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${pdf.length}\n%%EOF\n`);
 }
 
-test('imports formatted text and rejects questions without a valid answer', async () => {
+test('imports formatted text and flags questions without a valid answer for review', async () => {
   assert.deepEqual(await importQuestions(Buffer.from(source), 'txt'), importedQuestions);
   assert.equal((await importQuestions(Buffer.from(source.replace('1.', '23.')), 'txt'))[0].questionNumber, '23');
-  await assert.rejects(importQuestions(Buffer.from(source.replace('Answer: B', 'Answer: F')), 'txt'), { status: 422 });
+  const [unresolved] = await importQuestions(Buffer.from(source.replace('Answer: B', 'Answer: F')), 'txt');
+  assert.equal(unresolved.answer, null);
+  assert.match(unresolved.reviewIssues.join(' '), /invalid or conflicting/);
   await assert.rejects(importQuestions(Buffer.from('not a test'), 'txt'), { status: 422 });
 });
 

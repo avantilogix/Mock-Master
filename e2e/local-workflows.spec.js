@@ -294,6 +294,76 @@ test('downloads page exposes separate PDF and Video tabs and persists items', as
   await expect(page.getByText('Nothing saved yet')).toBeVisible();
 });
 
+test('admin reviews imported Gujarati questions, fixes missing answers, and publishes without JSON editing', async ({page, request}) => {
+  await signIn(page, '99999 99999');
+  await page.goto('/#admin');
+  await page.getByRole('button', {name: /Mock Tests/}).first().click();
+  await page.getByRole('button', {name: 'Add Mock Test'}).click();
+  const panel = page.locator('.publish-test-panel');
+  const file = `પ્રશ્ન ૧. ગુજરાતની રાજધાની કઈ છે?
+(A) અમદાવાદ (B) ગાંધીનગર
+જવાબ: (B) ગાંધીનગર
+પ્રશ્ન ૨. ૨ + ૨ = ?
+(A) ૩ (B) ૪`;
+  await panel.getByLabel('Question File', {exact: false}).first().setInputFiles({
+    name: 'gujarati-questions.txt', mimeType: 'text/plain', buffer: Buffer.from(file),
+  });
+  await panel.locator('.publish-test-import').getByRole('button', {name: 'Import', exact: true}).click();
+  await expect(panel.getByText('Imported 2 questions. 1 highlighted questions need review.')).toBeVisible();
+  const review = panel.locator('.imported-question-review');
+  await expect(review.locator('.imported-question')).toHaveCount(2);
+  const missing = review.locator('.imported-question').nth(1);
+  await expect(missing).toHaveClass(/needs-review/);
+  await expect(missing.getByLabel('Question Text')).toHaveValue('૨ + ૨ = ?');
+  const json = panel.getByLabel('Questions (JSON)', {exact: false});
+  const pending = JSON.parse(await json.inputValue());
+  expect(pending[1].answer).toBeNull();
+  const headers = {Authorization: 'Bearer dummy:+919999999999'};
+  const blocked = await request.post('/api/admin/courses/sample-bank-exam/tests', {
+    headers, data: {title: 'Must not publish', questions: pending},
+  });
+  expect(blocked.status()).toBe(422);
+  await missing.getByLabel('Correct Answer').selectOption('1');
+  await expect(missing).not.toHaveClass(/needs-review/);
+  await expect(review.getByText('2 of 200 questions · 0 need review')).toBeVisible();
+  const resolved = JSON.parse(await json.inputValue());
+  expect(resolved.map(question => question.answer)).toEqual([1, 1]);
+  expect(resolved[1].reviewIssues).toBeUndefined();
+  await panel.getByLabel('Course', {exact: false}).first().selectOption('sample-bank-exam');
+  const title = `Reviewed Gujarati mock ${Date.now()}`;
+  await panel.getByLabel('Test Title').fill(title);
+  await panel.getByRole('button', {name: 'Publish Test', exact: true}).click();
+  await expect(panel.getByText('Test published.', {exact: true})).toBeVisible();
+  const published = await (await request.get('/api/admin/published', {headers})).json();
+  expect(published.tests.some(test => test.title === title && test.questions.length === 2)).toBe(true);
+
+  await panel.getByLabel('Test Creation Method').selectOption('manual');
+  const manual = panel.locator('.manual-questions:not(.imported-question-review)');
+  await expect(manual).toBeVisible();
+  await manual.getByLabel('Question Text').fill('Manual draft remains independent?');
+  await manual.getByLabel('Option A', {exact: true}).fill('Yes');
+  await manual.getByLabel('Option B', {exact: true}).fill('No');
+  await manual.getByLabel('Correct Answer').selectOption('1');
+  await manual.getByRole('button', {name: 'Remove option a', exact: true}).click();
+  await expect(manual.getByLabel('Correct Answer')).toHaveValue('0');
+  await panel.getByLabel('Test Creation Method').selectOption('sectionwise');
+  const section = panel.locator('.subject-question-card').first();
+  await section.getByLabel('Question File').setInputFiles({
+    name: 'review.txt', mimeType: 'text/plain',
+    buffer: Buffer.from('1. Repair \u0000 text?\n(A) One\n(C) Two\nAnswer: C'),
+  });
+  await section.getByRole('button', {name: /Import questions for/}).click();
+  const damaged = review.locator('.imported-question').first();
+  await expect(damaged).toHaveClass(/needs-review/);
+  await expect(damaged.getByText(/Unreadable characters/)).toBeVisible();
+  await damaged.getByLabel('Question Text').fill('Repaired text?');
+  await expect(damaged).toHaveClass(/needs-review/);
+  await damaged.getByLabel('I checked this source question and its choice order.').check();
+  await expect(damaged).not.toHaveClass(/needs-review/);
+  await expect(damaged.getByLabel('Correct Answer')).toHaveValue('1');
+  expect(JSON.parse(await json.inputValue())[0].reviewIssues).toBeUndefined();
+});
+
 test('admin can create and edit course details locally', async ({ page }) => {
   const suffix = Date.now();
   const title = `Local Course ${suffix}`;

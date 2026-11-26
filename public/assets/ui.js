@@ -56,7 +56,7 @@ const controlSelector = 'input:not([type="radio"]):not([type="checkbox"]), selec
 const textTypes = ['text', 'tel', 'url', 'email', 'search', 'textarea'];
 
 export function field(text, control, hint) {
-  const id = `field-${++fieldCount}`;
+  const id = `field-${crypto.randomUUID()}`;
   const input = control.matches(controlSelector) ? control : control.querySelector(controlSelector) || control;
   input.id = id;
   input.dataset.label ||= text.replace(/\s*\((?:optional[^)]*|only if needed)\)\s*$/i, '').replace(/\?$/, '');
@@ -70,8 +70,6 @@ export function field(text, control, hint) {
   input.addEventListener('blur', () => { if (input.value.trim()) fieldError(input, errorFor(input)); });
   return wrapper;
 }
-let fieldCount = 0;
-
 // Attach an extra check to a control; `check(value, control)` returns an error message or ''.
 export function rule(control, check) {
   control.validate = check;

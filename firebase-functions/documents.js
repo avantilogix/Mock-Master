@@ -4,6 +4,9 @@ import { PDFDocument } from 'pdf-lib';
 import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs';
 import sax from 'sax';
 import sharp from 'sharp';
+import { parseQuestions, pdfQuestionText } from './question-import.js';
+
+export { parseQuestions } from './question-import.js';
 
 export const mobile = /^\+91[6-9][0-9]{9}$/;
 
@@ -15,44 +18,6 @@ function documentError(error) {
   if (error.code === 'ENOENT') fail(503, 'Document processing is not configured on the server.');
   if (error.status) throw error;
   fail(422, 'Could not process this document.');
-}
-
-async function pdfText(file) {
-  if (!Buffer.isBuffer(file) || !file.subarray(0, 5).equals(Buffer.from('%PDF-'))) fail(422, 'Expected a PDF.');
-  let loading;
-  try {
-    loading = getDocument({data: new Uint8Array(file), useSystemFonts: true, isEvalSupported: false});
-    const document = await loading.promise;
-    if (document.numPages < 1 || document.numPages > 500) fail(422, 'Expected an unencrypted PDF with 1–500 pages.');
-    const lines = [];
-    for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber++) {
-      const page = await document.getPage(pageNumber);
-      const content = await page.getTextContent();
-      let line = '';
-      let baseline;
-      for (const item of content.items) {
-        if (typeof item.str !== 'string' || !item.str.trim()) continue;
-        const y = item.transform?.[5];
-        if (Number.isFinite(y) && Number.isFinite(baseline) && Math.abs(y - baseline) > 2 && line) {
-          lines.push(line.trim());
-          line = '';
-        }
-        line = line ? `${line} ${item.str.trim()}` : item.str.trim();
-        if (Number.isFinite(y)) baseline = y;
-        if (item.hasEOL) {
-          lines.push(line.trim());
-          line = '';
-          baseline = undefined;
-        }
-      }
-      if (line) lines.push(line.trim());
-    }
-    return lines.join('\n');
-  } catch (error) {
-    documentError(error);
-  } finally {
-    await loading?.destroy();
-  }
 }
 
 async function docxText(file) {
@@ -173,11 +138,15 @@ async function renderPdfPage(pdf, page, label) {
 }
 
 export function validateQuestions(questions) {
-  const isText = (value, limit) => typeof value === 'string' && value.trim() && value.length <= limit;
+  if (Array.isArray(questions) && questions.some(question => question?.reviewIssues?.length)) {
+    fail(422, 'Resolve imported question review warnings before publishing.');
+  }
+  const isText = (value, limit) => typeof value === 'string' && value.trim() && value.length <= limit && !/[\u0000\ufffd]/.test(value);
   if (!Array.isArray(questions) || !questions.length || questions.length > 200 ||
       questions.some(q => !isText(q?.prompt, 2000) || !Array.isArray(q.options) ||
         q.options.length < 2 || q.options.length > 6 || q.options.some(o => !isText(o, 500)) ||
         !Number.isInteger(q.answer) || q.answer < 0 || q.answer >= q.options.length ||
+        (typeof q.section === 'string' && /[\u0000\ufffd]/.test(q.section)) ||
         (q.questionNumber !== undefined &&
           !((typeof q.questionNumber === 'string' && /^\d{1,10}$/.test(q.questionNumber) && Number(q.questionNumber) > 0) ||
             (Number.isSafeInteger(q.questionNumber) && q.questionNumber > 0))))) {
@@ -192,41 +161,11 @@ export function validateQuestions(questions) {
   }));
 }
 
-export function parseQuestions(text) {
-  const questions = [];
-  let current;
-  const lines = text.split(/[\n\f]/).map(line => line.trim()).filter(Boolean);
-  for (const line of lines) {
-    const prompt = line.match(/^(?:Q\s*)?(\d+)[.)](.+)$/i);
-    const option = line.match(/^([A-F])[.)](.+)$/i);
-    const answer = line.match(/^Answer:\s*([A-F])(?:[.)])?$/i);
-    if (prompt) {
-      if (current) fail(422, 'Each numbered question must end with an Answer: A–F line.');
-      current = { questionNumber: prompt[1], prompt: prompt[2], options: [] };
-    } else if (current && option) {
-      if (option[1].toUpperCase().charCodeAt(0) - 65 !== current.options.length) {
-        fail(422, 'Options must be labeled A, B, C and so on, in order.');
-      }
-      current.options.push(option[2]);
-    } else if (current && answer) {
-      current.answer = answer[1].toUpperCase().charCodeAt(0) - 65;
-      questions.push(current);
-      current = null;
-    } else if (current) {
-      const options = current.options;
-      if (options.length) options[options.length - 1] += ` ${line}`;
-      else current.prompt += ` ${line}`;
-    }
-  }
-  if (current) fail(422, 'The last question is missing its Answer: A–F line.');
-  return validateQuestions(questions);
-}
-
 export async function importQuestions(file, format) {
   if (!Buffer.isBuffer(file) || !file.length) fail(400, 'Upload a non-empty document.');
   try {
     let text;
-    if (format === 'pdf') text = await pdfText(file);
+    if (format === 'pdf') text = await pdfQuestionText(file, getDocument);
     else if (format === 'docx') text = await docxText(file);
     else if (format === 'txt') text = new TextDecoder('utf-8', { fatal: true }).decode(file);
     else fail(400, 'Choose PDF, DOCX or UTF-8 text.');
