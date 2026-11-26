@@ -1,7 +1,7 @@
 import {api} from './services.js';
-import {pdfReader} from './ebooks.js?v=minimal-reader-v6';
-import {openSaved, removeSaved, savedItems, savedPart} from './saved-content.js';
-import {bindForm, button, confirmDelete, el, entries, field, heading, icon, iconAction, idPart, link, loadInto, panel, run, say, status, textValue} from './ui.js?v=icon-only-actions-v1';
+import {pdfReader} from './ebooks.js?v=pdf-reader-minimal-v2';
+import {openSaved, removeSaved, savedItems, savedPart} from './saved-content.js?v=download-icon-controls-v1';
+import {backLink, bindForm, button, confirmDelete, el, entries, field, heading, icon, iconAction, idPart, link, loadInto, panel, run, say, status, textValue} from './ui.js?v=previous-only-back-v1';
 
 export const socialLinks = [
   ['YouTube', 'youtube', '▶'],
@@ -9,123 +9,23 @@ export const socialLinks = [
   ['Telegram', 'telegram', '➤'],
 ];
 
-const weekDays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 const clock = value => {
   const [hours, minutes] = String(value || '').split(':').map(Number);
   if (!Number.isInteger(hours) || !Number.isInteger(minutes)) return value || '';
   return `${hours % 12 || 12}:${String(minutes).padStart(2, '0')} ${hours < 12 ? 'AM' : 'PM'}`;
 };
-const minutesLabel = total => {
-  const value = Number.parseInt(total, 10);
-  if (!Number.isFinite(value)) return String(total || '');
-  const hours = Math.floor(value / 60);
-  return [hours && `${hours} hr`, value % 60 && `${value % 60} min`].filter(Boolean).join(' ');
-};
-
-export function showTimetable(main, ctx, action) {
-  if (!action.personalTimetable) {
-    main.append(...heading('Study Timetable', 'See upcoming classes, tests, and revision sessions.'));
-    const sessions = el('div', {class: 'timetable'});
-    main.append(panel('Published Sessions', sessions));
-    loadInto(sessions, ctx, async () => {
-      const rows = await api('/timetable', {ctx});
-      sessions.replaceChildren(...(rows.length ? rows.map(item => el('article', {class: 'timetable-card'},
-        el('div', {class: 'timetable-time'}, el('small', {}, item.day), el('strong', {}, clock(item.startsAt || item.starts_at)),
-          el('small', {}, item.duration)),
-        el('div', {}, el('h3', {}, item.title), el('p', {class: 'muted'}, item.description)))) :
-        [el('p', {class: 'empty'}, 'No timetable sessions have been published yet.')]));
-    });
-    return;
-  }
-  main.append(...heading('My Study Timetable', 'Plan your own week of classes, tests, and revision. Only you can see these sessions.'));
-  if (!ctx.user) {
-    main.append(panel('Your Personal Timetable', el('p', {}, 'Sign in to create a timetable that is saved to your account only.'),
-      action.signInLink()));
-    return;
-  }
-  const mine = (path = '', options = {}) => api(`/timetable/mine${path}`, {ctx, auth: true, ...options});
-  const day = el('select', {required: ''}, el('option', {value: ''}, 'Choose a Day'),
-    weekDays.map(value => el('option', {value}, value)));
-  const title = el('input', {required: '', maxlength: '120', placeholder: 'Polity Revision'});
-  const start = el('input', {type: 'time', required: ''});
-  const duration = el('input', {type: 'number', required: '', min: '5', max: '720', step: '1', inputmode: 'numeric', placeholder: '60'});
-  const notes = el('textarea', {rows: '3', maxlength: '1000', placeholder: 'Topics, chapters, or a test to attempt'});
-  const save = iconAction(button('', null, 'submit'), 'plus', 'Add to Timetable');
-  const cancel = button('Cancel Edit', 'secondary');
-  cancel.hidden = true;
-  const feedback = status();
-  const formTitle = el('h2', {}, 'Add a Study Session');
-  const form = el('form', {class: 'timetable-form'}, el('div', {class: 'form-grid'}, field('Day', day), field('Start Time', start),
-    field('Duration (minutes)', duration, 'Between 5 and 720 minutes.')),
-  field('Session Title', title), field('Notes (optional)', notes), el('div', {class: 'actions'}, save, cancel), feedback);
-  const summary = el('p', {class: 'timetable-summary muted'});
-  const list = el('div', {class: 'timetable'});
-  let editing = null;
-  const setEditing = item => {
-    editing = item;
-    form.reset();
-    if (item) {
-      day.value = item.day;
-      title.value = item.title;
-      start.value = item.startsAt;
-      duration.value = Number.parseInt(item.duration, 10) || '';
-      notes.value = item.description || '';
-    }
-    formTitle.textContent = item ? 'Edit Study Session' : 'Add a Study Session';
-    if (item) {
-      save.textContent = 'Save Changes';
-      save.classList.remove('icon-action');
-      save.removeAttribute('aria-label');
-      save.removeAttribute('title');
-    } else iconAction(save, 'plus', 'Add to Timetable');
-    cancel.hidden = !item;
-  };
-  cancel.addEventListener('click', () => { setEditing(null); say(feedback, ''); });
-  const load = () => loadInto(list, ctx, async () => {
-    const rows = await mine();
-    const total = rows.reduce((sum, item) => sum + (Number.parseInt(item.duration, 10) || 0), 0);
-    summary.textContent = rows.length ? `${rows.length} ${rows.length === 1 ? 'session' : 'sessions'} · ${minutesLabel(total)} planned each week` : '';
-    if (!rows.length) {
-      list.replaceChildren(el('div', {class: 'empty-library'}, el('h2', {}, 'Your Week Is Empty'),
-        el('p', {class: 'muted'}, 'Add your first study session using the form above.')));
-      return;
-    }
-    list.replaceChildren(...weekDays.filter(name => rows.some(item => item.day === name)).map(name =>
-      el('section', {class: 'timetable-day'}, el('h3', {}, name), rows.filter(item => item.day === name).map(item => {
-        const rowFeedback = status();
-        const edit = iconAction(button('', 'secondary'), 'edit', 'Edit');
-        edit.addEventListener('click', () => {
-          setEditing(item);
-          say(feedback, `Editing “${item.title}”. Save your changes or cancel.`);
-          form.scrollIntoView({behavior: 'smooth', block: 'start'});
-          title.focus({preventScroll: true});
-        });
-        const remove = confirmDelete(rowFeedback, async () => {
-          await mine(`/${idPart(item.id)}`, {method: 'DELETE'});
-          if (editing?.id === item.id) setEditing(null);
-          say(feedback, `“${item.title}” was removed from your timetable.`);
-          load();
-        }, {question: 'Remove this session?'});
-        return el('article', {class: 'timetable-card'},
-          el('div', {class: 'timetable-time'}, el('strong', {}, clock(item.startsAt)), el('small', {}, minutesLabel(item.duration))),
-          el('div', {}, el('h4', {}, item.title), item.description ? el('p', {class: 'muted'}, item.description) : null,
-            rowFeedback),
-          el('div', {class: 'actions timetable-actions'}, edit, remove));
-      }))));
+export function showTimetable(main, ctx) {
+  main.append(...heading('Study Timetable', 'See upcoming classes, tests, and revision sessions.'));
+  const sessions = el('div', {class: 'timetable'});
+  main.append(panel('Published Sessions', sessions));
+  loadInto(sessions, ctx, async () => {
+    const rows = await api('/timetable', {ctx});
+    sessions.replaceChildren(...(rows.length ? rows.map(item => el('article', {class: 'timetable-card'},
+      el('div', {class: 'timetable-time'}, el('small', {}, item.day), el('strong', {}, clock(item.startsAt || item.starts_at)),
+        el('small', {}, item.duration)),
+      el('div', {}, el('h3', {}, item.title), el('p', {class: 'muted'}, item.description)))) :
+      [el('p', {class: 'empty'}, 'No timetable sessions have been published yet.')]));
   });
-  bindForm(form, save, feedback, async () => {
-    const body = {day: day.value, title: textValue(title, 'Session title'), startsAt: start.value,
-      duration: duration.valueAsNumber, description: notes.value.trim()};
-    const updating = editing;
-    if (updating) await mine(`/${idPart(updating.id)}`, {method: 'PUT', json: body});
-    else await mine('', {method: 'POST', json: body});
-    setEditing(null);
-    say(feedback, updating ? 'Session updated.' : 'Session added to your timetable.');
-    load();
-  }, 'Saving session…');
-  main.append(el('section', {class: 'panel section'}, formTitle, form),
-    el('section', {class: 'section'}, el('div', {class: 'section-heading'}, el('h2', {}, 'Your Week'), summary), list));
-  load();
 }
 
 export function showReferrals(main, ctx, action) {
@@ -190,11 +90,15 @@ export function showDownloads(main, ctx, action) {
         await removeSaved(ctx.user.uid, item.type, item.id);
         load();
       }, {question: 'Remove this saved item?'});
-      return el('article', {class: 'download-row'}, el('div', {},
-        el('strong', {}, item.title), el('p', {class: 'muted'},
-          item.incomplete ? 'Incomplete save. Remove and try again.' : item.type.includes('video') ? 'Video' : `${item.parts} pages`)),
-      item.incomplete ? null : link('Open', `#saved/${idPart(item.type)}/${idPart(item.id)}`, 'button'),
-      remove, feedback);
+      const open = item.incomplete ? null : iconAction(
+        link('', `#saved/${idPart(item.type)}/${idPart(item.id)}`, 'secondary icon-button'),
+        'eye', `Open ${item.title}`);
+      return el('article', {class: 'download-row'},
+        el('div', {class: 'download-row-copy'}, el('strong', {}, item.title),
+          el('p', {class: 'muted'},
+            item.incomplete ? 'Incomplete save. Remove and try again.' :
+              item.type.includes('video') ? 'Video' : `${item.parts} pages`)),
+        el('div', {class: 'download-row-actions'}, open, remove), feedback);
     }) : [el('p', {class: 'empty-library'}, 'Nothing saved yet. Open eligible learning content and choose Save to Downloads.')]));
   });
   load();
@@ -202,7 +106,7 @@ export function showDownloads(main, ctx, action) {
 
 export function showSaved(main, ctx, type, id) {
   const content = el('div');
-  main.append(link('Back to Downloads', '#downloads', 'back'), content);
+  main.append(backLink('Back to Downloads', '#downloads'), content);
   loadInto(content, ctx, async () => {
     const item = await openSaved(ctx, type, id);
     if (!ctx.current()) return;
@@ -221,7 +125,7 @@ export function showSaved(main, ctx, type, id) {
       ctx.signal.addEventListener('abort', () => URL.revokeObjectURL(url), {once: true});
       content.append(el('iframe', {class: 'saved-pdf', src: url, title: item.title}));
     } else {
-      pdfReader(content, ctx, {...item, pages: item.parts, readerTools: true, getPage: page => savedPart(item, page)});
+      pdfReader(content, ctx, {...item, pages: item.parts, getPage: page => savedPart(item, page)});
     }
   });
 }

@@ -74,6 +74,15 @@ test('notification bell is in the mobile header instead of quick access', async 
   expect(bounds.x + bounds.width).toBeGreaterThan(330);
   await bell.click();
   await expect(page).toHaveURL(/#notifications$/);
+  const heading = page.getByRole('heading', {name: 'Notifications'});
+  const headingRow = page.locator('.page-heading-row').filter({has: heading});
+  const back = headingRow.locator(':scope > .page-back');
+  await expect(heading).toBeVisible();
+  await expect(back).toHaveAttribute('aria-label', 'Back');
+  const headingBox = await heading.boundingBox();
+  const backBox = await back.boundingBox();
+  expect(headingBox.x).toBeGreaterThan(backBox.x + backBox.width);
+  expect(Math.abs((headingBox.y + headingBox.height / 2) - (backBox.y + backBox.height / 2))).toBeLessThan(8);
 });
 
 test('exam navigation asks before submitting and protects browser back', async ({page, request}) => {
@@ -364,10 +373,24 @@ test('first test score stays beside start while later attempts reach progress', 
   await expect(row.getByText('First attempt: 0/1')).toBeVisible();
   await expect(row.getByRole('link', {name: 'Start test'})).toBeVisible();
   await page.goto('/#test-series');
+  await page.getByRole('button', {name: `Open tests for ${title}`}).click();
   await expect(page.locator('.test-series-row').filter({hasText: 'First score test'})
     .getByText('First attempt: 0/1')).toBeVisible();
   const progress = await (await request.get('/api/progress', {headers: student})).json();
   expect(progress.attempts.filter(attempt => attempt.test === testId)).toHaveLength(2);
+});
+
+test('study timetable shows admin-published sessions only', async ({ page }) => {
+  await signIn(page);
+  await page.route('**/api/timetable', route => route.fulfill({json: [{
+    title: 'Admin Study Session', day: 'Monday', startsAt: '09:00', duration: '60 minutes', description: 'Revision',
+  }]}));
+  await page.goto('/#timetable');
+  await expect(page.getByRole('heading', { name: 'Study Timetable' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Published Sessions' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Admin Study Session' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Add a Study Session' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /Add to Timetable/ })).toHaveCount(0);
 });
 
 test('dummy student sign-in and protected course access', async ({ page, request }) => {
@@ -375,6 +398,22 @@ test('dummy student sign-in and protected course access', async ({ page, request
   await page.goto('/#catalog');
   await expect(page.getByRole('heading', { name: 'All Courses' })).toBeVisible();
   await page.goto('/#course/sample-bank-exam');
+  await page.getByRole('tab', { name: 'Content - locked' }).click();
+  await expect(page.getByText('Course Content', {exact: true})).toBeVisible();
+  await expect(page.getByText(/You need to purchase .* to unlock its study materials and discussions\./)).toBeVisible();
+  await expect(page.locator('.course-content .course-locked-folder')).toHaveAttribute('aria-disabled', 'true');
+  await expect(page.locator('.course-content .course-locked-folder a, .course-content .course-locked-folder button')).toHaveCount(0);
+  await expect(page.locator('.course-content .course-lock-thumbnail')).toBeVisible();
+  await expect(page.locator('.course-content .course-lock-icon use')).toHaveAttribute('href', /#lock$/);
+  await expect(page.locator('.course-tab[aria-label="Content - locked"] svg use')).toHaveAttribute('href', /#lock$/);
+  await page.getByRole('tab', { name: 'Test - locked' }).click();
+  await expect(page.getByText(/You need to purchase .* to access practice and live tests\./)).toBeVisible();
+  await expect(page.locator('.course-test-panel .course-lock-thumbnail')).toBeVisible();
+  await expect(page.locator('.course-tab[aria-label="Test - locked"] svg use')).toHaveAttribute('href', /#lock$/);
+  await page.getByRole('tab', { name: 'Content - locked' }).click();
+  await page.locator('.course-content .course-content-buy').click();
+  await expect(page.getByRole('tab', { name: 'Overview' })).toHaveAttribute('aria-selected', 'true');
+  await expect(page.locator('.course-purchase-notice')).toContainText('Select Buy Now on the overview to continue.');
   await expect(page.getByRole('button', { name: 'Buy Now' }).first()).toBeVisible();
   const direct = await request.get('/api/courses/sample-bank-exam', {
     headers: { Authorization: 'Bearer dummy:+919876543210' },
@@ -411,6 +450,7 @@ test('admin can approve a pending course payment and grant only that user', asyn
   await page.goto('/#admin');
   await expect(page.getByRole('heading', { name: 'Admin Workspace' })).toBeVisible();
   await page.getByRole('button', { name: /Course Payments/ }).click();
+  await page.locator('.admin-payment-group').filter({hasText: reference}).locator(':scope > summary').click();
   const payment = page.locator('.payment-request').filter({ hasText: reference });
   await payment.locator('summary').first().click();
   await payment.getByRole('button', { name: 'Approve and Unlock' }).click();
@@ -909,10 +949,16 @@ test('PYQs and Syllabus PDFs respect save permissions and appear in Downloads', 
   await expect(pyqCard.locator('.lead')).toHaveCount(0);
   await expect(pyqCard.getByText('Open Resource')).toHaveCount(0);
   await pyqCard.getByRole('link', {name: 'View PDF'}).click();
-  await expect(page.getByRole('button', {name: 'Previous page'})).toBeVisible();
-  await page.getByRole('button', {name: 'Zoom in'}).click();
-  await expect(page.getByText('125%', {exact: true})).toBeVisible();
+  await expect(page.getByRole('heading', {name: pyqTitle})).toBeVisible();
+  await expect(page.getByRole('region', {name: `${pyqTitle} PDF pages`})).toBeVisible();
+  await expect(page.getByRole('button', {name: 'Previous page'})).toHaveCount(0);
+  await expect(page.getByRole('button', {name: 'Next page'})).toHaveCount(0);
+  await expect(page.getByRole('spinbutton', {name: 'Go to page'})).toHaveCount(0);
+  await expect(page.getByRole('button', {name: 'Zoom in'})).toHaveCount(0);
   await expect(page.getByRole('button', {name: 'Save to Downloads'})).toBeVisible();
+  const topbarBox = await page.locator('.pdf-reader-topbar').boundingBox();
+  const downloadBox = await page.getByRole('button', {name: 'Save to Downloads'}).boundingBox();
+  expect(Math.abs(topbarBox.x + topbarBox.width - downloadBox.x - downloadBox.width)).toBeLessThan(8);
   await page.getByRole('button', {name: 'Save to Downloads'}).click();
   await expect(page.getByText('Saved inside the app. Open it from Downloads.')).toBeVisible();
   await page.goto('/#downloads');

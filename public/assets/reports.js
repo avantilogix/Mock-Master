@@ -1,10 +1,10 @@
 import {api} from './services.js';
-import {pdfReader} from './ebooks.js?v=minimal-reader-v6';
-import {saveControl} from './saved-content.js';
+import {pdfReader} from './ebooks.js?v=pdf-reader-minimal-v2';
+import {saveControl} from './saved-content.js?v=merge-resolved-v1';
 import {importQuestionReview, manualQuestions} from './manual-questions.js?v=bilingual-import-v1';
 import {subjectQuestionManager} from './question-sections.js?v=subject-import-label-v1';
 import {questionData} from './question-data.js';
-import {bindForm, button, el, entries, field, firstAttemptScore, heading, icon, iconAction, idPart, link, loadInto, panel, rule, run, say, status, textValue} from './ui.js?v=refresh-icons-v3';
+import {backLink, bindForm, button, el, entries, field, firstAttemptScore, heading, icon, iconAction, idPart, link, loadInto, panel, rule, run, say, status, textValue} from './ui.js?v=merge-resolved-v1';
 
 export const contentKinds = {
   'current-affairs': {title: 'Current Affairs', icon: '◫', description: 'Explore PDF, video, and test updates by year, month, and date.'},
@@ -143,6 +143,7 @@ export function showLearningContent(main, ctx, kind, action) {
   loadInto(content, ctx, async () => {
     const rows = await api(`/content/${kind}`, {ctx, auth: true});
     if (kind === 'current-affairs') {
+      content.classList.add('affairs-archive');
       const archive = new Map();
       for (const item of rows) {
         const date = item.publishedAt || item.createdAt?.slice(0, 10) || new Date().toISOString().slice(0, 10);
@@ -172,36 +173,37 @@ export function showLearningContent(main, ctx, kind, action) {
               `#test/current-affairs/${idPart(item.test.id)}`, 'button')) : null,
           item.body ? el('details', {}, el('summary', {}, 'Read Update'), el('div', {class: 'resource-body'}, item.body)) : null);
       };
+      const navCard = (label, detail, onSelect) => {
+        const select = button('', 'affairs-nav-card');
+        select.replaceChildren(el('img', {class: 'affairs-nav-logo', src: '/assets/logo.png?v=brand-20261126', alt: '',
+          width: 72, height: 72}), el('strong', {}, label), el('small', {}, detail));
+        select.addEventListener('click', onSelect);
+        return select;
+      };
       const showYears = () => {
         content.replaceChildren(el('div', {class: 'affairs-navigation-grid'},
-          ...sorted(archive).map(([year, months]) => {
-            const count = [...months.values()].reduce((total, dates) =>
-              total + [...dates.values()].reduce((sum, items) => sum + items.length, 0), 0);
-            const select = button('', 'affairs-nav-card');
-            select.replaceChildren(el('strong', {}, year),
-              el('small', {}, `${count} ${count === 1 ? 'resource' : 'resources'} · ${months.size} ${months.size === 1 ? 'month' : 'months'}`));
+          ...sorted(archive).map(([year]) => {
+            const select = button('', 'affairs-nav-card affairs-year-card');
+            select.replaceChildren(el('strong', {}, year));
             select.addEventListener('click', () => showMonths(year));
             return select;
           })));
       };
       const showMonths = year => {
         const months = archive.get(year);
-        const back = button('← All Years', 'secondary affairs-back');
+        const back = iconAction(button('', 'secondary affairs-back'), 'back', 'All Years');
         back.addEventListener('click', showYears);
         content.replaceChildren(back, el('h2', {class: 'affairs-selection-title'}, year),
           el('div', {class: 'affairs-navigation-grid'},
             ...sorted(months).map(([month, dates]) => {
               const count = [...dates.values()].reduce((sum, items) => sum + items.length, 0);
-              const select = button('', 'affairs-nav-card');
-              select.replaceChildren(el('strong', {}, monthName(month)),
-                el('small', {}, `${count} ${count === 1 ? 'resource' : 'resources'} · ${dates.size} ${dates.size === 1 ? 'date' : 'dates'}`));
-              select.addEventListener('click', () => showDates(year, month));
-              return select;
+              return navCard(`${monthName(month)}-${year}`,
+                `${count} ${count === 1 ? 'resource' : 'resources'}`, () => showDates(year, month));
             })));
       };
       const showDates = (year, month) => {
         const dates = archive.get(year).get(month);
-        const back = button(`← ${year} Months`, 'secondary affairs-back');
+        const back = iconAction(button('', 'secondary affairs-back'), 'back', `${year} Months`);
         back.addEventListener('click', () => showMonths(year));
         content.replaceChildren(back, el('h2', {class: 'affairs-selection-title'}, `${monthName(month)} ${year}`),
           ...sorted(dates).map(([date, items]) => el('section', {class: 'affairs-day'},
@@ -231,7 +233,7 @@ export function showLearningContent(main, ctx, kind, action) {
 }
 
 export function showResource(main, ctx, id, action) {
-  const back = link('Back to Learning Resources', '#home', 'back');
+  const back = backLink('Back to Learning Resources', '#home');
   main.append(back);
   if (!ctx.user) {
     main.append(panel('Current Affairs', el('p', {}, 'Sign in to view this resource.'), action.signInLink()));
@@ -243,7 +245,9 @@ export function showResource(main, ctx, id, action) {
     const item = await api(`/resources/${idPart(id)}`, {ctx, auth: true});
     const section = contentKinds[item.kind];
     back.href = `#${item.kind}`;
-    back.textContent = `Back to ${section?.title || 'Learning Resources'}`;
+    const label = `Back to ${section?.title || 'Learning Resources'}`;
+    back.setAttribute('aria-label', label);
+    back.title = label;
     content.replaceChildren(...heading(item.title, `Published ${item.publishedAt || item.createdAt?.slice(0, 10) || ''}`),
       el('p', {class: 'muted'}, item.downloadsEnabled ? 'Downloads are enabled for this resource.' : 'View in the app. Downloads are disabled.'));
     if (item.summary || item.body) {
@@ -259,18 +263,16 @@ export function showResource(main, ctx, id, action) {
         const feedback = status();
         video.addEventListener('error', () => say(feedback, 'The video could not load. Reopen this resource to try again.', true));
         ctx.signal.addEventListener('abort', () => { video.pause(); video.removeAttribute('src'); video.load(); }, {once: true});
-        videoArea.replaceChildren(el('h2', {}, 'Watch Video'), video, feedback);
-        if (item.downloadsEnabled) {
-          videoArea.append(saveControl(ctx, {type: 'affairs-video', id: String(id),
-            title: item.title, videoLink: `/resources/${idPart(id)}/video/link`}));
-        }
+        const download = item.downloadsEnabled ? saveControl(ctx, {type: 'affairs-video', id: String(id),
+          title: item.title, videoLink: `/resources/${idPart(id)}/video/link`}) : null;
+        download?.classList.add('video-download-action');
+        videoArea.replaceChildren(el('h2', {}, 'Watch Video'), download, video, feedback);
       });
     }
     if (item.media?.pdf) {
       const reader = el('section', {class: 'affairs-pdf'}, el('h2', {}, 'Read PDF'));
       content.append(reader);
       pdfReader(reader, ctx, {title: item.title, pages: item.media.pdf.pages,
-        readerTools: true,
         pagePath: `/resources/${idPart(id)}/pdf/pages`,
         savedItem: item.downloadsEnabled ? {type: 'affairs-pdf', id: String(id), title: item.title,
           pages: item.media.pdf.pages, pagePath: `/resources/${idPart(id)}/pdf/pages`} : null});

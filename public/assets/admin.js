@@ -1,5 +1,5 @@
 import {api} from './services.js';
-import {publishedManager, weekdays} from './admin-manage.js?v=ebook-demo-plus-v1';
+import {publishedManager, weekdays} from './admin-manage.js?v=merge-resolved-v1';
 import {freeMaterialsAdmin} from './free-materials.js';
 import {adminContentForm} from './reports.js?v=refresh-icons-v3';
 import {coverPicker} from './publishing-media.js';
@@ -7,7 +7,7 @@ import {importQuestionReview, manualQuestions} from './manual-questions.js?v=bil
 import {subjectQuestionManager} from './question-sections.js?v=subject-import-label-v1';
 import {questionData} from './question-data.js';
 import {maxVideoBytes, uploadChapterVideo, videoAccept, videoType} from './chapter-upload.js';
-import {bindForm, button, el, entries, field, fieldError, formatDate, heading, icon, iconAction, idPart, link, loadInto, panel, rule, run, say, status, textValue} from './ui.js?v=student-actions-v2';
+import {bindForm, button, el, entries, field, fieldError, formatDate, heading, icon, iconAction, idPart, link, loadInto, panel, rule, run, say, status, textValue} from './ui.js?v=download-icon-controls-v1';
 
 const pdfAccept = '.pdf,application/pdf';
 
@@ -194,7 +194,7 @@ export function showAdmin(main, ctx, folderTarget = null) {
   };
   const loadPayments = () => loadInto(payments, ctx, async () => {
     const requests = await get('/admin/payments');
-    payments.replaceChildren(...(requests.length ? requests.map(request => {
+    const requestCard = request => {
       const approve = button('Approve and Unlock');
       const reject = button('Reject', 'danger secondary');
       const rejection = el('textarea', {rows: '2', maxlength: '500', placeholder: 'Reason for rejection'});
@@ -233,16 +233,6 @@ export function showAdmin(main, ctx, folderTarget = null) {
       const initials = request.name.trim().split(/\s+/).slice(0, 2).map(part => part[0]).join('').toUpperCase();
       if (receipt) receipt.classList.add('payment-receipt-action');
       const requestDetails = el('div', {class: 'payment-request-content'},
-        el('div', {class: 'payment-request-head'},
-          el('div', {class: 'payment-request-identity'},
-            el('span', {class: 'payment-request-avatar', 'aria-hidden': 'true'}, initials),
-            el('div', {}, el('strong', {}, request.name), el('p', {class: 'muted'}, request.phone))),
-          el('span', {class: `request-state ${request.status}`}, request.status)),
-        el('div', {class: 'payment-request-course'},
-          el('span', {class: 'badge'}, request.type === 'ebook' ? 'E-Book Payment' : 'Course Payment'),
-          el('h3', {}, request.course),
-          el('p', {class: 'price'}, new Intl.NumberFormat('en-IN',
-            {style: 'currency', currency: 'INR'}).format(request.amount / 100))),
         el('dl', {class: 'payment-summary'}, el('dt', {}, 'UPI Reference'), el('dd', {}, request.reference),
           el('dt', {}, 'Submitted (IST)'), el('dd', {}, request.submittedAt ? formatDate(request.submittedAt) : 'Unavailable')),
         request.note ? el('p', {class: 'muted'}, request.note) : null,
@@ -251,9 +241,45 @@ export function showAdmin(main, ctx, folderTarget = null) {
           'Revocation Reason' : 'Rejection Reason', rejection) : null,
         el('div', {class: 'actions'}, approve, reject, receipt), feedback);
       return el('details', {class: 'payment-request admin-course-payment'},
-        el('summary', {class: 'manage-course-summary payment-course-summary'}, request.course),
+        el('summary', {class: 'payment-request-summary'},
+          el('div', {class: 'payment-request-identity'},
+            el('span', {class: 'payment-request-avatar', 'aria-hidden': 'true'}, initials),
+            el('div', {}, el('strong', {}, request.name), el('p', {class: 'muted'}, request.phone))),
+          el('div', {class: 'payment-request-summary-meta'},
+            el('span', {class: `request-state ${request.status}`}, request.status),
+            el('strong', {class: 'payment-request-amount'}, new Intl.NumberFormat('en-IN',
+              {style: 'currency', currency: 'INR'}).format(request.amount / 100)))),
         requestDetails);
-    }) : [el('p', {class: 'empty'}, 'No payment requests yet.')]));
+    };
+    if (!requests.length) {
+      payments.replaceChildren(el('p', {class: 'empty'}, 'No payment requests yet.'));
+      return;
+    }
+    const groups = new Map();
+    for (const request of requests) {
+      const key = `${request.type}:${request.course}`;
+      if (!groups.has(key)) groups.set(key, {course: request.course, type: request.type, requests: []});
+      groups.get(key).requests.push(request);
+    }
+    payments.replaceChildren(...[...groups].map(([key, group]) => {
+      const pendingCount = group.requests.filter(request => request.status === 'pending').length;
+      const groupNode = el('details', {class: 'admin-payment-group'});
+      const badges = el('span', {class: 'admin-payment-group-badges'},
+        el('span', {class: 'badge'},
+          `${group.requests.length} ${group.requests.length === 1 ? 'request' : 'requests'}`),
+        pendingCount ? el('span', {class: 'badge pending-count'}, `${pendingCount} pending`) : null);
+      groupNode.append(
+        el('summary', {class: 'manage-course-summary admin-payment-group-summary'},
+          el('span', {class: 'admin-payment-group-title'},
+            el('span', {class: `payment-type-icon ${group.type === 'ebook' ? 'ebook' : ''}`,
+              'aria-hidden': 'true'}, icon(group.type === 'ebook' ? 'book' : 'courses', 'line-icon')),
+            el('span', {}, el('strong', {}, group.course),
+              el('small', {}, group.type === 'ebook' ? 'E-Book payments' : 'Course payments'))),
+          badges),
+        el('div', {class: 'admin-payment-group-list'}, ...group.requests.map(requestCard)));
+      groupNode.dataset.paymentGroup = key;
+      return groupNode;
+    }));
   });
   paymentRefresh.addEventListener('click', loadPayments);
   const ebookTitle = el('input', {required: '', maxlength: '120'});
@@ -261,12 +287,18 @@ export function showAdmin(main, ctx, folderTarget = null) {
   const ebookPrice = rupeeInput();
   const ebookPdf = rule(el('input', {type: 'file', accept: pdfAccept, required: ''}), (_, control) =>
     /\.pdf$/i.test(control.files[0]?.name || '') ? '' : 'Choose a PDF e-book.');
-  const ebookSubmit = button('Publish E-Book', null, 'submit');
+  const ebookSubmit = button('Publish E-Book', 'ebook-publish-button', 'submit');
   const ebookFeedback = status();
-  const ebookForm = el('form', {}, field('E-Book Title', ebookTitle),
-    field('Description', ebookDescription), field('Price (₹)', ebookPrice, PRICE_HINT),
-    field('PDF File', ebookPdf, 'Upload the full paid book. After publishing, add a separate Demo PDF from the book list.'),
-    ebookSubmit, ebookFeedback);
+  const ebookForm = el('form', {class: 'ebook-upload-form'},
+    el('div', {class: 'ebook-upload-heading'},
+      el('span', {class: 'ebook-upload-icon'}, icon('ebook', 'line-icon')),
+      el('div', {}, el('h3', {}, 'Publish a protected e-book'),
+        el('p', {class: 'muted'}, 'Add the full PDF, set its price, and make it available in the student store.'))),
+    el('div', {class: 'ebook-upload-fields'},
+      field('E-Book Title', ebookTitle), field('Description', ebookDescription),
+      field('Price (₹)', ebookPrice, PRICE_HINT),
+      field('PDF File', ebookPdf, 'Upload the full paid book. Add a separate Demo PDF after publishing.')),
+    el('div', {class: 'ebook-upload-actions'}, ebookSubmit), ebookFeedback);
   const loadEbooks = (message = '') => loadInto(ebooks, ctx, async () => {
     const rows = await get('/admin/ebooks');
     ebooks.replaceChildren(...(rows.length ? rows.map(book => {
@@ -341,16 +373,21 @@ export function showAdmin(main, ctx, folderTarget = null) {
         });
         demoActions.append(preview, removeDemo);
       }
-      const editDetails = el('details', {class: 'ebook-edit-editor'},
-        el('summary', {}, 'Edit E-Book'), editForm);
+      const editToggle = iconAction(button('', 'secondary'), 'edit', `Edit ${book.title}`);
+      editToggle.setAttribute('aria-expanded', 'false');
+      const editEditor = el('div', {class: 'ebook-edit-editor', hidden: ''}, editForm);
+      editToggle.addEventListener('click', () => {
+        editEditor.hidden = !editEditor.hidden;
+        editToggle.setAttribute('aria-expanded', String(!editEditor.hidden));
+      });
       const bookDetails = el('div', {class: 'manage-item-body'},
         el('div', {class: 'manage-main'}, el('h3', {}, book.title),
           el('p', {class: 'muted'}, book.description),
           el('ul', {class: 'manage-details'}, [new Intl.NumberFormat('en-IN',
             {style: 'currency', currency: 'INR'}).format(book.price / 100),
           `${book.pages} pages`, `${book.orders || 0} purchase requests`].map(value => el('li', {}, value)))),
-        el('div', {class: 'actions manage-actions'}, remove),
-        editDetails,
+        el('div', {class: 'actions manage-actions ebook-manager-actions'}, editToggle, remove),
+        editEditor,
         el('details', {class: 'ebook-demo-editor'},
           el('summary', {class: 'ebook-demo-summary'},
             book.demoPages ? `Demo PDF · ${book.demoPages} pages` : icon('plus', 'line-icon'),
@@ -446,16 +483,19 @@ export function showAdmin(main, ctx, folderTarget = null) {
   const day = el('select', {required: ''}, weekdays.map(value => el('option', {value}, value)));
   const scheduleTitle = el('input', {required: '', maxlength: '120'});
   const start = el('input', {type: 'time', required: ''});
-  const duration = el('input', {required: '', maxlength: '30', placeholder: '60 minutes'});
+  const duration = el('input', {type: 'number', required: '', min: '5', max: '720', step: '1', value: '60'});
+  const durationInput = el('div', {class: 'duration-input'},
+    duration, el('span', {}, 'minutes'));
   const scheduleDescription = el('textarea', {rows: '3', required: '', maxlength: '1000'});
   const scheduleSubmit = button('Publish Schedule', null, 'submit');
   const scheduleFeedback = status();
   const scheduleForm = el('form', {}, field('Day', day), field('Session Title', scheduleTitle),
-    field('Start Time', start), field('Duration', duration), field('Description', scheduleDescription),
+    field('Start Time', start), field('Duration', durationInput), field('Description', scheduleDescription),
     scheduleSubmit, scheduleFeedback);
   bindForm(scheduleForm, scheduleSubmit, scheduleFeedback, async () => {
     await post('/admin/timetable', {json: {day: day.value, title: textValue(scheduleTitle, 'Session title'),
-      startsAt: start.value, duration: textValue(duration, 'Duration'), description: textValue(scheduleDescription, 'Description')}});
+      startsAt: start.value, duration: `${duration.valueAsNumber} minutes`,
+      description: textValue(scheduleDescription, 'Description')}});
     scheduleForm.reset();
     say(scheduleFeedback, 'Timetable session published.');
   }, 'Publishing schedule…');
@@ -831,7 +871,7 @@ export function showAdmin(main, ctx, folderTarget = null) {
   const openList = ({label, managerType, list, add, addLabel, onOpen}) => {
     if (!list) return;
     const toolbar = el('div', {class: 'admin-section-toolbar'},
-      el('button', {type: 'button', class: 'admin-back-button'}, '← All Areas'),
+      iconAction(button('', 'admin-back-button'), 'back', 'All Areas'),
       el('h2', {}, label), el('div', {class: 'admin-section-actions'}));
     const actions = toolbar.querySelector('.admin-section-actions');
     toolbar.querySelector('.admin-back-button').addEventListener('click', showOverview);
@@ -840,6 +880,11 @@ export function showAdmin(main, ctx, folderTarget = null) {
       const term = search.value.trim().toLowerCase();
       workspace.querySelectorAll('.manage-item, .payment-request, .student-control, .timetable-card, .entries > li').forEach(row => {
         row.hidden = Boolean(term) && !row.textContent.toLowerCase().includes(term);
+      });
+      workspace.querySelectorAll('.admin-payment-group').forEach(group => {
+        const hasMatch = [...group.querySelectorAll('.payment-request')].some(row => !row.hidden);
+        group.hidden = Boolean(term) && !hasMatch;
+        if (term && hasMatch) group.open = true;
       });
     });
     const filter = button('Filter', 'icon-button secondary');
@@ -896,9 +941,7 @@ export function showAdmin(main, ctx, folderTarget = null) {
           add: findPanel('Publish a Test'), addLabel: 'Add Free Test'});
       }},
     {label: 'Study Materials', description: 'Chapter PDFs and uploaded videos', icon: 'book-open',
-      open: () => openList({label: 'Study Materials', managerType: 'books', list: manager.node, add: findPanel('Upload a Study Book or Video'), addLabel: 'Add Study Material'})},
-    {label: 'Chapter Videos', description: 'Manage uploaded chapter videos', icon: 'play',
-      open: () => openList({label: 'Chapter Videos', managerType: 'chapterVideos', list: manager.node, add: findPanel('Upload a Study Book or Video'), addLabel: 'Add Study Material'})},
+      open: () => openList({label: 'Study Materials', managerType: 'materials', list: manager.node, add: findPanel('Upload a Study Book or Video'), addLabel: 'Add Study Material'})},
     {label: 'YouTube Videos', description: 'Published learning video library', icon: 'play',
       open: () => openList({label: 'YouTube Videos', managerType: 'videos', list: manager.node, add: findPanel('YouTube Videos'), addLabel: 'Add YouTube Video'})},
     {label: 'Learning Resources', description: 'Current affairs, PYQs, syllabus, and free tests', icon: 'resource-globe',

@@ -1,32 +1,47 @@
-import {showAdmin} from './admin.js?v=bilingual-import-v1';
-import {showFreeMaterial, showFreeMaterials} from './free-materials.js';
+import {showAdmin} from './admin.js?v=merge-resolved-v1';
+import {showFreeMaterial, showFreeMaterials} from './free-materials.js?v=pdf-reader-minimal-v2';
 import {showFreeTests} from './free-tests.js';
 import {showAdminCourseWorkspace} from './admin-course-workspace.js?v=workspace-refresh-v1';
-import {showCatalog, showContentLibrary, showCourse, showDashboard, showMyCourses} from './course.js?v=purchased-course-no-overview-v1';
+import {showCatalog, showContentLibrary, showCourse, showCourseDiscussion, showDashboard, showMyCourses} from './course.js?v=merge-resolved-v1';
 import {api, firebaseAuth} from './services.js?v=persistent-session';
-import {showSignIn} from './signin.js?v=persistent-session';
-import {showBook, showLeaderboard, showTest, showVideo} from './study.js?v=pdf-reader-save-icon-v7';
-import {showLearningContent, showNotifications, showProgress, showResource} from './reports.js?v=refresh-icons-v3';
-import {showDownloads, showReferrals, showSaved, showTimetable, socialFooter} from './features.js?v=icon-only-actions-v1';
-import {showCourseGroups, showShareRate, showVideos} from './engagement.js?v=youtube-rotate-v2';
-import {showEbook, showEbookDemo, showEbookStore} from './ebooks.js?v=pdf-reader-save-icon-v7';
+import {showSignIn} from './signin.js?v=icon-only-back-v1';
+import {showBook, showLeaderboard, showTest, showVideo} from './study.js?v=pdf-reader-minimal-v2';
+import {showLearningContent, showNotifications, showProgress, showResource} from './reports.js?v=pdf-reader-minimal-v2';
+import {showDownloads, showReferrals, showSaved, showTimetable, socialFooter} from './features.js?v=pdf-reader-minimal-v2';
+import {showCourseGroups, showShareRate, showVideos} from './engagement.js?v=course-discussion-review-v1';
+import {showEbook, showEbookDemo, showEbookStore} from './ebooks.js?v=pdf-reader-minimal-v2';
 import {examPreferenceField, normalizeExamPreferences} from './exam-preferences.js';
 import {changePasswordForPhoneUser} from './password-verification.js';
 import {checkConnection, isConnected} from './connection.js';
-import {bindForm, button, el, field, heading, icon, iconAction, idPart, link, loadInto, panel, run, say, status, textValue} from './ui.js?v=refresh-icons-v3';
+import {backLink, bindForm, button, el, field, heading, icon, iconAction, idPart, link, loadInto, panel, run, say, setBackHandler, status, textValue} from './ui.js?v=merge-resolved-v1';
 
 const main = document.querySelector('#main');
 const nav = document.querySelector('#nav');
 const notice = document.querySelector('#notice');
 const offlineArea = document.querySelector('#offline-area');
 const notificationLink = document.querySelector('.header-notifications');
+function alignPageBackWithHeading() {
+  const pageBack = main.querySelector('.page-heading-row > .page-back, .page-heading-row > .back') ||
+    main.querySelector(':scope > .page-back, :scope > .back');
+  const title = main.querySelector('h1');
+  if (!pageBack || !title) return;
+  let headingRow = title.parentElement;
+  if (!headingRow) return;
+  if (!headingRow.classList.contains('page-heading-row')) {
+    headingRow = el('div', {class: 'page-heading-row'});
+    title.parentElement.insertBefore(headingRow, title);
+    headingRow.append(title);
+  }
+  if (!headingRow.contains(pageBack)) headingRow.prepend(pageBack);
+}
+new MutationObserver(alignPageBackWithHeading).observe(main, {childList: true, subtree: true});
 const routes = new Map([
   ['home', 0], ['catalog', 0], ['my-courses', 0], ['test-series', 0], ['book-store', 0], ['materials', 0],
   ['free-materials', 0], ['free-material', 1], ['free-tests', 0],
   ['current-affairs', 0], ['pyqs', 0], ['syllabus', 0], ['progress', 0], ['notifications', 0],
   ['timetable', 0], ['referrals', 0], ['downloads', 0],
   ['videos', 0], ['groups', 0], ['share-app', 0], ['about', 0], ['privacy', 0], ['terms', 0], ['copyright', 0], ['saved', 2],
-  ['course', 1], ['test', 2], ['book', 2], ['ebook', 1], ['ebook-demo', 1], ['resource', 1], ['video', 2], ['leaderboard', 2], ['signin', 0],
+  ['course', 1], ['course-group', 1], ['test', 2], ['book', 2], ['ebook', 1], ['ebook-demo', 1], ['resource', 1], ['video', 2], ['leaderboard', 2], ['signin', 0],
   ['profile', 0], ['support', 0], ['admin', 0], ['admin-course', 1], ['admin-publish-test', 2]
 ]);
 let firebase;
@@ -45,6 +60,23 @@ function guardExamNavigation(guard) {
     if (examNavigationGuard === guard) examNavigationGuard = null;
   };
 }
+const routeIndexKey = '__missionSelectionRouteIndex';
+const currentRouteState = history.state;
+let routeHistoryIndex = currentRouteState && typeof currentRouteState === 'object' &&
+  Number.isSafeInteger(currentRouteState[routeIndexKey]) ? currentRouteState[routeIndexKey] : 0;
+let routeBackPending = false;
+if (!currentRouteState || typeof currentRouteState !== 'object' ||
+  !Number.isSafeInteger(currentRouteState[routeIndexKey])) {
+  history.replaceState({...currentRouteState, [routeIndexKey]: routeHistoryIndex}, '', location.href);
+}
+setBackHandler(fallback => {
+  if (routeHistoryIndex > 0) {
+    if (!routeBackPending) {
+      routeBackPending = true;
+      history.back();
+    }
+  } else if (location.hash !== fallback) location.hash = fallback;
+});
 
 function route(hash = location.hash) {
   const [path, query] = hash.slice(1).split('?', 2);
@@ -214,8 +246,7 @@ function showProfile(ctx) {
   const accountEditor = el('div', {class: 'profile-editor', hidden: ''});
   account.append(accountSummary, accountEditor,
     el('div', {class: 'profile-purchase section'},
-      el('div', {}, el('strong', {}, String(session.me?.purchases?.length || 0)), el('span', {class: 'muted'}, 'Courses Unlocked')),
-      el('div', {}, el('strong', {}, 'Secure'), el('span', {class: 'muted'}, 'Protected Learning Access'))));
+      el('div', {}, el('strong', {}, String(session.me?.purchases?.length || 0)), el('span', {class: 'muted'}, 'Courses Unlocked'))));
   main.append(...heading('Your Learning Space', 'Manage your profile and keep your preparation moving forward.'), account);
   if (!session.me) {
     main.append(panel('Display Name', profileUnavailable()));
@@ -325,9 +356,6 @@ function showProfile(ctx) {
   }, 'Updating password…');
   main.append(
     panel('My Learning', el('div', {class: 'profile-menu'},
-      profileAction('missions', 'Explore Courses', 'Browse missions and available content', '#catalog'),
-      profileAction('courses', 'My Courses', 'Continue purchased missions', '#my-courses'),
-      profileAction('chat', 'Course Groups', 'Open purchaser-only text groups', '#groups'),
       profileAction('progress', 'Progress Reports', 'Review scores, accuracy, and test attempts', '#progress'))),
     panel('Purchase Receipts', receiptList(ctx)),
     panel('Community', el('div', {class: 'profile-menu'},
@@ -495,22 +523,20 @@ function render(focus = false) {
     'downloads': '#home', 'videos': '#home', 'groups': '#profile', 'share-app': '#profile',
     'about': '#profile', 'privacy': '#profile', 'terms': '#profile', 'copyright': '#profile',
     'current-affairs': '#home', 'pyqs': '#home', 'syllabus': '#home', 'support': '#profile',
-    'profile': '#home', 'course': '#catalog', 'ebook': '#book-store', 'admin': '#home',
+    'profile': '#home', 'course': '#catalog', 'course-group': '#groups', 'ebook': '#book-store', 'admin': '#home',
     'admin-course': '#admin', 'admin-publish-test': parsed.page === 'admin-publish-test' ?
       `#admin-course/${idPart(parsed.args[0])}` : '#admin',
   };
   if (backTargets[parsed.page]) {
-    const back = link('', backTargets[parsed.page], 'page-back');
     const label = parsed.page === 'admin' ? 'Back to Home' : parsed.page === 'admin-course' ? 'Back to Admin' :
       parsed.page === 'admin-publish-test' ? 'Back to Course Workspace' : 'Back';
-    back.append(icon('back', 'line-icon'), el('span', {}, label));
-    main.append(back);
+    main.append(backLink(label, backTargets[parsed.page]));
   }
   const needSignIn = () => main.append(...heading('Sign In to Continue', 'This area is available after you sign in with your mobile number.'), signInLink());
   const [courseId, itemId] = parsed.args;
 
   switch (parsed.page) {
-    case 'home': showDashboard(main, ctx, current?.me); break;
+    case 'home': showDashboard(main, ctx, current?.me, current?.user?.displayName); break;
     case 'catalog': showCatalog(main, ctx, current?.me); break;
     case 'my-courses': showMyCourses(main, ctx, current?.me, {signInLink}); break;
     case 'test-series':
@@ -521,7 +547,7 @@ function render(focus = false) {
     case 'book-store': showEbookStore(main, ctx, {signInLink}); break;
     case 'progress': showProgress(main, ctx, {signInLink}); break;
     case 'notifications': showNotifications(main, ctx, {signInLink}); break;
-    case 'timetable': showTimetable(main, ctx, {signInLink, personalTimetable: firebase?.personalTimetable}); break;
+    case 'timetable': showTimetable(main, ctx); break;
     case 'referrals': showReferrals(main, ctx, {signInLink}); break;
     case 'downloads': showDownloads(main, ctx, {signInLink}); break;
     case 'videos': showVideos(main, ctx); break;
@@ -561,6 +587,7 @@ function render(focus = false) {
         }
       });
       break;
+    case 'course-group': showCourseDiscussion(main, ctx, courseId); break;
     case 'signin':
       if (current) {
         if (current.pending) {
@@ -601,7 +628,8 @@ function render(focus = false) {
           else say(feedback, 'Admin access is not assigned to this account. Contact support.', true);
         }, 'Checking account…'));
         main.append(...heading('Admin Access Required', 'The server must verify your Firebase account before the Admin tab appears.'),
-          el('div', {class: 'actions'}, refresh, link('Back to Missions', '#catalog', 'button')), feedback);
+          el('div', {class: 'actions'}, refresh,
+            iconAction(link('', '#catalog', 'button secondary icon-button'), 'back', 'Back to Missions')), feedback);
       }
       else showAdmin(main, ctx, parsed.page === 'admin-publish-test' ? {courseId, folderId: itemId} : null);
       break;
@@ -613,7 +641,8 @@ function render(focus = false) {
           'The server must verify your account before you can organize course content.'));
       } else showAdminCourseWorkspace(main, ctx, courseId);
       break;
-    default: main.append(...heading('Page Not Found'), link('Back to Courses', '#catalog', 'button'));
+    default: main.append(...heading('Page Not Found'),
+      iconAction(link('', '#catalog', 'button secondary icon-button'), 'back', 'Back to Courses'));
   }
   if (focus) main.focus();
 }
@@ -641,6 +670,14 @@ window.addEventListener('hashchange', () => {
       examNavigationGuard();
       return;
     }
+    const state = history.state;
+    if (state && typeof state === 'object' && Number.isSafeInteger(state[routeIndexKey])) {
+      routeHistoryIndex = state[routeIndexKey];
+    } else {
+      routeHistoryIndex += 1;
+      history.replaceState({...state, [routeIndexKey]: routeHistoryIndex}, '', location.href);
+    }
+    routeBackPending = false;
     notice.textContent = '';
     render(true);
   }

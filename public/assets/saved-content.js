@@ -1,5 +1,5 @@
 import {api} from './services.js';
-import {button, el, link, run, say, status} from './ui.js';
+import {button, el, iconAction, run, say, status} from './ui.js?v=download-icon-controls-v1';
 
 const database = () => new Promise((resolve, reject) => {
   const request = indexedDB.open('mission-selection-saved-content', 1);
@@ -123,12 +123,12 @@ export async function savedPart(item, page) {
 }
 
 export function saveControl(ctx, item) {
-  const control = button('Save to Downloads', 'secondary');
+  const control = iconAction(button('', 'secondary icon-button'), 'download', 'Save to Downloads');
   const feedback = status();
   control.addEventListener('click', () => run(control, feedback, async () => {
     await saveContent(ctx, item, (page, total) => say(feedback,
       item.pages ? `Saving page ${page} of ${total}…` : 'Saving video…'));
     say(feedback, 'Saved inside the app. Open it from Downloads.');
   }, 'Preparing download…'));
-  return el('div', {class: 'saved-content-action'}, control, feedback, link('Open Downloads', '#downloads'));
+  return el('div', {class: 'saved-content-action download-icon-action'}, control, feedback);
 }

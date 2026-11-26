@@ -37,7 +37,7 @@ export function showCourseGroups(main, ctx, me, action) {
     const courses = (await api('/courses', {ctx})).filter(course =>
       !course.expired && me?.purchases?.some(id => String(id) === String(course.id)));
     groups.replaceChildren(...(courses.length ? courses.map(course => el('a',
-      {class: 'group-card', href: `#course/${encodeURIComponent(course.id)}`},
+      {class: 'group-card', href: `#course-group/${encodeURIComponent(course.id)}`},
       el('span', {class: 'group-avatar', 'aria-hidden': 'true'}, course.title.slice(0, 1)),
       el('div', {}, el('strong', {}, course.title), el('p', {class: 'muted'},
         'Purchased members only · ask questions and share study tips')),

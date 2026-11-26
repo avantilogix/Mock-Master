@@ -1,4 +1,4 @@
-import {bindForm, button, el, field, heading, rule, say, status} from './ui.js';
+import {bindForm, button, el, field, heading, iconAction, rule, say, status} from './ui.js';
 import {examPreferenceField} from './exam-preferences.js';
 import {hasPhoneSignIn, resetPasswordForPhoneUser, verifyPasswordForPhoneUser} from './password-verification.js';
 import {beginTemporaryPhoneSession, persistCompletedPhoneSession} from './auth-persistence.js';
@@ -222,7 +222,7 @@ export function showSignIn(main, ctx, firebase, startAuth, initState, authFlow =
     const confirmPassword = el('input', {type: 'password', autocomplete: 'new-password', required: '', minlength: '8', maxlength: '128'});
     const feedback = status();
     const submit = button('Set New Password', null, 'submit');
-    const back = button('Back to Sign In', 'secondary');
+    const back = iconAction(button('', 'secondary'), 'back', 'Back to Sign In');
     const form = el('form', {},
       el('p', {class: 'muted'}, 'Your phone has been verified for this sign-in. Set a new password to continue.'),
       field('New Password', password), field('Confirm New Password', confirmPassword),

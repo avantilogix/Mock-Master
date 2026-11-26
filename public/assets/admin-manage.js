@@ -310,12 +310,21 @@ function types({ctx, rupeeInput, toPaise, questionData, priceHint, courses}) {
 export function publishedManager({ctx, onChange, ...helpers}) {
   const config = types({ctx, ...helpers});
   config.freeTests = {...config.tests, label: 'Free Test Series', course: false, empty: 'No free tests created yet.'};
+  const materialKeys = ['books', 'chapterVideos'];
+  config.materials = {
+    label: 'Study Materials', noun: 'study material', course: true, empty: 'No PDFs or videos uploaded yet.',
+    details: item => [`${item.subject} › ${item.chapter}`,
+      item._key === 'books' ? plural(item.pages, 'page') : megabytes(item.size)],
+  };
   const keys = Object.keys(config);
+  const tabKeys = keys.flatMap(key => key === 'books' ? ['materials'] :
+    materialKeys.includes(key) || key === 'materials' ? [] : [key]);
   let data = Object.fromEntries(keys.map(key => [key, []]));
   let active = 'courses';
   let openEditor = null;
   let expandedCard = null;
-  const tabButtons = keys.map(key => {
+  const expandedTestCourses = new Set();
+  const tabButtons = tabKeys.map(key => {
     const tab = button(config[key].label, 'tab');
     tab.setAttribute('role', 'tab');
     tab.id = `published-tab-${key}`;
@@ -326,9 +335,9 @@ export function publishedManager({ctx, onChange, ...helpers}) {
       const step = {ArrowRight: 1, ArrowLeft: -1}[event.key];
       if (!step) return;
       event.preventDefault();
-      const next = keys[(keys.indexOf(key) + step + keys.length) % keys.length];
+      const next = tabKeys[(tabKeys.indexOf(key) + step + tabKeys.length) % tabKeys.length];
       select(next);
-      tabButtons[keys.indexOf(next)].focus();
+      tabButtons[tabKeys.indexOf(next)].focus();
     });
     return tab;
   });
@@ -370,14 +379,47 @@ export function publishedManager({ctx, onChange, ...helpers}) {
       (!term || [item.title, item.courseTitle, item.subject, item.chapter, item.description, item.summary]
         .some(value => String(value || '').toLowerCase().includes(term))));
     count.textContent = data[active].length ? `Showing ${rows.length} of ${plural(data[active].length, type.noun)}` : '';
+    if (active === 'resources') {
+      list.replaceChildren(...Object.entries(contentKinds).map(([kind, section]) => courseGroup(`resources:${kind}`, {
+        title: section.title, items: rows.filter(item => item.kind === kind),
+      }, type)));
+      return;
+    }
     if (!rows.length) {
       list.replaceChildren(el('p', {class: 'empty'}, data[active].length ? 'No items match your search or course filter.' : type.empty));
       return;
     }
+    if (type.course) {
+      const groups = new Map();
+      for (const item of rows) {
+        const key = item.course || item.resourceId || item.courseTitle || 'unassigned';
+        if (!groups.has(key)) groups.set(key, {title: item.courseTitle || (active === 'videos' ? 'All students' : 'Unassigned course'), items: []});
+        groups.get(key).items.push(item);
+      }
+      list.replaceChildren(...[...groups].map(([key, group]) => courseGroup(`${active}:${key}`, group, type)));
+      return;
+    }
     list.replaceChildren(...rows.map(item => card(type, item)));
   }
-  function card(type, item) {
-    const key = active;
+  function courseGroup(key, group, type) {
+    const course = el('details', {class: 'manage-test-course'});
+    const courseTitle = el('strong', {}, group.title);
+    const itemCount = el('span', {class: 'badge'}, plural(group.items.length, type.noun));
+    const items = el('div', {class: 'manage-test-course-list'},
+      ...group.items.map(item => card(type, item, true)));
+    course.append(el('summary', {class: 'manage-course-summary'},
+      el('span', {class: 'manage-test-course-title'}, courseTitle, itemCount)), items);
+    course.open = expandedTestCourses.has(key) || group.items.some(item =>
+      openEditor === item.id || expandedCard === `${active}:${item.id}`);
+    course.addEventListener('toggle', () => {
+      if (course.open) expandedTestCourses.add(key);
+      else expandedTestCourses.delete(key);
+    });
+    return course;
+  }
+  function card(type, item, inGroup = false) {
+    if (item._key) type = config[item._key];
+    const key = item._key || active;
     const rowFeedback = status();
     const editLabel = openEditor === item.id ? 'Close Editor' : 'Edit';
     const edit = iconAction(button('', 'secondary'), openEditor === item.id ? 'minus' : 'edit', editLabel);
@@ -407,27 +449,34 @@ export function publishedManager({ctx, onChange, ...helpers}) {
     const manageBody = el('div', {class: 'manage-item-body'},
       el('div', {class: 'manage-main'},
         el('div', {class: 'manage-title'}, el('h3', {}, item.title),
-          item.courseTitle ? el('span', {class: 'badge'}, item.courseTitle) : null,
+          item.courseTitle && !inGroup ? el('span', {class: 'badge'}, item.courseTitle) : null,
           isTest ? el('span', {class: `badge test-mode-badge${item.live ? ' live' : ''}`},
             icon('test', 'line-icon'), item.live ? 'Live Test' : 'Mock Test') : null),
         el('p', {class: 'manage-date'}, isTest ? icon('calendar', 'line-icon') : null,
           el('span', {class: 'manage-date-label'}, key === 'freeTests' && !item.published ? 'Unpublished' : 'Published'), ' ',
           el('time', {datetime: (type.date || (row => row.createdAt))(item) || ''}, formatDate((type.date || (row => row.createdAt))(item)))),
-        el('ul', {class: 'manage-details'}, type.details(item).map((detail, index) => el('li', {},
+        el('ul', {class: 'manage-details'}, type.details(item).filter(detail => !(inGroup && detail === item.courseTitle))
+          .map((detail, index) => el('li', {},
           isTest ? icon(index === 0 ? 'test' : 'profile', 'line-icon') : null, detail))),
         type.text?.(item) ? el('p', {class: 'manage-text muted'}, type.text(item)) : null),
       manageActions, isTest && removal.blocked ? remove : null, rowFeedback);
-    const groupedByCourse = active === 'courses' || isTest || active === 'books' ||
-      active === 'chapterVideos' || active === 'schedules';
-    const summaryTitle = active === 'courses' || active === 'schedules' ? item.title :
-      item.courseTitle || 'Unassigned course';
+    const groupedByCourse = active === 'courses' || active === 'materials' ||
+      active === 'schedules';
+    const summaryTitle = active === 'courses' || active === 'schedules' || active === 'materials' ?
+      item.title : item.courseTitle || 'Unassigned course';
     const article = groupedByCourse ?
       el('details', {class: `manage-item${isTest ? ' manage-test-item' : ''}`},
         el('summary', {class: 'manage-course-summary'}, summaryTitle),
         manageBody) :
-      el('article', {class: 'manage-item'}, manageBody);
-    if (groupedByCourse) {
-      const cardKey = `${key}:${item.id}`;
+      isTest ? el('details', {class: 'manage-item manage-test-item'},
+        el('summary', {class: 'manage-course-summary manage-test-summary'},
+          el('span', {class: 'manage-test-summary-title'}, item.title),
+          el('span', {class: `badge test-mode-badge${item.live ? ' live' : ''}`},
+            item.live ? 'Live Test' : 'Mock Test')),
+        manageBody) :
+        el('article', {class: 'manage-item'}, manageBody);
+    if (groupedByCourse || isTest) {
+      const cardKey = `${active}:${item.id}`;
       article.open = expandedCard === cardKey || openEditor === item.id;
       article.addEventListener('toggle', () => {
         expandedCard = article.open ? cardKey : expandedCard === cardKey ? null : expandedCard;
@@ -474,7 +523,7 @@ export function publishedManager({ctx, onChange, ...helpers}) {
     return article;
   }
   function editor(type, item) {
-    const key = active;
+    const key = item._key || active;
     const {fields, values, replacement} = type.edit(item);
     const covers = ctx.publishingMedia && ['courses', 'books', 'physicalBooks'].includes(key) ?
       coverPicker(ctx, {existing: item.images, required: false}) : null;
@@ -517,6 +566,10 @@ export function publishedManager({ctx, onChange, ...helpers}) {
   async function reload() {
     const result = await api('/admin/published', {ctx, auth: true});
     data = Object.fromEntries(keys.map(key => [key, Array.isArray(result?.[key]) ? result[key] : []]));
+    data.materials = [
+      ...data.books.map(item => ({...item, _key: 'books'})),
+      ...data.chapterVideos.map(item => ({...item, _key: 'chapterVideos'})),
+    ].sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
     fillCourses();
     render();
   }

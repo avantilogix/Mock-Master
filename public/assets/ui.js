@@ -15,6 +15,34 @@ export const heading = (title, description) => [
 ].filter(Boolean);
 
 export const link = (text, href, className) => el('a', {href, class: className}, text);
+let backHandler;
+export const setBackHandler = handler => { backHandler = handler; };
+let paymentDialogCount = 0;
+export function createPaymentDialog() {
+  const titleId = `payment-options-title-${++paymentDialogCount}`;
+  const target = el('div', {class: 'course-payment-target'});
+  const close = button('', 'secondary course-payment-close');
+  close.append(icon('close', 'line-icon'));
+  close.setAttribute('aria-label', 'Close payment options');
+  close.title = 'Close payment options';
+  const dialog = el('dialog', {class: 'course-payment-dialog', 'aria-labelledby': titleId},
+    el('div', {class: 'course-payment-dialog-header'},
+      el('h2', {id: titleId}, 'Payment Options'), close), target);
+  close.addEventListener('click', () => dialog.close());
+  return {dialog, target};
+}
+export const backLink = (text, href, className = 'page-back') => {
+  const control = link('', href, className);
+  control.append(icon('back', 'line-icon'));
+  control.setAttribute('aria-label', text);
+  control.title = text;
+  control.addEventListener('click', event => {
+    if (!backHandler) return;
+    event.preventDefault();
+    backHandler(control.getAttribute('href') || href);
+  });
+  return control;
+};
 export const button = (text, className, type = 'button') => el('button', {class: className, type}, text);
 export function iconAction(control, name, label) {
   control.replaceChildren(icon(name, 'line-icon'));
@@ -30,7 +58,7 @@ export function icon(name, className) {
   svg.setAttribute('aria-hidden', 'true');
   svg.setAttribute('focusable', 'false');
   const use = document.createElementNS(namespace, 'use');
-  use.setAttribute('href', `/assets/icons.svg?v=course-material-file-icon-v1#${name}`);
+  use.setAttribute('href', `/assets/icons.svg?v=send-message-field-v1#${name}`);
   svg.append(use);
   return svg;
 }

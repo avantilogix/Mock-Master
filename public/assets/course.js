@@ -1,6 +1,6 @@
 import {api} from './services.js';
 import {coverGallery} from './publishing-media.js';
-import {bindForm, button, el, entries, field, firstAttemptScore, formatDate, heading, icon, idPart, link, loadInto, panel, rule, run, say, status, textValue} from './ui.js?v=course-payment-close-v1';
+import {bindForm, button, createPaymentDialog, el, entries, field, firstAttemptScore, formatDate, heading, icon, idPart, link, loadInto, panel, rule, run, say, status, textValue} from './ui.js?v=merge-resolved-v1';
 
 export const upiReference = control => rule(control, value =>
   /^[A-Za-z0-9][A-Za-z0-9 _/.-]{2,79}$/.test(value) ? '' :
@@ -53,10 +53,11 @@ function courseCard(course, index, me, myCourse = false) {
   return card;
 }
 
-export function showDashboard(main, ctx, me) {
+export function showDashboard(main, ctx, me, userDisplayName) {
   const courses = el('div', {class: 'grid'});
+  const displayName = me?.name?.trim() || me?.displayName?.trim() || userDisplayName?.trim();
   main.append(
-    el('section', {class: 'home-greeting'}, el('h1', {}, 'Hello, learner')),
+    el('section', {class: 'home-greeting'}, el('h1', {}, `Hello, ${displayName || 'learner'}`)),
     el('section', {class: 'section'},
       el('div', {class: 'section-heading'}, el('h2', {}, 'Quick Access')),
       el('div', {class: 'shortcut-grid'},
@@ -306,6 +307,23 @@ function materialFolderBrowser(folders, items, renderItems, {removeBreadcrumbs =
   }
   for (const folderList of children.values()) folderList.sort((a, b) => a.name.localeCompare(b.name));
 
+  const itemsInFolderTree = (folderId, seen = new Set()) => {
+    if (seen.has(folderId)) return [];
+    seen.add(folderId);
+    return [...(itemGroups.get(folderId) || []),
+      ...(children.get(folderId) || []).flatMap(folder => itemsInFolderTree(folder.id, seen))];
+  };
+  const promotedItems = new Map();
+  const promotedRootItems = new Set();
+  for (const item of itemGroups.get('') || []) {
+    const folder = (children.get('') || []).find(candidate =>
+      itemsInFolderTree(candidate.id).some(nested => nested.subject === item.subject));
+    if (!folder) continue;
+    if (!promotedItems.has(folder.id)) promotedItems.set(folder.id, []);
+    promotedItems.get(folder.id).push(item);
+    promotedRootItems.add(item.id);
+  }
+
   const browser = el('div', {class: 'course-folder-browser'});
 
   function folderPath(folderId) {
@@ -346,7 +364,9 @@ function materialFolderBrowser(folders, items, renderItems, {removeBreadcrumbs =
       el('h3', {class: 'course-folder-heading', tabindex: '-1'},
         path[path.length - 1]?.name || 'Folders');
     const subfolders = children.get(folderId) || [];
-    const contents = itemGroups.get(folderId) || [];
+    const contents = folderId ?
+      [...(itemGroups.get(folderId) || []), ...(promotedItems.get(folderId) || [])] :
+      (itemGroups.get(folderId) || []).filter(item => !promotedRootItems.has(item.id));
     const backButton = removeBreadcrumbs && folderId && !contents.length ?
       folderBackButton(() => showFolder(path.length > 1 ? path[path.length - 2].id : '', true)) : null;
     const sections = [];
@@ -418,7 +438,7 @@ export function showContentLibrary(main, ctx, me, kind, action) {
   }[kind];
   const libraryIcon = () => config.icon === 'test' ? icon('test', 'line-icon') : config.icon;
   main.append(...heading(config.title, config.description));
-  const content = el('div');
+  const content = el('div', {class: kind === 'test-series' ? 'test-series-course-list' : ''});
   main.append(el('section', {class: 'library-panel'}, content));
   if (kind === 'materials' && !ctx.user) {
     content.replaceChildren(el('div', {class: 'empty-library'}, el('span', {class: 'shortcut-icon'}, config.icon),
@@ -433,7 +453,7 @@ export function showContentLibrary(main, ctx, me, kind, action) {
         link('Explore Missions', '#catalog', 'button secondary')));
       return;
     }
-    const folders = await Promise.all(selected.map(async course => {
+    const folders = await Promise.all(selected.map(async (course, index) => {
       if (kind === 'book-store' || !owns(me, course.id) || course.expired) {
         return el('article', {class: 'library-folder'},
           el('span', {class: 'folder-icon', 'aria-hidden': 'true'}, libraryIcon()),
@@ -445,23 +465,85 @@ export function showContentLibrary(main, ctx, me, kind, action) {
       if (config.item === 'books') {
         const subjects = chapterGroups(material.books, material.videos || []);
         const chapterCount = [...subjects.values()].reduce((sum, chapters) => sum + chapters.size - Number(chapters.has('')), 0);
-        const content = materialFolderBrowser(material.folders?.filter(folder => folder.kind === 'content'),
-          [...material.books, ...(material.videos || [])],
-          folderItems => chapterFolders(chapterGroups(
-            folderItems.filter(item => material.books.some(book => book.id === item.id)),
-            folderItems.filter(item => (material.videos || []).some(video => video.id === item.id))), course.id));
-        return el('article', {class: 'course-material'},
-          el('div', {class: 'course-material-head'},
-            el('span', {class: 'folder-icon', 'aria-hidden': 'true'}, libraryIcon()),
-            el('div', {}, el('h2', {}, course.title), el('p', {class: 'muted'},
-              `${subjects.size} subjects · ${chapterCount} chapters`))),
-          content);
+        const fileCount = new Set([
+          ...material.books.map(item => JSON.stringify(['book', item.title, item.subject, item.chapter, item.folderId])),
+          ...(material.videos || []).map(item => JSON.stringify(['video', item.title, item.subject, item.chapter, item.folderId])),
+        ]).size;
+        const courseBrowser = materialFolderBrowser(material.folders?.filter(folder => folder.kind === 'content'),
+          [...material.books, ...(material.videos || [])], (folderItems, navigation = {}) =>
+            chapterFolders(chapterGroups(
+              folderItems.filter(item => material.books.some(book => book.id === item.id)),
+              folderItems.filter(item => (material.videos || []).some(video => video.id === item.id))),
+            course.id, navigation), {removeBreadcrumbs: true});
+        const cover = coverGallery(course, 'catalog-course-cover') ||
+          el('div', {class: `catalog-course-cover catalog-course-placeholder alt-${index % 3}`},
+            icon('courses', 'line-icon'));
+        const card = el('article', {class: 'catalog-course-card materials-course-card', role: 'button',
+          tabindex: '0', 'aria-expanded': 'false', 'aria-label': `Open study materials for ${course.title}`},
+          cover,
+          el('div', {class: 'catalog-course-info'},
+            el('h3', {}, course.title),
+            el('div', {class: 'catalog-course-bottom muted'},
+              `${fileCount} ${fileCount === 1 ? 'file' : 'files'} · ${subjects.size} subjects · ${chapterCount} chapters`)),
+          el('span', {class: 'course-material-chevron', 'aria-hidden': 'true'}, '›'));
+        const openMaterials = () => {
+          card.setAttribute('aria-expanded', 'true');
+          const back = folderBackButton(() => {
+            card.setAttribute('aria-expanded', 'false');
+            content.replaceChildren(...folders);
+          });
+          content.replaceChildren(
+            el('div', {class: 'materials-course-detail-head'},
+              back, el('h2', {}, course.title)),
+            courseBrowser);
+        };
+        card.addEventListener('click', openMaterials);
+        card.addEventListener('keydown', event => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            openMaterials();
+          }
+        });
+        return card;
       }
       const testContent = folderTree(material.folders?.filter(folder => folder.kind === 'tests'),
         config.item === 'tests' ? material.tests : material[config.item],
         folderItems => config.item === 'tests' ? testRows(ctx, folderItems, course.id) :
           entries(folderItems, config.empty, item => el('div', {class: 'test-series-row'},
             el('strong', {}, item.title))));
+      if (config.item === 'tests') {
+        const tests = material.tests || [];
+        const cover = coverGallery(course, 'catalog-course-cover') ||
+          el('div', {class: `catalog-course-cover catalog-course-placeholder alt-${index % 3}`},
+            icon('test', 'line-icon'));
+        const card = el('article', {class: 'catalog-course-card materials-course-card', role: 'button',
+          tabindex: '0', 'aria-expanded': 'false', 'aria-label': `Open tests for ${course.title}`},
+          cover,
+          el('div', {class: 'catalog-course-info'},
+            el('h3', {}, course.title),
+            el('div', {class: 'catalog-course-bottom muted'},
+              `${tests.length} ${tests.length === 1 ? 'test' : 'tests'}`)),
+          el('span', {class: 'course-material-chevron', 'aria-hidden': 'true'}, '›'));
+        const openTests = () => {
+          card.setAttribute('aria-expanded', 'true');
+          const back = folderBackButton(() => {
+            card.setAttribute('aria-expanded', 'false');
+            content.replaceChildren(...folders);
+          });
+          content.replaceChildren(
+            el('div', {class: 'materials-course-detail-head'},
+              back, el('h2', {}, course.title)),
+            testContent);
+        };
+        card.addEventListener('click', openTests);
+        card.addEventListener('keydown', event => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            openTests();
+          }
+        });
+        return card;
+      }
       return el('article', {class: 'library-folder'},
         el('span', {class: 'folder-icon', 'aria-hidden': 'true'}, libraryIcon()),
         el('div', {class: 'library-folder-content'},
@@ -511,7 +593,7 @@ function questionPaperButton(ctx, test) {
 export function showCatalog(main, ctx, me) {
   const list = el('div', {class: 'catalog-course-list'});
   main.append(el('section', {class: 'section', id: 'available-courses'},
-    ...heading('All Courses'),
+    el('h1', {class: 'sr-only'}, 'All Courses'),
     list));
   loadInto(list, ctx, async () => {
     const courses = await api('/courses', {ctx});
@@ -555,9 +637,17 @@ export function showCourse(main, ctx, session, action) {
   const path = `/courses/${idPart(id)}`;
   const owned = owns(session?.me, id);
   const admin = Boolean(session?.me?.admin);
+  const locked = !owned && !admin;
   const overviewTab = button('Overview', 'course-tab');
   const contentTab = button('Content', 'course-tab');
   const testTab = button('Test', 'course-tab');
+  if (locked) {
+    for (const [tab, name] of [[contentTab, 'Content'], [testTab, 'Test']]) {
+      tab.append(icon('lock', 'line-icon course-tab-lock'));
+      tab.setAttribute('aria-label', `${name} - locked`);
+      tab.title = 'Purchase this course to unlock';
+    }
+  }
   overviewTab.setAttribute('role', 'tab');
   contentTab.setAttribute('role', 'tab');
   testTab.setAttribute('role', 'tab');
@@ -582,15 +672,8 @@ export function showCourse(main, ctx, session, action) {
   const testAccess = el('section', {class: 'section course-test-access'});
   const reviews = el('div');
   const reviewPanel = panel('Course Reviews', reviews);
-  const paymentTarget = el('div', {class: 'course-payment-target'});
-  const closePayment = button('', 'secondary course-payment-close');
-  closePayment.append(icon('close', 'line-icon'));
-  closePayment.setAttribute('aria-label', 'Close payment options');
-  closePayment.title = 'Close payment options';
-  const paymentDialog = el('dialog', {class: 'course-payment-dialog', 'aria-labelledby': 'course-payment-title'},
-    el('div', {class: 'course-payment-dialog-header'},
-      el('h2', {id: 'course-payment-title'}, 'Payment Options'), closePayment),
-    paymentTarget);
+  const purchaseNotice = el('p', {class: 'course-purchase-notice', role: 'status', hidden: ''});
+  const {dialog: paymentDialog, target: paymentTarget} = createPaymentDialog();
   const courseTabs = [
     ...(owned ? [] : [{name: 'overview', tab: overviewTab, panel: overview}]),
     {name: 'content', tab: contentTab, panel: content},
@@ -622,7 +705,6 @@ export function showCourse(main, ctx, session, action) {
   if (owned) content.append(el('span', {class: 'badge'}, 'Purchased · Approved'));
   content.append(access, reviewPanel);
   testPanel.append(testAccess);
-  closePayment.addEventListener('click', () => paymentDialog.close());
   selectTab(owned ? 'content' : 'overview');
 
   loadInto(access, ctx, async () => {
@@ -665,7 +747,9 @@ export function showCourse(main, ctx, session, action) {
         el('section', {class: 'course-description'},
           el('h2', {}, 'Description'),
           el('p', {}, course.description || 'Course details will be available soon.')),
-        purchase ? el('div', {class: 'course-buy-bar'}, purchase) : null));
+        purchase ? el('div', {class: 'course-buy-bar'}, purchase) : null),
+      purchaseNotice);
+    if (!owned) overview.append(reviewPanel);
     if (course.expired && !admin) {
       access.replaceChildren(el('h2', {}, 'Course Expired'),
         el('p', {}, 'This course is closed to new purchases and study access.'),
@@ -676,18 +760,35 @@ export function showCourse(main, ctx, session, action) {
     } else if (owned || admin) {
       access.className = 'section';
       showMaterials(access, testAccess, ctx, path, id);
-      if (owned) showReviewForm();
+      if (owned) {
+        content.append(reviewPanel);
+        showReviewForm();
+      }
     } else {
-      const contentBuy = button('Buy Now', 'secondary course-content-buy');
-      contentBuy.addEventListener('click', openPayment);
-      access.replaceChildren(el('h2', {}, 'Course Content'),
-        el('p', {}, 'Purchase this course to unlock its study materials and discussions.'),
-        contentBuy);
-      const testBuy = button('Buy Now', 'secondary course-content-buy');
-      testBuy.addEventListener('click', openPayment);
-      testAccess.replaceChildren(el('h2', {}, 'Practice & Live Tests'),
-        el('p', {}, 'Purchase this course to unlock its practice and live tests.'),
-        testBuy);
+      const unlock = message => {
+        purchaseNotice.textContent = `${message} Select Buy Now on the overview to continue.`;
+        purchaseNotice.hidden = false;
+        selectTab('overview');
+        overviewTab.focus();
+        overview.scrollIntoView({behavior: 'smooth', block: 'start'});
+      };
+      const lockedPreview = (title, message) => {
+        const unlockButton = button('Unlock to View', 'secondary course-content-buy');
+        unlockButton.addEventListener('click', () => unlock(message));
+        return el('div', {class: 'course-locked-state'},
+          el('div', {class: 'course-locked-folder', role: 'group',
+            'aria-label': `${title}, locked`, 'aria-disabled': 'true'},
+            el('span', {class: 'course-lock-thumbnail', 'aria-hidden': 'true'},
+              icon('lock', 'line-icon course-lock-icon')),
+            el('div', {class: 'course-locked-folder-copy'},
+              el('strong', {}, title), el('small', {}, 'Locked until course purchase'))),
+          el('p', {}, message),
+          unlockButton);
+      };
+      access.replaceChildren(lockedPreview('Course Content',
+        `You need to purchase ${course.title} to unlock its study materials and discussions.`));
+      testAccess.replaceChildren(lockedPreview('Practice & Live Tests Locked',
+        `You need to purchase ${course.title} to access practice and live tests.`));
     }
   });
 
@@ -759,28 +860,7 @@ function showMaterials(access, testAccess, ctx, path, id) {
       setTimeout(() => URL.revokeObjectURL(url), 1000);
       say(receiptFeedback, 'Receipt downloaded.');
     }, 'Preparing receipt…'));
-    const messageList = el('div');
-    const refresh = items => messageList.replaceChildren(entries(items,
-      'There are no messages yet. Start the discussion with a question or a study tip.', entry => [
-        el('strong', {}, entry.name), el('p', {class: 'entry-text'}, entry.text)
-      ]));
-    refresh(messages);
-    const text = el('textarea', {rows: '3', required: '', maxlength: '1000'});
-    const submit = button('Post Message', null, 'submit');
-    const feedback = status();
-    const form = el('form', {class: 'section'}, field('Your Message', text), submit, feedback);
-    bindForm(form, submit, feedback, async () => {
-      await api(`${path}/messages`, {ctx, auth: true, method: 'POST', json: {text: textValue(text, 'Message')}});
-      form.reset();
-      try {
-        const updated = await api(path, {ctx, auth: true});
-        refresh(updated.messages);
-        say(feedback, 'Message posted.');
-      } catch (error) {
-        if (error.name === 'AbortError') throw error;
-        say(feedback, 'Message posted. Reopen this course to refresh the discussion.', true);
-      }
-    }, 'Posting message…');
+    const discussion = courseDiscussion(ctx, path, messages);
     const testFolders = folders.filter(folder => folder.kind === 'tests');
     const contentFolders = folders.filter(folder => folder.kind === 'content');
     const testsContent = folderTree(testFolders, tests, items => testRows(ctx, items, id));
@@ -790,10 +870,84 @@ function showMaterials(access, testAccess, ctx, path, id) {
       return chapterFolders(chapterGroups(items.filter(item => bookIds.has(item.id)),
         items.filter(item => !bookIds.has(item.id))), id, navigation);
     }, {removeBreadcrumbs: true});
-    access.replaceChildren(panel('Study Materials', courseContent),
+    const studyPanel = panel('Study Materials', courseContent);
+    studyPanel.classList.add('course-study-panel');
+    access.replaceChildren(studyPanel,
       panel('Course Documents', el('div', {class: 'actions'}, receipt), receiptFeedback),
-      panel('Course Discussion', messageList, form));
+      discussion);
     testAccess.replaceChildren(panel('Practice & Live Tests', testsContent));
+  });
+}
+
+function courseDiscussion(ctx, path, messages) {
+  const messageList = el('div', {class: 'course-chat-thread', role: 'log', 'aria-live': 'polite'});
+  const count = el('span', {class: 'course-chat-count'});
+  const refresh = items => messageList.replaceChildren(...(items.length ? items.map(entry => {
+    const name = String(entry.name || 'Learner').trim();
+    return el('article', {class: 'course-chat-message'},
+      el('span', {class: 'course-chat-avatar', 'aria-hidden': 'true'}, name.charAt(0).toUpperCase()),
+      el('div', {class: 'course-chat-bubble'},
+        el('strong', {}, name),
+        el('p', {class: 'entry-text'}, entry.text)));
+  }) : [el('p', {class: 'course-chat-empty'},
+    'No messages yet. Start the discussion with a question or a study tip.')]));
+  const updateCount = items => {
+    count.textContent = items.length ? `${items.length} ${items.length === 1 ? 'message' : 'messages'}` :
+      'Start the conversation';
+  };
+  const renderMessages = items => {
+    refresh(items);
+    updateCount(items);
+  };
+  renderMessages(messages);
+  const text = el('textarea', {rows: '3', required: '', maxlength: '1000',
+    'aria-label': 'Write a message', placeholder: 'Write a message…'});
+  const submit = button('', 'course-chat-send-button', 'submit');
+  submit.setAttribute('aria-label', 'Post Message');
+  submit.title = 'Post Message';
+  submit.prepend(icon('send', 'line-icon'));
+  const feedback = status();
+  const chatInput = el('div', {class: 'course-chat-input'},
+    text,
+    el('div', {class: 'course-chat-input-footer'},
+      submit));
+  const form = el('form', {class: 'course-chat-composer'},
+    chatInput, feedback);
+  bindForm(form, submit, feedback, async () => {
+    await api(`${path}/messages`, {ctx, auth: true, method: 'POST', json: {text: textValue(text, 'Message')}});
+    form.reset();
+    try {
+      const updated = await api(path, {ctx, auth: true});
+      renderMessages(updated.messages);
+      say(feedback, 'Message posted.');
+    } catch (error) {
+      if (error.name === 'AbortError') throw error;
+      say(feedback, 'Message posted. Reopen this course to refresh the discussion.', true);
+    }
+  }, 'Posting message…');
+  return el('section', {class: 'panel section course-discussion-panel'},
+    el('div', {class: 'course-chat-toolbar'},
+      el('div', {}, el('h2', {}, 'Messages'),
+        el('p', {}, 'Questions, ideas, and support from your course community.')),
+      count),
+    messageList, form);
+}
+
+export function showCourseDiscussion(main, ctx, id) {
+  const path = `/courses/${idPart(id)}`;
+  const content = el('div', {class: 'course-discussion-page'});
+  main.append(content);
+  loadInto(content, ctx, async () => {
+    const [courses, materials] = await Promise.all([
+      api('/courses', {ctx}), api(path, {ctx, auth: true}),
+    ]);
+    const course = courses.find(item => String(item.id) === String(id));
+    if (!course) throw new Error('This course is no longer available.');
+    content.replaceChildren(
+      el('header', {class: 'course-discussion-header'},
+        el('h1', {}, 'Course Discussion'),
+        el('p', {class: 'course-discussion-summary'}, 'Connect with fellow learners, exchange ideas, and keep your preparation moving.')),
+      courseDiscussion(ctx, path, materials.messages || []));
   });
 }
 

@@ -1,8 +1,8 @@
 import {coverGallery} from './publishing-media.js';
 import {api} from './services.js';
-import {pdfReader} from './ebooks.js?v=pdf-reader-save-icon-v7';
-import {saveContent, saveControl} from './saved-content.js';
-import {button, el, empty, heading, icon, idPart, link, loadInto, run, say, status} from './ui.js';
+import {pdfReader} from './ebooks.js?v=pdf-reader-minimal-v2';
+import {saveContent, saveControl} from './saved-content.js?v=merge-resolved-v1';
+import {backLink, button, el, empty, heading, icon, idPart, link, loadInto, run, say, status} from './ui.js?v=merge-resolved-v1';
 
 const protectedGet = (ctx, path, image = false) => api(path, {ctx, auth: true, image});
 
@@ -12,8 +12,8 @@ export function showTest(main, ctx, courseId, testId, phone) {
   const isCurrentAffairs = courseId === 'current-affairs';
   const isFreeTest = courseId === 'free-tests';
   const backTarget = isFreeTest ? '#free-tests' : isCurrentAffairs ? '#current-affairs' : `#course/${idPart(courseId)}`;
-  const back = () => link(isFreeTest ? 'Back to Free Test Series' : isCurrentAffairs ? 'Back to Current Affairs' : 'Back to Course',
-    backTarget, 'back');
+  const back = () => backLink(isFreeTest ? 'Back to Free Test Series' :
+    isCurrentAffairs ? 'Back to Current Affairs' : 'Back to Course', backTarget);
   main.append(back(), ...heading('Exam Room'), content);
   loadInto(content, ctx, async () => {
     const test = await protectedGet(ctx, path);
@@ -395,8 +395,11 @@ export function showTest(main, ctx, courseId, testId, phone) {
 
 export function showLeaderboard(main, ctx, courseId, testId) {
   const content = el('div', {class: 'leaderboard-shell'});
-  main.append(link(courseId === 'free-tests' ? 'Back to Free Test Series' : courseId === 'current-affairs' ? 'Back to Current Affairs' : 'Back to Course',
-    courseId === 'free-tests' ? '#free-tests' : courseId === 'current-affairs' ? '#current-affairs' : `#course/${idPart(courseId)}`, 'back'),
+  const isFreeTest = courseId === 'free-tests';
+  const isCurrentAffairs = courseId === 'current-affairs';
+  main.append(backLink(isFreeTest ? 'Back to Free Test Series' :
+    isCurrentAffairs ? 'Back to Current Affairs' : 'Back to Course',
+    isFreeTest ? '#free-tests' : isCurrentAffairs ? '#current-affairs' : `#course/${idPart(courseId)}`),
     ...heading('Live Test Leaderboard', 'Rankings use the first attempt and are finalized when the live window closes.'), content);
   loadInto(content, ctx, async () => {
     const board = await protectedGet(ctx, `/tests/${idPart(testId)}/leaderboard`);
@@ -432,7 +435,7 @@ export function showLeaderboard(main, ctx, courseId, testId) {
 }
 
 export function showVideo(main, ctx, courseId, videoId) {
-  const back = () => link('Back to Study Materials', '#materials', 'back');
+  const back = () => backLink('Back to Study Materials', '#materials');
   const content = el('div');
   main.append(back(), ...heading('Chapter Video'), content);
   loadInto(content, ctx, async () => {
@@ -441,18 +444,19 @@ export function showVideo(main, ctx, courseId, videoId) {
     if (!video) throw new Error('This video is not available in the course.');
     const {url} = await protectedGet(ctx, `/videos/${idPart(videoId)}/link`);
     main.replaceChildren(back(), ...heading(video.title, `${video.subject} · ${video.chapter}`), content);
+    const download = downloadsEnabled ? saveControl(ctx, {type: 'course-video', id: String(videoId), courseId,
+      title: video.title, videoLink: `/videos/${idPart(videoId)}/link`}) : null;
+    download?.classList.add('video-download-action');
     content.replaceChildren(el('section', {class: 'panel'},
+      download,
       el('video', {class: 'chapter-video', src: url, controls: '', controlslist: 'nodownload',
-        preload: 'metadata', playsinline: '', 'aria-label': video.title}),
-      downloadsEnabled ? saveControl(ctx, {type: 'course-video', id: String(videoId), courseId,
-        title: video.title, videoLink: `/videos/${idPart(videoId)}/link`}) : null));
+        preload: 'metadata', playsinline: '', 'aria-label': video.title})));
   });
 }
 
 export function showBook(main, ctx, courseId, bookId) {
   const back = () => {
-    const control = link('Back to Course', `#course/${idPart(courseId)}`, 'back book-reader-back');
-    control.prepend(icon('back', 'line-icon'));
+    const control = backLink('Back to Course', `#course/${idPart(courseId)}`, 'page-back book-reader-back');
     return control;
   };
   const content = el('div', {class: 'book-reader'});
@@ -464,14 +468,13 @@ export function showBook(main, ctx, courseId, bookId) {
     const gallery = coverGallery(book, 'reader-gallery');
     const title = heading(book.title);
     title[0].classList.add('book-reader-title');
-    title[0].prepend(icon('courses', 'line-icon'));
     main.replaceChildren(back(), ...title, ...(gallery ? [gallery] : []), content);
     if (!Number.isSafeInteger(book.pages) || book.pages < 1) {
       content.replaceChildren(empty('This book has no pages to display.'));
       return;
     }
     content.replaceChildren();
-    pdfReader(content, ctx, {...book, readerTools: true,
+    pdfReader(content, ctx, {...book,
       pagePath: `/books/${idPart(bookId)}/pages`,
       savedItem: downloadsEnabled ? {type: 'course-pdf', id: String(bookId), courseId,
         title: book.title, pages: book.pages, pagePath: `/books/${idPart(bookId)}/pages`} : null});

@@ -1,5 +1,5 @@
 import {api} from './services.js';
-import {pdfReader} from './ebooks.js?v=pdf-reader-save-icon-v7';
+import {pdfReader} from './ebooks.js?v=pdf-reader-minimal-v2';
 import {bindForm, button, confirmDelete, el, empty, field, heading, icon, idPart, link, loadInto, panel, rule, run, say, status, textValue} from './ui.js';
 
 async function download(ctx, item) {
@@ -46,7 +46,7 @@ export function showFreeMaterial(main, ctx, id) {
     const item = await api(`/free-materials/${idPart(id)}`, {ctx, auth: true});
     const feedback = status();
     content.replaceChildren(...heading(item.title), item.downloadsEnabled ? downloadButton(ctx, item, feedback) : null, feedback);
-    pdfReader(content, ctx, {title: item.title, pages: item.pages, readerTools: true,
+    pdfReader(content, ctx, {title: item.title, pages: item.pages,
       pagePath: `/free-materials/${idPart(id)}/pages`});
   });
 }

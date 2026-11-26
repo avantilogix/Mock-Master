@@ -1,7 +1,7 @@
-import {priceText, upiReference} from './course.js?v=ist-payment-fixes-final';
+import {priceText, upiReference} from './course.js?v=merge-resolved-v1';
 import {api} from './services.js?v=ist-payment-fixes-final';
-import {saveControl} from './saved-content.js';
-import {bindForm, button, el, field, heading, icon, idPart, link, loadInto, run, say, status, textValue} from './ui.js';
+import {saveControl} from './saved-content.js?v=merge-resolved-v1';
+import {backLink, bindForm, button, createPaymentDialog, el, field, heading, icon, idPart, link, loadInto, run, say, status, textValue} from './ui.js?v=merge-resolved-v1';
 
 export function showEbookStore(main, ctx, action) {
   main.append(...heading('E-Book Store', 'Buy protected digital books. Access and download unlock after admin payment approval.'));
@@ -60,14 +60,6 @@ function paymentPanel(target, ctx, book, action) {
           el('dt', {}, 'Reference'), el('dd', {}, order.reference))));
       return;
     }
-    if (order?.status === 'rejected') {
-      target.replaceChildren(el('div', {class: 'payment-status rejected', role: 'alert'},
-        el('h2', {}, 'Payment Not Approved'),
-        el('p', {}, order.reviewNote || 'The admin rejected this request. Review the payment and submit again.'),
-        el('dl', {class: 'payment-summary'}, el('dt', {}, 'Amount'), el('dd', {}, priceText(amount)),
-          el('dt', {}, 'Reference'), el('dd', {}, order.reference))));
-      return;
-    }
     if (!payment.configured) {
       target.replaceChildren(el('div', {class: 'payment-status'},
         el('h2', {}, 'Payment Is Being Configured'), link('Contact Support', '#support', 'button secondary')));
@@ -88,7 +80,11 @@ function paymentPanel(target, ctx, book, action) {
     }, 'Submitting payment…');
     const methodButtons = el('div', {class: 'payment-methods', role: 'group', 'aria-label': 'Choose payment method'});
     const methodPanel = el('div');
-    const methods = payment.method === 'both' ? ['upi', 'qr'] : [payment.method];
+    const methods = [];
+    if (payment.configured) {
+      if (payment.method !== 'qr' && payment.upiId) methods.push('upi');
+      if (payment.method === 'qr' || payment.upiId || payment.customQr) methods.push('qr');
+    }
     const renderMethod = method => {
       methodButtons.querySelectorAll('button').forEach(button =>
         button.setAttribute('aria-pressed', String(button.dataset.method === method)));
@@ -132,9 +128,21 @@ export function showEbook(main, ctx, bookId, action) {
       return;
     }
     if (order?.status !== 'approved') {
-      const panel = el('section', {class: 'panel'});
-      main.append(panel);
-      paymentPanel(panel, ctx, book, action);
+      const {dialog, target} = createPaymentDialog();
+      const openPayment = button(order?.status === 'pending' ? 'View Payment Status' : 'Continue to Payment',
+        'button ebook-payment-launch');
+      openPayment.addEventListener('click', () => {
+        target.replaceChildren();
+        paymentPanel(target, ctx, book, action);
+        if (!dialog.open) dialog.showModal();
+      });
+      main.append(el('section', {class: 'panel ebook-payment-launch-card'},
+        el('h2', {}, order?.status === 'pending' ? 'Payment Under Review' : 'Purchase This E-Book'),
+        el('p', {class: 'muted'}, order?.status === 'pending' ?
+          'Check your payment status or review the submitted transaction.' :
+          `Continue to payment options for ${book.title}.`),
+        openPayment), dialog);
+      openPayment.click();
       return;
     }
     pdfReader(main, ctx, {...book, pagePath: `/ebooks/${idPart(book.id)}/pages`,
@@ -145,7 +153,7 @@ export function showEbook(main, ctx, bookId, action) {
 
 export function showEbookDemo(main, ctx, bookId) {
   const content = el('div');
-  main.append(link('Back to E-Book Store', '#book-store', 'back'), content);
+  main.append(backLink('Back to E-Book Store', '#book-store'), content);
   loadInto(content, ctx, async () => {
     const book = await api(`/ebooks/${idPart(bookId)}/demo`, {ctx});
     content.replaceChildren(el('span', {class: 'badge'}, 'Free Demo'),
@@ -164,91 +172,20 @@ export function pdfReader(main, ctx, book) {
   const pageNodes = Array.from({length: book.pages}, (_, index) =>
     el('article', {class: 'pdf-page-shell', 'data-page': String(index + 1),
       'aria-label': `Page ${index + 1} of ${book.pages}`}));
-  const counter = status();
-  counter.classList.add('pdf-reader-counter');
-  const previous = button('', 'secondary pdf-reader-page-button');
-  previous.setAttribute('aria-label', 'Previous page');
-  previous.title = 'Previous page';
-  previous.prepend(icon('back', 'line-icon'));
-  const next = button('', 'secondary pdf-reader-page-button pdf-reader-next');
-  next.setAttribute('aria-label', 'Next page');
-  next.title = 'Next page';
-  next.prepend(icon('arrow-right', 'line-icon'));
-  const controls = el('div', {class: 'actions reader-controls pdf-reader-controls'}, counter, previous, next);
-  let saveAction = null;
-  if (book.savedItem) {
-    saveAction = saveControl(ctx, book.savedItem);
+  const saveAction = book.savedItem ? saveControl(ctx, book.savedItem) : null;
+  if (saveAction) {
+    saveAction.classList.add('pdf-reader-save-action-top');
     const saveButton = saveAction.querySelector('button');
-    if (saveButton) {
-      saveButton.textContent = '';
-      saveButton.setAttribute('aria-label', 'Save to Downloads');
-      saveButton.title = 'Save to Downloads';
-      saveButton.prepend(icon('download', 'line-icon'));
-    }
-    saveAction.querySelector('a')?.remove();
-    if (book.readerTools && saveButton) {
-      saveButton.classList.add('pdf-reader-save-top');
-      saveAction.classList.add('pdf-reader-save-action-top');
-    } else {
-      controls.append(saveAction);
-    }
+    if (saveButton) saveButton.classList.add('pdf-reader-save-top');
   }
   const imageArea = el('div', {class: 'pdf-reader-pages', role: 'region', 'aria-label': `${book.title} PDF pages`},
     pageNodes);
-  if (book.readerTools) {
-    const pageInput = el('input', {type: 'number', min: '1', max: String(book.pages), value: '1',
-      inputmode: 'numeric', 'aria-label': 'Go to page'});
-    const go = button('', 'secondary pdf-reader-go');
-    go.setAttribute('aria-label', 'Go to page');
-    go.title = 'Go to page';
-    go.prepend(icon('arrow-right', 'line-icon'));
-    const zoomOut = button('', 'secondary pdf-reader-zoom-button');
-    zoomOut.prepend(icon('minus', 'line-icon'));
-    zoomOut.setAttribute('aria-label', 'Zoom out');
-    zoomOut.title = 'Zoom out';
-    const zoomIn = button('', 'secondary pdf-reader-zoom-button');
-    zoomIn.prepend(icon('plus', 'line-icon'));
-    zoomIn.setAttribute('aria-label', 'Zoom in');
-    zoomIn.title = 'Zoom in';
-    const zoomLabel = el('span', {class: 'pdf-reader-zoom-label', role: 'status'}, '100%');
-    let zoom = 100;
-    const updateZoom = () => {
-      imageArea.style.width = `${zoom}%`;
-      zoomLabel.textContent = `${zoom}%`;
-      zoomOut.disabled = zoom === 100;
-      zoomIn.disabled = zoom === 200;
-    };
-    zoomOut.addEventListener('click', () => { zoom = Math.max(100, zoom - 25); updateZoom(); });
-    zoomIn.addEventListener('click', () => { zoom = Math.min(200, zoom + 25); updateZoom(); });
-    const pageTools = el('div', {class: 'pdf-reader-page-tools'}, field('Page', pageInput), go);
-    const zoomControls = el('div', {class: 'pdf-reader-zoom-controls'},
-      zoomOut, zoomLabel, zoomIn);
-    const zoomTools = el('div', {class: 'pdf-reader-zoom-tools'},
-      el('span', {class: 'pdf-reader-tool-label'}, 'Zoom'), zoomControls);
-    const tools = el('div', {class: 'pdf-reader-tools'}, pageTools, zoomTools);
-    go.addEventListener('click', () => {
-      const selected = pageInput.valueAsNumber;
-      if (!Number.isInteger(selected) || selected < 1 || selected > book.pages) {
-        say(counter, `Enter a page from 1 to ${book.pages}.`, true);
-        pageInput.focus();
-        return;
-      }
-      scrollToPage(selected);
-    });
-    pageInput.addEventListener('keydown', event => {
-      if (event.key === 'Enter') { event.preventDefault(); go.click(); }
-    });
-    updateZoom();
-    main.append(el('div', {class: 'pdf-reader-topbar'}, saveAction || el('span')), controls, tools);
-    main.append(el('div', {class: 'pdf-reader-scroll'}, imageArea));
-  } else main.append(controls, imageArea);
+  if (saveAction) main.append(el('div', {class: 'pdf-reader-topbar'}, saveAction));
+  main.append(el('div', {class: 'pdf-reader-scroll'}, imageArea));
   const placeholder = pageNumber => el('div', {class: 'pdf-page-placeholder', 'aria-hidden': 'true'},
     `Page ${pageNumber} · loading as you read`);
   const setPage = pageNumber => {
     page = Math.max(1, Math.min(book.pages, pageNumber));
-    say(counter, `Page ${page} of ${book.pages}`);
-    previous.disabled = page === 1;
-    next.disabled = page === book.pages;
   };
   const loadPage = async pageNumber => {
     const node = pageNodes[pageNumber - 1];
@@ -297,16 +234,6 @@ export function pdfReader(main, ctx, book) {
     observer?.observe(pageNode);
     pageNode.append(placeholder(Number(pageNode.dataset.page)));
   }
-  const scrollToPage = pageNumber => {
-    const target = Math.max(1, Math.min(book.pages, pageNumber));
-    pageNodes[target - 1]?.scrollIntoView({behavior: 'smooth', block: 'start'});
-    if (!observer) {
-      setPage(target);
-      loadPage(target);
-    }
-  };
-  previous.addEventListener('click', () => scrollToPage(page - 1));
-  next.addEventListener('click', () => scrollToPage(page + 1));
   ctx.signal.addEventListener('abort', () => {
     main.classList.remove('pdf-reader');
     observer?.disconnect();
@@ -314,5 +241,7 @@ export function pdfReader(main, ctx, book) {
     objectUrls.clear();
   }, {once: true});
   setPage(1);
-  if (!observer) loadPage(1);
+  if (!observer) {
+    for (let pageNumber = 1; pageNumber <= book.pages; pageNumber++) loadPage(pageNumber);
+  }
 }
