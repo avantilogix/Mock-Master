@@ -1,7 +1,7 @@
 import {api} from './services.js';
 import {coverPicker} from './publishing-media.js';
 import {maxVideoBytes, uploadChapterVideo, videoAccept, videoType} from './chapter-upload.js';
-import {bindForm, button, el, field, heading, idPart, link, rule, run, say, status, textValue} from './ui.js';
+import {bindForm, button, el, field, heading, icon, idPart, link, rule, run, say, status, textValue} from './ui.js?v=workspace-refresh-v1';
 
 const kinds = [
   {id: 'content', label: 'Course Content'},
@@ -77,6 +77,11 @@ export function showAdminCourseWorkspace(main, ctx, courseId) {
       field('New Folder Name', el('input', {required: '', maxlength: '100', autocomplete: 'off'})),
       field('Create Inside', el('select', {}, ...folderOptions.map(option => option.cloneNode(true)))),
       button('Create Folder', null, 'submit'));
+    const rootRefresh = button('', 'secondary icon-button workspace-refresh');
+    rootRefresh.setAttribute('aria-label', 'Refresh folders and content');
+    rootRefresh.title = 'Refresh folders and content';
+    rootRefresh.prepend(icon('refresh', 'line-icon'));
+    rootRefresh.addEventListener('click', () => run(rootRefresh, feedback, load, 'Refreshing folders…'));
     const nameInput = folderForm.querySelector('input');
     const parentSelect = folderForm.querySelector('select');
     const createButton = folderForm.querySelector('button');
@@ -183,13 +188,10 @@ export function showAdminCourseWorkspace(main, ctx, courseId) {
 
     const tree = renderTree('');
     const folderSection = el('section', {class: 'panel folder-manager'},
-      el('h2', {}, 'Folders'),
+      el('div', {class: 'folder-manager-heading'}, el('h2', {}, 'Folders'), rootRefresh),
       folderForm,
       tree.length ? el('ul', {class: 'workspace-folder-list'}, ...tree) :
-        el('p', {class: 'muted'}, 'No folders yet. Create one above; folders can be nested.'),
-      folders.length ? button('Refresh', 'secondary') : null);
-    const rootRefresh = folderSection.querySelector('button[type="button"]');
-    rootRefresh?.addEventListener('click', () => run(rootRefresh, feedback, load, 'Refreshing folders…'));
+        el('p', {class: 'muted'}, 'No folders yet. Create one above; folders can be nested.'));
     folderForm.addEventListener('submit', event => {
       event.preventDefault();
       run(createButton, feedback, async () => {
@@ -205,7 +207,10 @@ export function showAdminCourseWorkspace(main, ctx, courseId) {
         el('option', {value: ''}, 'Course root'),
         ...folders.map(folder => el('option', {value: folder.id}, folderLabel(folder))));
       destination.value = item.folderId || '';
-      const move = button('Move', 'secondary');
+      const move = button('', 'secondary workspace-move');
+      move.setAttribute('aria-label', `Move ${item.title} to selected folder`);
+      move.title = 'Move to selected folder';
+      move.prepend(icon('move', 'line-icon'));
       move.addEventListener('click', () => run(move, feedback, async () => {
         await api(`${coursePath}/workspace-items/${encodeURIComponent(item.type)}/${idPart(item.id)}`,
           {ctx, auth: true, method: 'PATCH', json: {folderId: destination.value || null}});

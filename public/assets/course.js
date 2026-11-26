@@ -1,6 +1,6 @@
 import {api} from './services.js';
 import {coverGallery} from './publishing-media.js';
-import {bindForm, button, el, entries, field, formatDate, heading, icon, idPart, link, loadInto, panel, rule, run, say, status, textValue} from './ui.js';
+import {bindForm, button, el, entries, field, formatDate, heading, icon, idPart, link, loadInto, panel, rule, run, say, status, textValue} from './ui.js?v=course-payment-close-v1';
 
 export const upiReference = control => rule(control, value =>
   /^[A-Za-z0-9][A-Za-z0-9 _/.-]{2,79}$/.test(value) ? '' :
@@ -10,10 +10,10 @@ const inr = new Intl.NumberFormat('en-IN', {style: 'currency', currency: 'INR'})
 export const priceText = paise => inr.format(paise / 100);
 export const owns = (me, id) => me?.purchases?.some(purchase => String(purchase) === String(id));
 
-function expiryLabel(course) {
+function expiryLabel(course, myCourse = false) {
   if (!course.expiresOn) return null;
   return el('p', {class: `course-expiry${course.expired ? ' expired' : ''}`},
-    course.expired ? 'Expired on ' : 'Access through ',
+    course.expired ? 'Expired on ' : myCourse ? 'Expiry Date: ' : 'Access through ',
     el('time', {datetime: course.expiresOn}, formatDate(course.expiresOn, false)), ' (IST)');
 }
 
@@ -22,49 +22,43 @@ const shortcut = (glyph, title, description, href, tone = '') => el('a',
   el('span', {class: 'shortcut-icon'}, icon(glyph, 'line-icon')),
   el('strong', {}, title), el('small', {}, description));
 
-function courseCard(course, index, me) {
+function courseCard(course, index, me, myCourse = false) {
   const owned = owns(me, course.id);
-  const cover = coverGallery(course) || el('div', {class: `card-cover alt-${index % 3}`},
-    el('span', {}, owned ? 'Your Learning Space' : 'Mock Tests + E-Books'));
+  const cover = coverGallery(course, myCourse ? 'my-course-cover' : '') || el('div', {class: `card-cover alt-${index % 3}`},
+    myCourse ? null : el('span', {}, owned ? 'Your Learning Space' : 'Mock Tests + E-Books'));
   const description = el('p', {class: 'description tile-description'}, course.description);
   const readMore = link('Read more', `#course/${idPart(course.id)}`, 'text-link tile-read-more');
   readMore.hidden = true;
-  const body = el('div', {class: 'card-body'}, owned ? el('span', {class: 'badge'}, 'Purchased') : null,
-    el('h3', {}, course.title), expiryLabel(course), description, readMore,
-    el('div', {class: 'card-footer'}, course.expired ? el('span', {class: 'muted'}, 'Access closed') :
-      owned ? el('span', {class: 'muted'}, 'Continue Learning') : el('p', {class: 'price'}, priceText(course.price)),
-      el('a', {class: 'button', href: `#course/${idPart(course.id)}`,
-        'aria-label': `${owned && !course.expired ? 'Open' : 'View'} course: ${course.title}`}, owned && !course.expired ? 'Open Course' : 'View Details')));
-  const card = el('article', {class: 'panel card'}, cover, body);
-  requestAnimationFrame(() => {
-    if (card.isConnected) readMore.hidden = description.scrollHeight <= description.clientHeight + 1;
-  });
+  const actionLabel = myCourse ? (course.expired ? 'View Details' : 'View Course') :
+    owned && !course.expired ? 'Open Course' : 'View Details';
+  const actionAriaLabel = myCourse ? `View course: ${course.title}` :
+    course.expired ? `View details for course: ${course.title}` :
+      owned ? `Open course: ${course.title}` : `View course: ${course.title}`;
+  const footer = el('div', {class: `card-footer${myCourse ? ' my-course-footer' : ''}`},
+    course.expired ? el('span', {class: 'muted'}, 'Access closed') :
+      owned ? myCourse ? null : el('span', {class: 'muted'}, 'Continue Learning') :
+        el('p', {class: 'price'}, priceText(course.price)),
+    el('a', {class: `button${myCourse ? ' my-course-view' : ''}`, href: `#course/${idPart(course.id)}`,
+      'aria-label': actionAriaLabel}, actionLabel));
+  const body = el('div', {class: `card-body${myCourse ? ' my-course-card-body' : ''}`},
+    owned && !myCourse ? el('span', {class: 'badge'}, 'Purchased') : null,
+    el('h3', {}, course.title), expiryLabel(course, myCourse),
+    myCourse ? null : description, myCourse ? null : readMore, footer);
+  const card = el('article', {class: `panel card${myCourse ? ' my-course-card' : ''}`}, cover, body);
+  if (!myCourse) {
+    requestAnimationFrame(() => {
+      if (card.isConnected) readMore.hidden = description.scrollHeight <= description.clientHeight + 1;
+    });
+  }
   return card;
 }
 
 export function showDashboard(main, ctx, me) {
-  const name = me?.name?.trim() || 'Learner';
   const courses = el('div', {class: 'grid'});
-  const missionCount = el('strong', {}, String(me?.purchases?.length || 0));
   main.append(
-    el('section', {class: 'dashboard-welcome'},
-      el('div', {class: 'dashboard-intro'}, el('p', {class: 'eyebrow'}, 'Your daily preparation hub'),
-        el('h1', {}, `Hello, ${name}`),
-        el('p', {class: 'lead'}, 'Choose today’s mission, strengthen one topic, and get closer to selection.'),
-        el('div', {class: 'hero-quick-links'},
-          link('Start a Mock Test', '#test-series', 'button'),
-          link('Explore E-Books', '#book-store', 'button secondary'))),
-      el('div', {class: 'dashboard-score'}, el('span', {}, me ? 'Your Missions' : 'Available Missions'), missionCount,
-        el('small', {}, 'Practice · Read · Improve'),
-        link(me ? 'Continue Learning' : 'Join for Free', me ? '#my-courses' : '#signin', 'button'))),
-    el('section', {class: 'dashboard-highlights', 'aria-label': 'Learning benefits'},
-      el('span', {}, el('strong', {}, 'Daily'), el('small', {}, 'Practice questions')),
-      el('span', {}, el('strong', {}, 'Protected'), el('small', {}, 'PDF learning')),
-      el('span', {}, el('strong', {}, 'Focused'), el('small', {}, 'Exam roadmap')),
-      el('span', {}, el('strong', {}, 'Live'), el('small', {}, 'Mock analysis'))),
+    el('section', {class: 'home-greeting'}, el('h1', {}, 'Hello, learner')),
     el('section', {class: 'section'},
-      el('div', {class: 'section-heading'}, el('div', {}, el('span', {class: 'section-kicker'}, 'Your study toolkit'),
-        el('h2', {}, 'Start Learning')), link('View All Courses', '#catalog')),
+      el('div', {class: 'section-heading'}, el('h2', {}, 'Quick Access')),
       el('div', {class: 'shortcut-grid'},
         shortcut('courses', 'My Courses', 'Continue purchased learning', '#my-courses', 'mint'),
         shortcut('test', 'Test Series', 'Practice exam questions', '#test-series', 'blue'),
@@ -77,35 +71,37 @@ export function showDashboard(main, ctx, me) {
         shortcut('calendar', 'Timetable', 'Plan your study week', '#timetable', 'blue'),
         shortcut('play', 'YouTube Videos', 'Watch focused lessons', '#videos', 'rose'),
         shortcut('chat', 'Course Groups', 'Discuss with purchasers', '#groups', 'blue'))),
-    el('section', {class: 'section'},
-      el('div', {class: 'section-heading'}, el('div', {}, el('span', {class: 'section-kicker'}, 'Recommended for you'),
-        el('h2', {}, me?.purchases?.length ? 'Continue Learning' : 'Popular Missions')),
-        link('Browse Catalog', '#catalog')),
+    el('section', {class: 'section home-course-section'},
+      el('div', {class: 'section-heading'}, el('h2', {}, me?.purchases?.length ? 'Continue Learning' : 'Popular Courses'),
+        link('Browse All', '#catalog')),
       courses));
   loadInto(courses, ctx, async () => {
     const rows = await api('/courses', {ctx});
-    if (!me) missionCount.textContent = String(rows.length);
     const selected = me?.purchases?.length ? rows.filter(course => owns(me, course.id)) : rows.slice(0, 3);
     courses.replaceChildren(...(selected.length ? selected.map(courseCardWithProfile(me)) :
       [el('p', {class: 'empty'}, me ? 'No purchased missions yet. Explore the catalog to begin.' : 'Explore available missions and sign in when you are ready.')]));
   });
 }
 
-const courseCardWithProfile = me => (course, index) => courseCard(course, index, me);
+const courseCardWithProfile = (me, myCourse = false) => (course, index) => courseCard(course, index, me, myCourse);
 
 export function showMyCourses(main, ctx, me, action) {
-  main.append(...heading('My Courses', 'Continue your purchased missions, mock tests, study books, and course discussions.'));
+  const coursesTab = link('Courses', '#my-courses', 'my-course-tab');
+  coursesTab.setAttribute('aria-current', 'page');
+  const testsTab = link('Test Series', '#test-series', 'my-course-tab');
+  main.append(el('h1', {class: 'sr-only'}, 'My Courses'),
+    el('nav', {class: 'my-course-tabs', 'aria-label': 'Course categories'}, coursesTab, testsTab));
   if (!ctx.user) {
     main.append(panel('Your Learning Library', el('p', {}, 'Sign in to restore courses purchased with your mobile number.'),
       action.signInLink()));
     return;
   }
-  const list = el('div', {class: 'grid'});
+  const list = el('div', {class: 'grid my-course-list'});
   main.append(list);
   loadInto(list, ctx, async () => {
     const rows = await api('/courses', {ctx});
     const purchased = rows.filter(course => owns(me, course.id));
-    list.replaceChildren(...(purchased.length ? purchased.map(courseCardWithProfile(me)) :
+    list.replaceChildren(...(purchased.length ? purchased.map(courseCardWithProfile(me, true)) :
       [el('div', {class: 'empty-library'}, el('h2', {}, 'Your First Mission Is Waiting'),
         el('p', {class: 'muted'}, 'Purchase a course and it will appear here automatically.'),
         link('Explore Missions', '#catalog', 'button'))]));
@@ -125,18 +121,138 @@ function chapterGroups(books, videos) {
   return subjects;
 }
 
-function chapterFolders(subjects, courseId) {
-  const sortNames = ([a], [b]) => a.localeCompare(b, undefined, {numeric: true});
+function materialFolderEntry(name, fileCount, onClick, kind = 'folder') {
+  const entry = button('', 'course-folder-entry material-folder-entry');
+  const count = `${fileCount} file${fileCount === 1 ? '' : 's'}`;
+  entry.setAttribute('aria-label', `Open ${kind} ${name}, ${count}`);
+  entry.append(
+    el('div', {class: 'course-folder-thumbnail course-folder-art'}, icon('files', 'line-icon')),
+    el('span', {class: 'course-folder-entry-copy'},
+      el('strong', {}, name), el('small', {}, count)),
+    el('span', {class: 'course-folder-arrow', 'aria-hidden': 'true'}, '›'));
+  entry.addEventListener('click', onClick);
+  return entry;
+}
+
+function materialFileEntry(name, kind, href) {
+  const entry = link('', href, 'course-folder-entry material-folder-entry course-material-file');
+  entry.setAttribute('aria-label', `Open ${kind} ${name}`);
+  entry.append(
+    el('div', {class: 'course-folder-thumbnail course-folder-art'}, icon(kind === 'PDF' ? 'file' : 'play', 'line-icon')),
+    el('span', {class: 'course-folder-entry-copy'},
+      el('strong', {}, name), el('small', {}, kind)),
+    el('span', {class: 'course-folder-arrow', 'aria-hidden': 'true'}, '›'));
+  return entry;
+}
+
+function folderBackButton(onClick) {
+  const back = button('', 'button secondary icon-action course-folder-back');
+  back.setAttribute('aria-label', 'Back');
+  back.title = 'Back';
+  back.append(icon('back', 'line-icon'));
+  back.addEventListener('click', onClick);
+  return back;
+}
+
+function chapterFolders(subjects, courseId, navigation = {}) {
   if (!subjects.size) return el('p', {class: 'empty'}, 'No study books or videos have been added to this course yet.');
-  return el('div', {class: 'subject-list'}, [...subjects].sort(sortNames).map(([subject, chapters]) =>
-    el('details', {class: 'subject-folder', open: ''},
-      el('summary', {}, el('strong', {}, subject), el('span', {}, `${chapters.size} chapters`)),
-      el('div', {class: 'chapter-list'}, [...chapters].sort(sortNames).map(([chapter, {books, videos}]) =>
-        el('section', {class: 'chapter-group', 'aria-label': chapter},
-          el('h3', {class: 'chapter-name'}, chapter),
-          books.map(book => el('div', {class: 'chapter-book'}, coverGallery(book, 'book-gallery'),
-            link(`PDF · ${book.title}`, `#book/${idPart(courseId)}/${idPart(book.id)}`, 'chapter-link'))),
-          videos.map(video => link(`Video · ${video.title}`, `#video/${idPart(courseId)}/${idPart(video.id)}`, 'chapter-link video-link'))))))));
+  const sortNames = ([a], [b]) => a.localeCompare(b, undefined, {numeric: true});
+  const browser = el('div', {class: 'course-folder-browser course-chapter-browser'});
+
+  function show(subject = '', chapter = '', focusHeading = false) {
+    let breadcrumbs = null;
+    if (!navigation.removeBreadcrumbs) {
+      breadcrumbs = el('nav', {class: 'course-folder-breadcrumbs', 'aria-label': 'Study material path'});
+      const rootCrumb = button('All subjects', 'course-folder-crumb');
+      rootCrumb.setAttribute('aria-current', subject ? 'false' : 'page');
+      rootCrumb.disabled = !subject;
+      rootCrumb.addEventListener('click', () => show('', '', true));
+      breadcrumbs.append(rootCrumb);
+
+      if (subject) {
+        const subjectCrumb = button(subject, 'course-folder-crumb');
+        subjectCrumb.setAttribute('aria-current', chapter ? 'false' : 'page');
+        subjectCrumb.disabled = !chapter;
+        subjectCrumb.addEventListener('click', () => show(subject, '', true));
+        breadcrumbs.append(el('span', {class: 'course-folder-chevron', 'aria-hidden': 'true'}, '›'),
+          subjectCrumb);
+      }
+      if (chapter) {
+        const chapterCrumb = button(chapter, 'course-folder-crumb');
+        chapterCrumb.setAttribute('aria-current', 'page');
+        chapterCrumb.disabled = true;
+        breadcrumbs.append(el('span', {class: 'course-folder-chevron', 'aria-hidden': 'true'}, '›'),
+          chapterCrumb);
+      }
+    }
+
+    const title = navigation.removeBreadcrumbs ? null :
+      el('h3', {class: 'course-folder-heading', tabindex: '-1'}, chapter || subject || 'Subjects');
+    const backButton = navigation.removeBreadcrumbs && (subject || chapter || navigation.onBack) ?
+      folderBackButton(() => {
+        if (chapter) show(subject, '', true);
+        else if (subject) show('', '', true);
+        else navigation.onBack();
+      }) : null;
+    let section;
+    if (!subject) {
+      const entries = el('div', {class: 'course-folder-entries'});
+      for (const [name, chapters] of [...subjects].sort(sortNames)) {
+        const fileCount = chapters.size;
+        entries.append(materialFolderEntry(name, fileCount,
+          () => show(name, '', true), 'subject'));
+      }
+      section = navigation.removeBreadcrumbs ? entries :
+        el('section', {class: 'course-folder-section'}, entries);
+    } else {
+      const chapters = subjects.get(subject);
+      if (!chapter) {
+        const entries = el('div', {class: 'course-folder-entries'});
+        for (const [name, material] of [...chapters].sort(sortNames)) {
+          const itemCount = material.books.length + material.videos.length;
+          entries.append(materialFolderEntry(name, itemCount,
+            () => show(subject, name, true), 'chapter'));
+        }
+        section = navigation.removeBreadcrumbs ? entries :
+          el('section', {class: 'course-folder-section'}, el('h4', {}, 'Chapters'), entries);
+      } else {
+        const material = chapters.get(chapter);
+        if (navigation.removeBreadcrumbs) {
+          const files = [
+            ...material.books.map(book => materialFileEntry(book.title, 'PDF',
+              `#book/${idPart(courseId)}/${idPart(book.id)}`)),
+            ...material.videos.map(video => materialFileEntry(video.title, 'Video',
+              `#video/${idPart(courseId)}/${idPart(video.id)}`)),
+          ];
+          section = files.length ? el('div', {class: 'course-folder-entries'}, files) :
+            el('p', {class: 'course-folder-empty'}, 'No study materials in this folder.');
+        } else {
+          const links = [
+            ...material.books.map(book => el('div', {class: 'chapter-book'},
+              coverGallery(book, 'book-gallery'),
+              link(`PDF · ${book.title}`, `#book/${idPart(courseId)}/${idPart(book.id)}`, 'chapter-link'))),
+            ...material.videos.map(video =>
+              link(`Video · ${video.title}`, `#video/${idPart(courseId)}/${idPart(video.id)}`, 'chapter-link video-link')),
+          ];
+          section = el('section', {class: 'course-folder-section'},
+            el('h4', {}, 'Study materials'),
+            links.length ? el('div', {class: 'chapter-list'}, links) :
+              el('p', {class: 'course-folder-empty'}, 'No study materials in this chapter yet.'));
+        }
+      }
+    }
+
+    const header = navigation.removeBreadcrumbs ? null :
+      el('div', {class: 'course-folder-header'}, breadcrumbs, title);
+    browser.replaceChildren(...(header ? [header] : []), ...(backButton ? [backButton] : []), section);
+    navigation.onNavigate?.(Boolean(subject || chapter));
+    if (focusHeading) {
+      (browser.querySelector('.course-folder-heading') || browser.querySelector('.course-folder-entry'))?.focus();
+    }
+  }
+
+  show();
+  return browser;
 }
 
 function folderTree(folders, items, renderItems) {
@@ -164,6 +280,110 @@ function folderTree(folders, items, renderItems) {
   return el('div', {class: 'course-folder-tree'},
     renderGroup(itemGroups.get('')),
     ...renderChildren(''));
+}
+
+function materialFolderBrowser(folders, items, renderItems, {removeBreadcrumbs = false} = {}) {
+  if (!folders?.length) return renderItems(items, {removeBreadcrumbs});
+
+  const foldersById = new Map(folders.map(folder => [folder.id, folder]));
+  const children = new Map();
+  const itemGroups = new Map();
+  for (const folder of folders) {
+    const parentId = foldersById.has(folder.parentId) ? folder.parentId : '';
+    if (!children.has(parentId)) children.set(parentId, []);
+    children.get(parentId).push(folder);
+  }
+  for (const item of items) {
+    const folderId = foldersById.has(item.folderId) ? item.folderId : '';
+    if (!itemGroups.has(folderId)) itemGroups.set(folderId, []);
+    itemGroups.get(folderId).push(item);
+  }
+  for (const folderList of children.values()) folderList.sort((a, b) => a.name.localeCompare(b.name));
+
+  const browser = el('div', {class: 'course-folder-browser'});
+
+  function folderPath(folderId) {
+    const path = [];
+    const seen = new Set();
+    let folder = foldersById.get(folderId);
+    while (folder && !seen.has(folder.id)) {
+      seen.add(folder.id);
+      path.unshift(folder);
+      folder = foldersById.get(folder.parentId);
+    }
+    return path;
+  }
+
+  function showFolder(folderId, focusHeading = false) {
+    const path = folderPath(folderId);
+    let breadcrumbs = null;
+    if (!removeBreadcrumbs) {
+      breadcrumbs = el('nav', {class: 'course-folder-breadcrumbs', 'aria-label': 'Folder path'});
+      const rootCrumb = button('All folders', 'course-folder-crumb');
+      rootCrumb.setAttribute('aria-current', folderId ? 'false' : 'page');
+      rootCrumb.disabled = !folderId;
+      rootCrumb.addEventListener('click', () => showFolder('', true));
+      breadcrumbs.append(rootCrumb);
+
+      for (const folder of path) {
+        const crumb = button(folder.name, 'course-folder-crumb');
+        const isCurrent = folder.id === folderId;
+        crumb.setAttribute('aria-current', isCurrent ? 'page' : 'false');
+        crumb.disabled = isCurrent;
+        crumb.addEventListener('click', () => showFolder(folder.id, true));
+        breadcrumbs.append(el('span', {class: 'course-folder-chevron', 'aria-hidden': 'true'}, '›'),
+          crumb);
+      }
+    }
+
+    const title = removeBreadcrumbs ? null :
+      el('h3', {class: 'course-folder-heading', tabindex: '-1'},
+        path[path.length - 1]?.name || 'Folders');
+    const subfolders = children.get(folderId) || [];
+    const contents = itemGroups.get(folderId) || [];
+    const backButton = removeBreadcrumbs && folderId && !contents.length ?
+      folderBackButton(() => showFolder(path.length > 1 ? path[path.length - 2].id : '', true)) : null;
+    const sections = [];
+    let folderSection = null;
+
+    if (subfolders.length) {
+      const entries = el('div', {class: 'course-folder-entries'});
+      for (const folder of subfolders) {
+        const subjectCount = new Set((itemGroups.get(folder.id) || []).map(item => item.subject)).size;
+        entries.append(materialFolderEntry(folder.name, (children.get(folder.id) || []).length + subjectCount,
+          () => showFolder(folder.id, true)));
+      }
+      folderSection = removeBreadcrumbs ? entries :
+        el('section', {class: 'course-folder-section'},
+          folderId ? el('h4', {}, 'Folders inside') : null, entries);
+      sections.push(folderSection);
+    }
+
+    if (contents.length) {
+      const folderNavigation = {
+        removeBreadcrumbs,
+        onBack: folderId ? () => showFolder(path.length > 1 ? path[path.length - 2].id : '', true) : null,
+        onNavigate: inside => { if (folderSection) folderSection.style.display = inside ? 'none' : ''; },
+      };
+      const renderedItems = renderItems(contents, folderNavigation);
+      sections.push(removeBreadcrumbs ? renderedItems :
+        el('section', {class: 'course-folder-section'},
+          el('h4', {}, folderId ? 'Materials in this folder' : 'Materials in course root'),
+          renderedItems));
+    } else if (!subfolders.length) {
+      sections.push(el('p', {class: 'course-folder-empty'}, 'No study materials in this folder yet.'));
+    }
+
+    const header = removeBreadcrumbs ? null :
+      el('div', {class: 'course-folder-header'}, breadcrumbs, title);
+    browser.replaceChildren(...(header ? [header] : []), ...(backButton ? [backButton] : []), ...sections);
+    if (focusHeading) {
+      (browser.querySelector('.course-folder-heading') || browser.querySelector('.course-folder-entry'))?.focus();
+    }
+  }
+
+  showFolder('');
+  return browser;
 }
 
 function testRows(ctx, items, courseId) {
@@ -218,7 +438,7 @@ export function showContentLibrary(main, ctx, me, kind, action) {
       if (config.item === 'books') {
         const subjects = chapterGroups(material.books, material.videos || []);
         const chapterCount = [...subjects.values()].reduce((sum, chapters) => sum + chapters.size, 0);
-        const content = folderTree(material.folders?.filter(folder => folder.kind === 'content'),
+        const content = materialFolderBrowser(material.folders?.filter(folder => folder.kind === 'content'),
           [...material.books, ...(material.videos || [])],
           folderItems => chapterFolders(chapterGroups(
             folderItems.filter(item => material.books.some(book => book.id === item.id)),
@@ -281,99 +501,242 @@ function questionPaperButton(ctx, test) {
 }
 
 export function showCatalog(main, ctx, me) {
-  const list = el('div', {class: 'grid'});
+  const list = el('div', {class: 'catalog-course-list'});
   main.append(el('section', {class: 'section', id: 'available-courses'},
     ...heading('All Courses'),
-    list),
-  el('section', {class: 'section'}, el('div', {class: 'section-heading'}, el('h2', {}, 'Everything You Need to Prepare')),
-    el('div', {class: 'grid feature-grid'},
-      el('article', {class: 'feature'}, el('span', {class: 'feature-icon', 'aria-hidden': 'true'}, '✓'), el('div', {}, el('h3', {}, 'Focused Exam Practice'), el('p', {}, 'Take clear mock tests and review your score whenever you are ready.'))),
-      el('article', {class: 'feature'}, el('span', {class: 'feature-icon', 'aria-hidden': 'true'}, '▤'), el('div', {}, el('h3', {}, 'Built-In PDF Reader'), el('p', {}, 'Study online with your verified mobile number watermarked on each page.'))),
-      el('article', {class: 'feature'}, el('span', {class: 'feature-icon', 'aria-hidden': 'true'}, '↗'), el('div', {}, el('h3', {}, 'Simple UPI Payment'), el('p', {}, 'Pay with any UPI app, submit the reference, and unlock after admin approval.'))))));
+    list));
   loadInto(list, ctx, async () => {
     const courses = await api('/courses', {ctx});
-    list.replaceChildren(...(courses.length ? courses.map(courseCardWithProfile(me)) :
+    list.replaceChildren(...(courses.length ? courses.map((course, index) => catalogCourseCard(course, index, me)) :
       [el('p', {class: 'empty'}, 'No courses are available yet. Check back soon for new study material.')]));
   });
+}
+
+function catalogCourseCard(course, index, me) {
+  const owned = owns(me, course.id);
+  const cover = coverGallery(course, 'catalog-course-cover') ||
+    el('div', {class: `catalog-course-cover catalog-course-placeholder alt-${index % 3}`},
+      icon('courses', 'line-icon'));
+  const card = el('article', {class: 'catalog-course-card', role: 'link', tabindex: '0',
+    'aria-label': `Open course: ${course.title}`}, cover,
+    el('div', {class: 'catalog-course-info'},
+      el('div', {class: 'catalog-course-meta'},
+        el('span', {class: 'catalog-course-kind'}, 'Content Course'),
+        owned ? el('span', {class: 'catalog-course-owned'}, 'Purchased') : null),
+      el('h3', {}, course.title),
+      expiryLabel(course),
+      el('div', {class: 'catalog-course-bottom'},
+        course.expired ? el('span', {class: 'muted'}, 'Access closed') :
+          owned ? el('span', {class: 'muted'}, 'Continue Learning') :
+            el('span', {class: 'catalog-course-price'}, priceText(course.price)))));
+  const openCourse = () => { location.hash = `#course/${idPart(course.id)}`; };
+  card.addEventListener('click', event => {
+    if (!event.target.closest('button, a, input, select, textarea')) openCourse();
+  });
+  card.addEventListener('keydown', event => {
+    if (event.target === card && (event.key === 'Enter' || event.key === ' ')) {
+      event.preventDefault();
+      openCourse();
+    }
+  });
+  return card;
 }
 
 export function showCourse(main, ctx, session, action) {
   const id = action.id;
   const path = `/courses/${idPart(id)}`;
-  const intro = el('div', {class: 'course-intro'}, el('h1', {}, 'Course Details'));
-  const media = el('div', {class: 'course-detail-media', hidden: ''});
-  const access = el('section', {class: 'panel section course-access'});
-  const reviews = el('div');
   const owned = owns(session?.me, id);
   const admin = Boolean(session?.me?.admin);
-  main.append(link('All Courses', '#catalog', 'back'), intro, media, access, panel('Course Reviews', reviews));
+  const overviewTab = button('Overview', 'course-tab');
+  const contentTab = button('Content', 'course-tab');
+  const testTab = button('Test', 'course-tab');
+  overviewTab.setAttribute('role', 'tab');
+  contentTab.setAttribute('role', 'tab');
+  testTab.setAttribute('role', 'tab');
+  const tabs = el('nav', {class: 'course-tabs', role: 'tablist', 'aria-label': 'Course sections'},
+    ...(owned ? [] : [overviewTab]), contentTab, testTab);
+  const overview = el('section', {class: 'course-tab-panel course-overview', role: 'tabpanel'});
+  const content = el('section', {class: 'course-tab-panel course-content', role: 'tabpanel', hidden: ''});
+  const testPanel = el('section', {class: 'course-tab-panel course-test-panel', role: 'tabpanel', hidden: ''});
+  overviewTab.id = 'course-overview-tab';
+  contentTab.id = 'course-content-tab';
+  testTab.id = 'course-test-tab';
+  overviewTab.setAttribute('aria-controls', 'course-overview-panel');
+  contentTab.setAttribute('aria-controls', 'course-content-panel');
+  testTab.setAttribute('aria-controls', 'course-test-panel');
+  overview.id = 'course-overview-panel';
+  content.id = 'course-content-panel';
+  testPanel.id = 'course-test-panel';
+  overview.setAttribute('aria-labelledby', overviewTab.id);
+  content.setAttribute('aria-labelledby', contentTab.id);
+  testPanel.setAttribute('aria-labelledby', testTab.id);
+  const access = el('section', {class: 'section course-access'});
+  const testAccess = el('section', {class: 'section course-test-access'});
+  const reviews = el('div');
+  const reviewPanel = panel('Course Reviews', reviews);
+  const paymentTarget = el('div', {class: 'course-payment-target'});
+  const closePayment = button('', 'secondary course-payment-close');
+  closePayment.append(icon('close', 'line-icon'));
+  closePayment.setAttribute('aria-label', 'Close payment options');
+  closePayment.title = 'Close payment options';
+  const paymentDialog = el('dialog', {class: 'course-payment-dialog', 'aria-labelledby': 'course-payment-title'},
+    el('div', {class: 'course-payment-dialog-header'},
+      el('h2', {id: 'course-payment-title'}, 'Payment Options'), closePayment),
+    paymentTarget);
+  const courseTabs = [
+    ...(owned ? [] : [{name: 'overview', tab: overviewTab, panel: overview}]),
+    {name: 'content', tab: contentTab, panel: content},
+    {name: 'test', tab: testTab, panel: testPanel},
+  ];
+  const selectTab = selected => {
+    for (const item of courseTabs) {
+      const active = item.name === selected;
+      item.tab.setAttribute('aria-selected', String(active));
+      item.tab.tabIndex = active ? 0 : -1;
+      item.panel.hidden = !active;
+    }
+  };
+  for (const item of courseTabs) {
+    item.tab.addEventListener('click', () => selectTab(item.name));
+  }
+  tabs.addEventListener('keydown', event => {
+    if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+      event.preventDefault();
+      const index = courseTabs.findIndex(item => item.tab === event.target);
+      if (index < 0) return;
+      const direction = event.key === 'ArrowRight' ? 1 : -1;
+      const next = courseTabs[(index + direction + courseTabs.length) % courseTabs.length];
+      next.tab.focus();
+      selectTab(next.name);
+    }
+  });
+  main.append(tabs, ...(owned ? [] : [overview]), content, testPanel, paymentDialog);
+  content.append(access, reviewPanel);
+  testPanel.append(testAccess);
+  closePayment.addEventListener('click', () => paymentDialog.close());
+  selectTab(owned ? 'content' : 'overview');
 
   loadInto(access, ctx, async () => {
     const courses = await api('/courses', {ctx});
     const course = courses.find(item => String(item.id) === id);
     if (!course) {
       access.replaceChildren(el('p', {class: 'empty'}, 'This course is no longer listed in the catalog.'));
+      overview.replaceChildren(el('p', {class: 'empty'}, 'This course is no longer listed in the catalog.'));
       return;
     }
-    intro.replaceChildren(el('div', {}, el('span', {class: 'eyebrow'}, 'Mock tests · E-books · Discussion'),
-      ...heading(course.title), expiryLabel(course), el('p', {class: 'lead description'}, course.description)),
-      ...(owned ? [el('span', {class: 'badge'}, 'Purchased')] :
-        course.expired ? [] : [el('p', {class: 'price'}, priceText(course.price))]));
     const gallery = coverGallery(course);
-    if (gallery) {
-      media.hidden = false;
-      media.append(gallery);
-    }
+    const cover = gallery || el('div', {class: 'course-overview-cover catalog-course-placeholder'},
+      icon('courses', 'line-icon'));
+    cover.classList.add('course-overview-cover');
+    const price = !owned && !course.expired ?
+      el('strong', {class: 'course-overview-price'}, priceText(course.price)) : null;
+    const expiry = el('span', {class: `course-overview-expiry${course.expired ? ' expired' : ''}`},
+      course.expired ? 'Expired on ' : 'Expiry Date: ',
+      course.expiresOn ? el('time', {datetime: course.expiresOn}, formatDate(course.expiresOn, false)) :
+        'Not set');
+    const openPayment = () => {
+      paymentTarget.replaceChildren();
+      if (!session) {
+        paymentTarget.append(el('p', {}, 'Sign in to purchase this course or access material you already own.'),
+          action.signInLink('Sign In to Continue'));
+      } else if (!session.me) {
+        paymentTarget.append(action.profileUnavailable());
+      } else {
+        showManualPayment(paymentTarget, ctx, session, course, path, action);
+      }
+      if (!paymentDialog.open) paymentDialog.showModal();
+    };
+    const purchase = !owned && !course.expired ? button('Buy Now', 'course-buy-button') : null;
+    purchase?.addEventListener('click', openPayment);
+    overview.replaceChildren(cover,
+      el('div', {class: 'course-overview-details'},
+        el('h1', {}, course.title),
+        owned ? el('span', {class: 'catalog-course-owned'}, 'Purchased') : null,
+        el('div', {class: 'course-overview-price-row'}, price, expiry),
+        el('section', {class: 'course-description'},
+          el('h2', {}, 'Description'),
+          el('p', {}, course.description || 'Course details will be available soon.')),
+        purchase ? el('div', {class: 'course-buy-bar'}, purchase) : null));
     if (course.expired && !admin) {
       access.replaceChildren(el('h2', {}, 'Course Expired'),
         el('p', {}, 'This course is closed to new purchases and study access.'),
         link('Explore Active Courses', '#catalog', 'button secondary'));
+      testAccess.replaceChildren(el('h2', {}, 'Course Expired'),
+        el('p', {}, 'This course is closed to new purchases and study access.'),
+        link('Explore Active Courses', '#catalog', 'button secondary'));
     } else if (owned || admin) {
       access.className = 'section';
-      showMaterials(access, ctx, path, id);
+      showMaterials(access, testAccess, ctx, path, id);
       if (owned) showReviewForm();
     } else {
-      access.replaceChildren(el('h2', {}, 'Course Access'));
-      if (!session) {
-        access.append(el('p', {}, 'Sign in to purchase this course or access material you already own.'),
-          action.signInLink('Sign In to Continue'));
-      } else if (!session.me) {
-        access.append(action.profileUnavailable());
-      } else {
-        access.append(el('p', {}, 'Pay by UPI, submit the transaction reference, and unlock the course after admin approval.'));
-        showManualPayment(access, ctx, session, course, path, action);
-      }
+      const contentBuy = button('Buy Now', 'secondary course-content-buy');
+      contentBuy.addEventListener('click', openPayment);
+      access.replaceChildren(el('h2', {}, 'Course Content'),
+        el('p', {}, 'Purchase this course to unlock its study materials and discussions.'),
+        contentBuy);
+      const testBuy = button('Buy Now', 'secondary course-content-buy');
+      testBuy.addEventListener('click', openPayment);
+      testAccess.replaceChildren(el('h2', {}, 'Practice & Live Tests'),
+        el('p', {}, 'Purchase this course to unlock its practice and live tests.'),
+        testBuy);
     }
   });
 
   const list = el('div');
   reviews.append(list);
+  const ratingStars = value => {
+    const score = Number(value);
+    return el('span', {class: 'course-review-stars', role: 'img', 'aria-label': `${score} out of 5 stars`},
+      [1, 2, 3, 4, 5].map(star => el('span', {
+        class: star <= score ? 'is-filled' : '',
+        'aria-hidden': 'true',
+      }, '★')));
+  };
   const refreshReviews = () => loadInto(list, ctx, async () => {
     const rows = await api(`${path}/reviews`, {ctx});
     list.replaceChildren(entries(rows, 'No reviews yet.', entry => [
-      el('strong', {}, entry.name), el('p', {class: 'muted'}, `${entry.rating} out of 5`),
+      el('strong', {}, entry.name),
+      el('div', {class: 'course-review-rating'}, ratingStars(entry.rating)),
       el('p', {class: 'entry-text'}, entry.text)
     ]));
   });
   refreshReviews();
   function showReviewForm() {
-    const rating = el('select', {required: ''}, el('option', {value: ''}, 'Choose a Rating'),
-      [5, 4, 3, 2, 1].map(value => el('option', {value}, `${value} out of 5`)));
+    const picker = el('div', {class: 'course-rating-picker'});
+    const rating = el('fieldset', {class: 'course-rating-fieldset'},
+      el('legend', {}, 'Your rating'), picker);
+    const updateRating = () => {
+      const selected = Number(picker.querySelector('input:checked')?.value || 0);
+      for (const option of picker.querySelectorAll('.course-rating-choice')) {
+        const value = Number(option.querySelector('input').value);
+        option.querySelector('.course-rating-star').classList.toggle('is-filled', value <= selected);
+      }
+    };
+    for (const value of [1, 2, 3, 4, 5]) {
+      const input = el('input', {type: 'radio', name: 'course-review-rating', value, required: ''});
+      input.setAttribute('aria-label', `${value} ${value === 1 ? 'star' : 'stars'}`);
+      input.addEventListener('change', updateRating);
+      picker.append(el('label', {class: 'course-rating-choice'}, input,
+        el('span', {class: 'course-rating-star', 'aria-hidden': 'true'}, '★')));
+    }
     const text = el('textarea', {rows: '3', required: '', maxlength: '1000'});
     const submit = button('Save Review', null, 'submit');
     const feedback = status();
-    const form = el('form', {}, field('Rating', rating), field('Your Review', text), submit, feedback);
-    reviews.append(el('div', {class: 'section'}, el('h3', {}, 'Write or Update Your Review'), form));
+    const form = el('form', {class: 'course-review-form'}, rating,
+      el('small', {class: 'course-rating-hint'}, 'Tap a star to choose your rating.'),
+      field('Your Review', text), submit, feedback);
+    reviews.append(el('div', {class: 'section'}, form));
     bindForm(form, submit, feedback, async () => {
+      const selectedRating = form.querySelector('input[name="course-review-rating"]:checked');
       await api(`${path}/reviews`, {ctx, auth: true, method: 'PUT',
-        json: {rating: Number(rating.value), text: textValue(text, 'Review')}});
+        json: {rating: Number(selectedRating.value), text: textValue(text, 'Review')}});
       say(feedback, 'Review saved.');
       refreshReviews();
     }, 'Saving review…');
   }
 }
 
-function showMaterials(access, ctx, path, id) {
+function showMaterials(access, testAccess, ctx, path, id) {
   loadInto(access, ctx, async () => {
     const {tests, books, videos = [], folders = [], messages} = await api(path, {ctx, auth: true});
     const receipt = button('Download Purchase Receipt', 'secondary');
@@ -412,15 +775,15 @@ function showMaterials(access, ctx, path, id) {
     const contentFolders = folders.filter(folder => folder.kind === 'content');
     const testsContent = folderTree(testFolders, tests, items => testRows(ctx, items, id));
     const studyItems = [...books, ...videos];
-    const courseContent = folderTree(contentFolders, studyItems, items => {
+    const courseContent = materialFolderBrowser(contentFolders, studyItems, (items, navigation = {}) => {
       const bookIds = new Set(books.map(book => book.id));
       return chapterFolders(chapterGroups(items.filter(item => bookIds.has(item.id)),
-        items.filter(item => !bookIds.has(item.id))), id);
-    });
-    access.replaceChildren(panel('Course Documents', el('div', {class: 'actions'}, receipt), receiptFeedback),
-      panel('Practice & Live Tests', testsContent),
-      panel('Study Materials by Chapter', courseContent),
+        items.filter(item => !bookIds.has(item.id))), id, navigation);
+    }, {removeBreadcrumbs: true});
+    access.replaceChildren(panel('Study Materials', courseContent),
+      panel('Course Documents', el('div', {class: 'actions'}, receipt), receiptFeedback),
       panel('Course Discussion', messageList, form));
+    testAccess.replaceChildren(panel('Practice & Live Tests', testsContent));
   });
 }
 
@@ -449,7 +812,7 @@ function showManualPayment(target, ctx, session, course, path, action) {
         link('Contact Support', '#support', 'button secondary')));
       return;
     }
-    const methodButtons = el('div', {class: 'payment-methods'});
+    const methodButtons = el('div', {class: 'payment-methods', role: 'group', 'aria-label': 'Choose a payment method'});
     const methodPanel = el('div');
     const renderMethod = method => {
       methodButtons.querySelectorAll('button').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.method === method)));
@@ -460,10 +823,14 @@ function showManualPayment(target, ctx, session, course, path, action) {
         methodPanel.replaceChildren(el('div', {class: 'qr-card'}, el('img', {src: payment.qr,
           alt: `Payment QR for ${payment.payeeName || 'Mission Selection'}`, width: '220', height: '220'}),
           el('strong', {}, payment.payeeName || 'Mission Selection'),
-          payment.customQr ? el('small', {}, 'Scan using your UPI application') : el('small', {}, payment.upiId)));
+          el('small', {}, 'Scan using your UPI application')));
       }
     };
-    const methods = payment.configured ? (payment.method === 'both' ? ['upi', 'qr'] : [payment.method]) : [];
+    const methods = [];
+    if (payment.configured) {
+      if (payment.method !== 'qr' && payment.upiId) methods.push('upi');
+      if (payment.method === 'qr' || payment.upiId || payment.customQr) methods.push('qr');
+    }
     for (const method of methods) {
       const control = button(method === 'upi' ? 'Pay by UPI ID' : 'Scan QR Code', 'secondary');
       control.dataset.method = method;

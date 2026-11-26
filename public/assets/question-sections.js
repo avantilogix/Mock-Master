@@ -1,4 +1,4 @@
-import {button, confirmDelete, el, field, icon, run, say, status} from './ui.js?v=add-subject-button';
+import {button, confirmDelete, el, field, icon, run, say, status} from './ui.js?v=icon-only-actions-v1';
 
 export function subjectQuestionManager(questionsEditor, importFile) {
   const subjects = [];
@@ -63,7 +63,8 @@ export function subjectQuestionManager(questionsEditor, importFile) {
         const selected = file.files[0];
         say(importFeedback, selected ? `${selected.name} selected. Import it to replace this section’s questions.` : '');
       });
-      const importButton = button('Import Questions for Subject', 'secondary');
+      const importButton = button('Import', 'secondary');
+      importButton.setAttribute('aria-label', `Import questions for ${subject.name}`);
       const count = el('small', {class: 'subject-question-count'});
       subject.countElement = count;
       name.addEventListener('change', () => {
@@ -85,6 +86,7 @@ export function subjectQuestionManager(questionsEditor, importFile) {
           {...question, section: nextName} : question));
         heading.textContent = nextName;
         file.setAttribute('aria-label', `Question file for ${nextName}`);
+        importButton.setAttribute('aria-label', `Import questions for ${nextName}`);
       });
       importButton.addEventListener('click', () => run(importButton, importFeedback, async () => {
         const selectedFile = file.files[0];
@@ -116,7 +118,9 @@ export function subjectQuestionManager(questionsEditor, importFile) {
     }));
     updateCounts();
   };
-  const add = button('Add Subject', 'secondary subject-add-button');
+  const add = button('', 'secondary subject-add-button');
+  add.setAttribute('aria-label', 'Add subject');
+  add.title = 'Add subject';
   add.prepend(icon('plus', 'line-icon'));
   add.addEventListener('click', () => addSubject());
   questionsEditor.addEventListener('input', syncSubjects);
@@ -125,8 +129,7 @@ export function subjectQuestionManager(questionsEditor, importFile) {
   return {
     node: el('section', {class: 'subject-question-manager'},
       el('div', {class: 'subject-question-toolbar'},
-        el('div', {}, el('h3', {}, 'Subject Sections'),
-          el('p', {class: 'muted'}, 'Add a subject, name it, and upload its question file. Students can switch between sections during the test.')),
+        el('h3', {}, 'Subject Sections'),
         add),
       feedback, cards),
     reset() {

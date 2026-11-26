@@ -1,12 +1,12 @@
 import {api} from './services.js';
-import {publishedManager, weekdays} from './admin-manage.js?v=public-learning-resources-v3';
-import {adminContentForm} from './reports.js?v=public-learning-resources-v3';
+import {publishedManager, weekdays} from './admin-manage.js?v=ebook-demo-plus-v1';
+import {adminContentForm} from './reports.js?v=refresh-icons-v3';
 import {coverPicker} from './publishing-media.js';
-import {manualQuestions} from './manual-questions.js';
-import {subjectQuestionManager} from './question-sections.js?v=sectionwise-v2';
+import {manualQuestions} from './manual-questions.js?v=publish-icons-v1';
+import {subjectQuestionManager} from './question-sections.js?v=subject-import-label-v1';
 import {questionData} from './question-data.js';
 import {maxVideoBytes, uploadChapterVideo, videoAccept, videoType} from './chapter-upload.js';
-import {bindForm, button, el, entries, field, fieldError, formatDate, heading, icon, idPart, link, loadInto, panel, rule, run, say, status, textValue} from './ui.js';
+import {bindForm, button, el, entries, field, fieldError, formatDate, heading, icon, iconAction, idPart, link, loadInto, panel, rule, run, say, status, textValue} from './ui.js?v=student-actions-v2';
 
 const pdfAccept = '.pdf,application/pdf';
 
@@ -64,8 +64,8 @@ export function showAdmin(main, ctx, folderTarget = null) {
     if (publishes.test(path) && !path.endsWith('/videos/upload')) manager?.reload();
     return result;
   };
-  const payments = el('div');
-  const paymentRefresh = button('Refresh Requests', 'secondary');
+  const payments = el('div', {class: 'payment-requests admin-payment-grid'});
+  const paymentRefresh = iconAction(button('', 'secondary icon-button refresh-action'), 'refresh', 'Refresh payment requests');
   const samples = button('Load Sample Missions', 'secondary');
   const sampleStatus = status();
   const content = el('div');
@@ -229,12 +229,19 @@ export function showAdmin(main, ctx, folderTarget = null) {
         setTimeout(() => URL.revokeObjectURL(url), 1000);
         say(feedback, 'Receipt downloaded.');
       }, 'Preparing receipt…'));
-      return el('article', {class: 'payment-request'},
-        el('div', {class: 'payment-request-head'}, el('div', {}, el('strong', {}, request.name),
-          el('p', {class: 'muted'}, request.phone)), el('span', {class: `request-state ${request.status}`}, request.status)),
-        el('span', {class: 'badge'}, request.type === 'ebook' ? 'E-Book Payment' : 'Course Payment'),
-        el('h3', {}, request.course), el('p', {class: 'price'}, new Intl.NumberFormat('en-IN',
-          {style: 'currency', currency: 'INR'}).format(request.amount / 100)),
+      const initials = request.name.trim().split(/\s+/).slice(0, 2).map(part => part[0]).join('').toUpperCase();
+      if (receipt) receipt.classList.add('payment-receipt-action');
+      const requestDetails = el('div', {class: 'payment-request-content'},
+        el('div', {class: 'payment-request-head'},
+          el('div', {class: 'payment-request-identity'},
+            el('span', {class: 'payment-request-avatar', 'aria-hidden': 'true'}, initials),
+            el('div', {}, el('strong', {}, request.name), el('p', {class: 'muted'}, request.phone))),
+          el('span', {class: `request-state ${request.status}`}, request.status)),
+        el('div', {class: 'payment-request-course'},
+          el('span', {class: 'badge'}, request.type === 'ebook' ? 'E-Book Payment' : 'Course Payment'),
+          el('h3', {}, request.course),
+          el('p', {class: 'price'}, new Intl.NumberFormat('en-IN',
+            {style: 'currency', currency: 'INR'}).format(request.amount / 100))),
         el('dl', {class: 'payment-summary'}, el('dt', {}, 'UPI Reference'), el('dd', {}, request.reference),
           el('dt', {}, 'Submitted (IST)'), el('dd', {}, request.submittedAt ? formatDate(request.submittedAt) : 'Unavailable')),
         request.note ? el('p', {class: 'muted'}, request.note) : null,
@@ -242,6 +249,9 @@ export function showAdmin(main, ctx, folderTarget = null) {
         request.status !== 'rejected' ? field(request.status === 'approved' ?
           'Revocation Reason' : 'Rejection Reason', rejection) : null,
         el('div', {class: 'actions'}, approve, reject, receipt), feedback);
+      return el('details', {class: 'payment-request admin-course-payment'},
+        el('summary', {class: 'manage-course-summary payment-course-summary'}, request.course),
+        requestDetails);
     }) : [el('p', {class: 'empty'}, 'No payment requests yet.')]));
   });
   paymentRefresh.addEventListener('click', loadPayments);
@@ -293,7 +303,7 @@ export function showAdmin(main, ctx, folderTarget = null) {
         }
         await loadEbooks(result?.warning || `E-book updated: ${values.title}.`);
       }, 'Saving e-book…');
-      const remove = button('Delete', 'danger secondary');
+      const remove = iconAction(button('', 'danger secondary'), 'trash', 'Delete e-book');
       remove.disabled = book.orders > 0;
       remove.title = book.orders ? 'Cannot delete an e-book with purchase requests.' : 'Delete e-book';
       remove.addEventListener('click', () => {
@@ -320,7 +330,7 @@ export function showAdmin(main, ctx, folderTarget = null) {
       }, 'Uploading demo…');
       if (book.demoPages) {
         const preview = el('a', {class: 'button secondary', href: `#ebook-demo/${idPart(book.id)}`}, 'Preview Demo');
-        const removeDemo = button('Remove Demo', 'danger secondary');
+        const removeDemo = iconAction(button('', 'danger secondary'), 'trash', 'Remove Demo');
         removeDemo.addEventListener('click', () => {
           if (!window.confirm(`Remove the demo for “${book.title}”? The paid book will not change.`)) return;
           run(removeDemo, demoFeedback, async () => {
@@ -332,7 +342,7 @@ export function showAdmin(main, ctx, folderTarget = null) {
       }
       const editDetails = el('details', {class: 'ebook-edit-editor'},
         el('summary', {}, 'Edit E-Book'), editForm);
-      return el('article', {class: 'manage-item'},
+      const bookDetails = el('div', {class: 'manage-item-body'},
         el('div', {class: 'manage-main'}, el('h3', {}, book.title),
           el('p', {class: 'muted'}, book.description),
           el('ul', {class: 'manage-details'}, [new Intl.NumberFormat('en-IN',
@@ -341,8 +351,13 @@ export function showAdmin(main, ctx, folderTarget = null) {
         el('div', {class: 'actions manage-actions'}, remove),
         editDetails,
         el('details', {class: 'ebook-demo-editor'},
-          el('summary', {}, book.demoPages ? `Demo PDF · ${book.demoPages} pages` : 'Add a Demo PDF'),
+          el('summary', {class: 'ebook-demo-summary'},
+            book.demoPages ? `Demo PDF · ${book.demoPages} pages` : icon('plus', 'line-icon'),
+            book.demoPages ? null : el('span', {}, 'Add a Demo PDF')),
           demoForm));
+      return el('details', {class: 'manage-item ebook-manager-item'},
+        el('summary', {class: 'manage-course-summary'}, book.title),
+        bookDetails);
     }) : [el('p', {class: 'empty'}, 'No e-books published yet.')]));
     if (message) ebooks.prepend(el('p', {class: 'status', role: 'status'}, message));
   });
@@ -448,7 +463,8 @@ export function showAdmin(main, ctx, folderTarget = null) {
     students.replaceChildren(...(rows.length ? rows.map(student => {
       const disabled = Boolean(student.disabled);
       const action = button(disabled ? 'Reactivate Account' : 'Disable Account',
-        disabled ? 'secondary' : 'danger secondary');
+        disabled ? 'secondary student-action student-reactivate' : 'danger secondary student-action student-disable');
+      action.prepend(icon(disabled ? 'account-reactivate' : 'account-disable', 'line-icon'));
       const feedback = status();
       action.addEventListener('click', () => run(action, feedback, async () => {
         await post(`/admin/students/${idPart(student.uid)}/status`, {json: {disabled: !disabled}});
@@ -456,8 +472,9 @@ export function showAdmin(main, ctx, folderTarget = null) {
         setTimeout(loadStudents, 350);
       }, 'Updating account…'));
       return el('article', {class: 'student-control'},
-        el('div', {}, el('strong', {}, student.name || 'Student'), el('p', {class: 'muted'}, student.phone),
-          el('code', {class: 'muted'}, student.uid)),
+        el('div', {class: 'student-control-details'}, el('strong', {}, student.name || 'Student'),
+          el('span', {class: disabled ? 'student-state is-disabled' : 'student-state'}, disabled ? 'Disabled' : 'Active'),
+          el('p', {class: 'muted'}, student.phone), el('code', {class: 'muted'}, student.uid)),
         action, feedback);
     }) : [el('p', {class: 'empty'}, 'No signed-in students yet.')]));
   });
@@ -497,9 +514,14 @@ export function showAdmin(main, ctx, folderTarget = null) {
   });
   manager = publishedManager({ctx, rupeeInput, toPaise, questionData, priceHint: PRICE_HINT, courses: () => courseList,
     onChange: type => { if (type === 'courses') refresh().catch(() => {}); }});
-  main.append(panel('Payment Approvals',
-    el('p', {class: 'muted'}, 'Verify each UPI transaction in the receiving account before unlocking a student course.'),
-    paymentRefresh, el('div', {class: 'payment-requests'}, payments)),
+  const paymentPanel = panel('Payment Approvals',
+    el('div', {class: 'admin-payment-toolbar'},
+      el('p', {class: 'muted payment-panel-description'},
+        'Verify each UPI transaction in the receiving account before unlocking a student course.'),
+      paymentRefresh),
+    payments);
+  paymentPanel.classList.add('admin-payment-panel');
+  main.append(paymentPanel,
   panel('Quick Start', el('p', {class: 'muted'},
     'Add or refresh three ready-made missions with mock tests and protected starter books.'), samples, sampleStatus),
   panel('Create a Course', createForm), content,
@@ -529,13 +551,13 @@ export function showAdmin(main, ctx, folderTarget = null) {
   const editor = el('textarea', {class: 'json', rows: '12', required: '', spellcheck: 'false', placeholder: example});
   const importFile = rule(el('input', {type: 'file', accept: '.pdf,.docx,.txt', required: ''}), (_, control) =>
     /\.(pdf|docx|txt)$/i.test(control.files[0]?.name || '') ? '' : 'Choose a PDF, DOCX, or TXT file.');
-  const importButton = button('Import Questions', 'secondary', 'submit');
+  const importButton = button('Import', 'secondary', 'submit');
   const importStatus = status();
   const importForm = el('form', {}, field('Question File', importFile, 'PDF, DOCX, or TXT. Importing replaces the JSON draft below.'),
     importButton, importStatus);
   importFile.addEventListener('change', () => {
     const file = importFile.files[0];
-    say(importStatus, file ? `${file.name} selected. Choose Import Questions to continue.` : '');
+    say(importStatus, file ? `${file.name} selected. Choose Import to continue.` : '');
   });
   bindForm(importForm, importButton, importStatus, async () => {
     const file = importFile.files[0];
@@ -558,7 +580,8 @@ export function showAdmin(main, ctx, folderTarget = null) {
   rule(editor, value => {
     try { questionData(value); return ''; } catch (error) { return error.message; }
   });
-  const publish = button('Publish Test', null, 'submit');
+  const publish = button('Publish Test', 'publish-test-submit', 'submit');
+  publish.prepend(icon('test', 'line-icon'));
   const testType = el('select', {required: ''},
     el('option', {value: 'mock'}, 'Mock Test — Unlimited Attempts'),
     el('option', {value: 'live'}, 'Live Test — Scheduled Window'));
@@ -589,7 +612,8 @@ export function showAdmin(main, ctx, folderTarget = null) {
   updateTestType();
   const jsonField = field('Questions (JSON)', editor,
     'Enter an array of objects with prompt, options, and answer. The first option is answer 0.');
-  const importSection = el('div', {}, el('h3', {}, 'Import Questions (optional)'), importForm);
+  const importSection = el('section', {class: 'publish-test-import'},
+    el('h3', {}, 'Import Questions (optional)'), importForm);
   const updateCreationMethod = () => {
     const isManual = creationMethod.value === 'manual';
     const isSectionWise = creationMethod.value === 'sectionwise';
@@ -608,14 +632,14 @@ export function showAdmin(main, ctx, folderTarget = null) {
   creationMethod.addEventListener('change', updateCreationMethod);
   updateCreationMethod();
   const testStatus = status();
-  const testFields = el('fieldset', {class: 'upload-fields'}, testField, field('Test Title', testTitle),
+  const testFields = el('fieldset', {class: 'upload-fields publish-test-fields'}, testField, field('Test Title', testTitle),
     testTypeField, liveFields,
     field('Duration (minutes)', durationMinutes, 'Used for every attempt.'),
     field('Marks Per Correct Answer', marksPerQuestion),
     field('Negative Mark Per Wrong Answer', negativeMark),
     el('label', {class: 'choice'}, questionPaperDownload, 'Enable Question Paper Download after first completed attempt'),
     sectionWiseSizeField, subjectManager.node, jsonField, manual.node);
-  const testForm = el('form', {}, testFields, publish, testStatus);
+  const testForm = el('form', {class: 'publish-test-form'}, testFields, publish, testStatus);
   bindForm(testForm, publish, testStatus, async () => {
     const sectionWise = creationMethod.value === 'sectionwise';
     const questions = questionData(creationMethod.value === 'manual' ? JSON.stringify(manual.values()) : editor.value);
@@ -645,11 +669,13 @@ export function showAdmin(main, ctx, folderTarget = null) {
       updateCreationMethod();
     }
   }, 'Publishing test…');
-  main.append(panel('Publish a Test',
+  const publishPanel = panel('Publish a Test',
     folderTarget ? el('p', {}, 'Publishing into the selected test folder. ',
       link('Return to Course Workspace', `#admin-course/${idPart(folderTarget.courseId)}`)) : null,
     field('Test Creation Method', creationMethod), importSection,
-    el('div', {class: 'section'}, el('h3', {}, 'Review, Edit, and Publish'), testForm)));
+    el('section', {class: 'publish-test-review'}, el('h3', {}, 'Review, Edit, and Publish'), testForm));
+  publishPanel.classList.add('publish-test-panel');
+  main.append(publishPanel);
 
   const [bookCourse, bookField] = courseField();
   const contentType = el('select', {required: ''},
@@ -773,7 +799,7 @@ export function showAdmin(main, ctx, folderTarget = null) {
     }
   }, 'Uploading…');
   setCourses(courseList);
-  const supportRefresh = button('Refresh Support Requests', 'secondary');
+  const supportRefresh = iconAction(button('', 'secondary icon-button refresh-action'), 'refresh', 'Refresh support requests');
   const loadSupport = () => loadInto(inbox, ctx, async () => {
     const messages = await get('/admin/support');
     inbox.replaceChildren(entries(messages, 'No support requests have arrived yet.', item =>
@@ -815,7 +841,8 @@ export function showAdmin(main, ctx, folderTarget = null) {
     });
     actions.append(search, filter);
     if (add) {
-      const plus = button('+', 'icon-button admin-add');
+      const plus = button('', 'icon-button admin-add');
+      plus.prepend(icon('plus', 'line-icon'));
       plus.setAttribute('aria-label', addLabel || `Add ${label.toLowerCase()}`);
       plus.title = addLabel || 'Add item';
       plus.addEventListener('click', () => {
@@ -833,33 +860,33 @@ export function showAdmin(main, ctx, folderTarget = null) {
     if (add) add.hidden = true;
   };
   const areas = [
-    {label: 'Courses', description: 'Course list, price, expiry, and access', icon: '▦',
+    {label: 'Courses', description: 'Course list, price, expiry, and access', icon: 'course-stack',
       open: () => openList({label: 'Courses', managerType: 'courses', list: manager.node, add: findPanel('Create a Course'), addLabel: 'Add Course'})},
-    {label: 'Mock Tests', description: 'Regular, timed, and live mock tests', icon: '✓',
+    {label: 'Mock Tests', description: 'Regular, timed, and live mock tests', icon: 'test',
       open: () => openList({label: 'Mock Tests', managerType: 'tests', list: manager.node, add: findPanel('Publish a Test'), addLabel: 'Add Mock Test'})},
-    {label: 'Study Materials', description: 'Chapter PDFs and uploaded videos', icon: '▤',
+    {label: 'Study Materials', description: 'Chapter PDFs and uploaded videos', icon: 'book-open',
       open: () => openList({label: 'Study Materials', managerType: 'books', list: manager.node, add: findPanel('Upload a Study Book or Video'), addLabel: 'Add Study Material'})},
-    {label: 'YouTube Videos', description: 'Published learning video library', icon: '▶',
+    {label: 'YouTube Videos', description: 'Published learning video library', icon: 'play',
       open: () => openList({label: 'YouTube Videos', managerType: 'videos', list: manager.node, add: findPanel('YouTube Videos'), addLabel: 'Add YouTube Video'})},
-    {label: 'Learning Resources', description: 'Current affairs, PYQs, and syllabus', icon: '☷',
+    {label: 'Learning Resources', description: 'Current affairs, PYQs, syllabus, and free tests', icon: 'resource-globe',
       open: () => openList({label: 'Learning Resources', managerType: 'resources', list: manager.node, add: findPanel('Publish Learning Resources'), addLabel: 'Add Resource'})},
-    {label: 'Course Payments', description: 'Approve or reject course payment requests', icon: '₹',
+    {label: 'Course Payments', description: 'Approve or reject course payment requests', icon: 'wallet',
       open: () => openList({label: 'Course Payments', list: findPanel('Payment Approvals')})},
-    {label: 'E-Books', description: 'Upload and price protected PDF books', icon: '▤',
+    {label: 'E-Books', description: 'Upload and price protected PDF books', icon: 'ebook',
       open: () => openList({label: 'E-Books', list: ebooks, add: findPanel('E-Books'), addLabel: 'Add E-Book'})},
-    {label: 'Physical Books', description: 'Inventory and published book list', icon: '▤',
+    {label: 'Physical Books', description: 'Inventory and published book list', icon: 'book-stack',
       open: () => openList({label: 'Physical Books', managerType: 'physicalBooks', list: manager.node, add: findPanel('Physical Books'), addLabel: 'Add Physical Book'})},
-    {label: 'Book Orders', description: 'Physical-book fulfillment and tracking', icon: '▣',
+    {label: 'Book Orders', description: 'Physical-book fulfillment and tracking', icon: 'package',
       open: () => openList({label: 'Book Orders', list: findPanel('Physical Book Orders')})},
-    {label: 'Timetable', description: 'Published student timetable', icon: '▦',
+    {label: 'Timetable', description: 'Published student timetable', icon: 'calendar-clock',
       open: () => openList({label: 'Timetable', managerType: 'schedules', list: manager.node, add: findPanel('Student Timetable'), addLabel: 'Add Timetable Session'})},
-    {label: 'Students', description: 'Accounts, activation, and disabling', icon: '●',
+    {label: 'Students', description: 'Accounts, activation, and disabling', icon: 'students',
       open: () => openList({label: 'Students', list: findPanel('Student Accounts')})},
-    {label: 'Support', description: 'Student help requests', icon: '?',
+    {label: 'Support', description: 'Student help requests', icon: 'support',
       open: () => openList({label: 'Support', list: findPanel('Support Inbox'), onOpen: loadSupport})},
-    {label: 'Payment Settings', description: 'UPI ID, QR image, and methods', icon: '⚙',
+    {label: 'Payment Settings', description: 'UPI ID, QR image, and methods', icon: 'payment-settings',
       open: () => openList({label: 'Payment Settings', list: findPanel('Payment Information')})},
-    {label: 'Social Links', description: 'YouTube, Instagram, and Telegram', icon: '↗',
+    {label: 'Social Links', description: 'YouTube, Instagram, and Telegram', icon: 'share',
       open: () => openList({label: 'Social Links', list: findPanel('Social Media Links')})},
   ];
   const showOverview = () => {
@@ -872,7 +899,7 @@ export function showAdmin(main, ctx, folderTarget = null) {
       el('h2', {}, label),
       el('div', {class: 'admin-area-group-grid'}, ...areas.filter(area => names.includes(area.label)).map(area => {
       const card = el('button', {type: 'button', class: 'admin-area-card'},
-        el('span', {class: 'admin-area-icon', 'aria-hidden': 'true'}, area.icon),
+        el('span', {class: 'admin-area-icon', 'aria-hidden': 'true'}, icon(area.icon, 'line-icon')),
         el('strong', {}, area.label), el('small', {}, area.description), el('span', {class: 'admin-area-arrow'}, '→'));
       card.addEventListener('click', area.open);
       return card;

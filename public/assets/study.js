@@ -1,6 +1,6 @@
 import {coverGallery} from './publishing-media.js';
 import {api} from './services.js';
-import {pdfReader} from './ebooks.js?v=continuous-reader-v2';
+import {pdfReader} from './ebooks.js?v=pdf-reader-save-icon-v7';
 import {saveContent, saveControl} from './saved-content.js';
 import {button, el, empty, heading, icon, idPart, link, loadInto, run, say, status} from './ui.js';
 
@@ -333,15 +333,22 @@ export function showVideo(main, ctx, courseId, videoId) {
 }
 
 export function showBook(main, ctx, courseId, bookId) {
-  const back = () => link('Back to Course', `#course/${idPart(courseId)}`, 'back');
-  const content = el('div');
+  const back = () => {
+    const control = link('Back to Course', `#course/${idPart(courseId)}`, 'back book-reader-back');
+    control.prepend(icon('back', 'line-icon'));
+    return control;
+  };
+  const content = el('div', {class: 'book-reader'});
   main.append(back(), ...heading('Study Book'), content);
   loadInto(content, ctx, async () => {
     const {books, downloadsEnabled} = await protectedGet(ctx, `/courses/${idPart(courseId)}`);
     const book = books.find(item => String(item.id) === bookId);
     if (!book) throw new Error('This book is not available in the course.');
     const gallery = coverGallery(book, 'reader-gallery');
-    main.replaceChildren(back(), ...heading(book.title), ...(gallery ? [gallery] : []), content);
+    const title = heading(book.title);
+    title[0].classList.add('book-reader-title');
+    title[0].prepend(icon('courses', 'line-icon'));
+    main.replaceChildren(back(), ...title, ...(gallery ? [gallery] : []), content);
     if (!Number.isSafeInteger(book.pages) || book.pages < 1) {
       content.replaceChildren(empty('This book has no pages to display.'));
       return;

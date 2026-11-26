@@ -16,6 +16,13 @@ export const heading = (title, description) => [
 
 export const link = (text, href, className) => el('a', {href, class: className}, text);
 export const button = (text, className, type = 'button') => el('button', {class: className, type}, text);
+export function iconAction(control, name, label) {
+  control.replaceChildren(icon(name, 'line-icon'));
+  control.classList.add('icon-action');
+  control.setAttribute('aria-label', label);
+  control.title = label;
+  return control;
+}
 export function icon(name, className) {
   const namespace = 'http://www.w3.org/2000/svg';
   const svg = document.createElementNS(namespace, 'svg');
@@ -23,7 +30,7 @@ export function icon(name, className) {
   svg.setAttribute('aria-hidden', 'true');
   svg.setAttribute('focusable', 'false');
   const use = document.createElementNS(namespace, 'use');
-  use.setAttribute('href', `/assets/icons.svg#${name}`);
+  use.setAttribute('href', `/assets/icons.svg?v=course-material-file-icon-v1#${name}`);
   svg.append(use);
   return svg;
 }
@@ -177,7 +184,7 @@ export function formatDate(value, withTime = true) {
 // A delete button that asks for confirmation inline before running `action`.
 export function confirmDelete(feedback, action, {label = 'Delete', question = 'Delete this item?', busy = 'Deleting…'} = {}) {
   const wrapper = el('div', {class: 'confirm-delete'});
-  const start = button(label, 'danger secondary');
+  const start = iconAction(button('', 'danger secondary'), 'trash', label);
   const yes = button('Yes, Delete', 'danger');
   const no = button('Cancel', 'secondary');
   const prompt = el('div', {class: 'confirm-prompt', role: 'alert'}, el('span', {}, question), yes, no);

@@ -1,9 +1,12 @@
-import {button, el, field, textValue} from './ui.js';
+import {button, el, field, icon, textValue} from './ui.js';
 
 export function manualQuestions() {
   const list = el('div', {class: 'manual-question-list'});
   const count = el('p', {class: 'muted', role: 'status'});
-  const add = button('Add Question', 'secondary');
+  const add = button('', 'secondary manual-add-question');
+  add.setAttribute('aria-label', 'Add question');
+  add.title = 'Add question';
+  add.prepend(icon('plus', 'line-icon'));
   const node = el('fieldset', {class: 'manual-questions upload-fields', hidden: '', disabled: ''},
     el('legend', {}, 'Manual Questions'),
     el('p', {class: 'muted'}, 'Add 1–200 questions with 2–6 options each. Select one correct answer per question.'),
@@ -13,6 +16,7 @@ export function manualQuestions() {
     questions.forEach((question, index) => {
       question.legend.textContent = `Question ${index + 1}`;
       question.remove.setAttribute('aria-label', `Remove question ${index + 1}`);
+      question.remove.title = `Remove question ${index + 1}`;
       question.remove.disabled = questions.length === 1;
     });
     add.disabled = questions.length >= 200;
@@ -23,8 +27,13 @@ export function manualQuestions() {
     const section = el('input', {maxlength: '100', placeholder: 'General'});
     const correct = el('select', {required: ''});
     const optionsArea = el('div', {class: 'manual-options'});
-    const addOption = button('Add Answer Option', 'secondary');
-    const remove = button('Remove Question', 'secondary');
+    const addOption = button('', 'secondary manual-add-option');
+    addOption.setAttribute('aria-label', 'Add answer option');
+    addOption.title = 'Add answer option';
+    addOption.prepend(icon('plus', 'line-icon'));
+    const remove = button('', 'secondary manual-remove-question');
+    remove.title = 'Remove question';
+    remove.prepend(icon('trash', 'line-icon'));
     const legend = el('legend');
     const questionNode = el('fieldset', {class: 'manual-question'},
       legend, field('Question Text', prompt), field('Section (optional)', section),
@@ -40,6 +49,7 @@ export function manualQuestions() {
         option.field.querySelector('label').textContent = label;
         option.input.dataset.label = label;
         option.remove.setAttribute('aria-label', `Remove ${label.toLowerCase()}`);
+        option.remove.title = `Remove ${label.toLowerCase()}`;
         option.remove.disabled = options.length <= 2;
       });
       correct.replaceChildren(el('option', {value: ''}, 'Select the correct answer'),
@@ -49,7 +59,10 @@ export function manualQuestions() {
     };
     const appendOption = () => {
       const input = el('input', {required: '', maxlength: '500'});
-      const remove = button('Remove', 'secondary');
+      const remove = button('', 'secondary manual-remove-option');
+      remove.setAttribute('aria-label', 'Remove answer option');
+      remove.title = 'Remove answer option';
+      remove.prepend(icon('trash', 'line-icon'));
       const wrapper = field('Answer Option', input);
       const row = el('div', {class: 'manual-option'}, wrapper, remove);
       const option = {input, remove, field: wrapper};
