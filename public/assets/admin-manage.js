@@ -32,9 +32,10 @@ function types({ctx, rupeeInput, toPaise, questionData, priceHint, courses}) {
     const title = input(item.title, 120);
     const subject = input(item.subject, 100);
     const chapter = input(item.chapter, 120);
+    chapter.removeAttribute('required');
     return {
-      fields: [field('Title', title), field('Subject', subject), field('Chapter', chapter)],
-      values: () => ({title: textValue(title, 'Title'), subject: textValue(subject, 'Subject'), chapter: textValue(chapter, 'Chapter')}),
+      fields: [field('Title', title), field('Subject', subject), field('Chapter (optional)', chapter)],
+      values: () => ({title: textValue(title, 'Title'), subject: textValue(subject, 'Subject'), chapter: chapter.value.trim()}),
     };
   };
   return {
@@ -57,11 +58,7 @@ function types({ctx, rupeeInput, toPaise, questionData, priceHint, courses}) {
             price: toPaise(amount), downloadsEnabled: downloads.checked}),
         };
       },
-      remove: item => item.enrollments ?
-        {blocked: 'Students have purchased or requested this course, so it can be edited but not deleted.'} :
-        item.linkedVideos || item.tests || item.materials ?
-          {blocked: 'Remove or unlink this course’s published content before deleting it.'} :
-          {question: 'Delete this course?'},
+      remove: () => ({question: 'Remove this course from students? Access will end, but its content, enrolments and payment records will be retained.'}),
     },
     tests: {
       label: 'Tests', noun: 'test', course: true, empty: 'No tests published yet.',
@@ -77,10 +74,11 @@ function types({ctx, rupeeInput, toPaise, questionData, priceHint, courses}) {
       edit(item) {
         const title = input(item.title, 120);
         const course = el('select', {required: ''},
+          ...(item.course === 'public-free-tests' ? [el('option', {value: 'public-free-tests'}, 'Free Test Series')] : []),
           ...(item.resourceId ? [el('option', {value: 'public-current-affairs'}, 'Current Affairs')] : []),
           courses().map(entry => el('option', {value: entry.id}, entry.title)));
         course.value = item.course || '';
-        course.disabled = Boolean(item.resourceId);
+        course.disabled = Boolean(item.resourceId) || item.course === 'public-free-tests';
         const testType = el('select', {required: ''},
           el('option', {value: 'mock'}, 'Mock Test — Unlimited Attempts'),
           el('option', {value: 'live'}, 'Live Test — Scheduled Window'));
@@ -118,7 +116,7 @@ function types({ctx, rupeeInput, toPaise, questionData, priceHint, courses}) {
         const subjectManager = subjectQuestionManager(questions, (file, format) =>
           api(`/admin/import?format=${format}`, {ctx, auth: true, method: 'POST', binary: file}));
         return {
-          fields: [field('Course', course), field('Test Title', title),
+          fields: [item.course === 'public-free-tests' ? null : field('Course', course), field('Test Title', title),
             field('Test Type', testType,
               'Mock tests allow unlimited attempts. Live tests use a scheduled window and attempt limit.'),
             liveFields,
@@ -139,12 +137,11 @@ function types({ctx, rupeeInput, toPaise, questionData, priceHint, courses}) {
             questionPaperDownload: download.checked}),
         };
       },
-      remove: item => item.attempts ? {blocked: 'This test has student results and cannot be deleted.'} :
-        {question: 'Delete this test?'},
+      remove: () => ({question: 'Permanently delete this test and all student attempts, results and active sessions? This cannot be undone.'}),
     },
     books: {
       label: 'Study Books', noun: 'study book', course: true, empty: 'No PDF study books uploaded yet.',
-      details: item => [`${item.subject} › ${item.chapter}`, plural(item.pages, 'page')],
+      details: item => [item.chapter ? `${item.subject} › ${item.chapter}` : item.subject, plural(item.pages, 'page')],
       edit(item) {
         const fields = chapterFields(item);
         const pdf = rule(el('input', {type: 'file', accept: '.pdf,application/pdf'}), (_, control) => {
@@ -160,7 +157,7 @@ function types({ctx, rupeeInput, toPaise, questionData, priceHint, courses}) {
     },
     chapterVideos: {
       label: 'Chapter Videos', noun: 'chapter video', course: true, empty: 'No chapter videos uploaded yet.',
-      details: item => [`${item.subject} › ${item.chapter}`, megabytes(item.size)],
+      details: item => [item.chapter ? `${item.subject} › ${item.chapter}` : item.subject, megabytes(item.size)],
       edit(item) {
         const fields = chapterFields(item);
         const video = rule(el('input', {type: 'file', accept: videoAccept}), (_, control) => {
@@ -312,6 +309,7 @@ function types({ctx, rupeeInput, toPaise, questionData, priceHint, courses}) {
 
 export function publishedManager({ctx, onChange, ...helpers}) {
   const config = types({ctx, ...helpers});
+  config.freeTests = {...config.tests, label: 'Free Test Series', course: false, empty: 'No free tests created yet.'};
   const keys = Object.keys(config);
   let data = Object.fromEntries(keys.map(key => [key, []]));
   let active = 'courses';
@@ -386,17 +384,26 @@ export function publishedManager({ctx, onChange, ...helpers}) {
     const removal = type.remove(item);
     const remove = removal.blocked ? el('p', {class: 'manage-note muted'}, removal.blocked) :
       confirmDelete(rowFeedback, async () => {
-        const result = await api(`/admin/published/${key}/${idPart(item.id)}`, {ctx, auth: true, method: 'DELETE'});
-        say(feedback, result?.warning || (result?.archived ? `“${item.title}” is now hidden from the store.` : `“${item.title}” was deleted.`), Boolean(result?.warning));
+        const result = await api(`/admin/published/${key === 'freeTests' ? 'tests' : key}/${idPart(item.id)}`, {ctx, auth: true, method: 'DELETE'});
+        say(feedback, result?.warning || (result?.archived ? `“${item.title}” is now hidden from students.` : `“${item.title}” was deleted.`), Boolean(result?.warning));
         if (openEditor === item.id) openEditor = null;
         await reload();
         onChange?.(key);
       }, {label: removal.label || 'Delete', question: removal.question});
-    const isTest = active === 'tests';
+    const isTest = active === 'tests' || active === 'freeTests';
     const openCourse = active === 'courses' ?
       link('Open Course Content', `#admin-course/${idPart(item.id)}`, 'button secondary') : null;
     const manageActions = el('div', {class: 'actions manage-actions'}, openCourse, edit,
       isTest && removal.blocked ? null : remove);
+    if (key === 'freeTests') {
+      const publish = button(item.published ? 'Unpublish' : 'Publish', 'secondary');
+      publish.addEventListener('click', () => run(publish, rowFeedback, async () => {
+        await api(`/admin/free-tests/${idPart(item.id)}/publication`, {ctx, auth: true, method: 'PUT',
+          json: {published: !item.published}});
+        await reload();
+      }, 'Updating publication…'));
+      manageActions.append(publish);
+    }
     const manageBody = el('div', {class: 'manage-item-body'},
       el('div', {class: 'manage-main'},
         el('div', {class: 'manage-title'}, el('h3', {}, item.title),
@@ -404,7 +411,7 @@ export function publishedManager({ctx, onChange, ...helpers}) {
           isTest ? el('span', {class: `badge test-mode-badge${item.live ? ' live' : ''}`},
             icon('test', 'line-icon'), item.live ? 'Live Test' : 'Mock Test') : null),
         el('p', {class: 'manage-date'}, isTest ? icon('calendar', 'line-icon') : null,
-          el('span', {class: 'manage-date-label'}, 'Published'), ' ',
+          el('span', {class: 'manage-date-label'}, key === 'freeTests' && !item.published ? 'Unpublished' : 'Published'), ' ',
           el('time', {datetime: (type.date || (row => row.createdAt))(item) || ''}, formatDate((type.date || (row => row.createdAt))(item)))),
         el('ul', {class: 'manage-details'}, type.details(item).map((detail, index) => el('li', {},
           isTest ? icon(index === 0 ? 'test' : 'profile', 'line-icon') : null, detail))),
@@ -426,7 +433,7 @@ export function publishedManager({ctx, onChange, ...helpers}) {
         expandedCard = article.open ? cardKey : expandedCard === cardKey ? null : expandedCard;
       });
     }
-    if (active === 'tests') {
+    if (isTest) {
       const results = iconAction(button('', 'secondary'), 'progress', 'View Results');
       const pdf = iconAction(button('', 'secondary'), 'download', 'Export PDF');
       results.addEventListener('click', () => run(results, rowFeedback, async () => {
@@ -497,7 +504,7 @@ export function publishedManager({ctx, onChange, ...helpers}) {
           file: replacement.file.files[0],
           post: (path, body) => api(path, {ctx, auth: true, method: 'POST', ...body})});
       } else {
-        result = await api(`/admin/published/${key}/${idPart(item.id)}`, {ctx, auth: true, method: 'PUT',
+        result = await api(`/admin/published/${key === 'freeTests' ? 'tests' : key}/${idPart(item.id)}`, {ctx, auth: true, method: 'PUT',
           json: {...patch, images, expiresOn: expiry?.value || undefined}});
       }
       openEditor = null;

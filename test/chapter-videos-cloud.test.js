@@ -57,7 +57,7 @@ test('Firebase chapter uploads validate and retain their course folder', async (
   });
   const bytes = Buffer.concat([Buffer.from([0, 0, 0, 24]), Buffer.from('ftypisom')]);
   const req = {params: {id: 'c'}, user: {uid: 'admin'},
-    body: {title: 'Video', subject: 'Maths', chapter: 'One', type: 'video/mp4', size: bytes.length, folderId: 'content'}};
+    body: {title: 'Video', subject: 'Maths', chapter: '', type: 'video/mp4', size: bytes.length, folderId: 'content'}};
   const upload = handlers.get('POST /admin/courses/:id/videos/upload');
   for (const folderId of ['tests', 'other', 'missing']) {
     await assert.rejects(upload({...req, body: {...req.body, folderId}}, response()), {status: 422});
@@ -77,11 +77,12 @@ test('Firebase chapter uploads validate and retain their course folder', async (
   await publish({...req, params: {id: 'c', video: id}}, published);
   assert.equal(published.code, 201);
   assert.equal(documents.get(`chapterVideos/${id}`).folderId, 'content');
+  assert.equal(documents.get(`chapterVideos/${id}`).chapter, '');
   assert.equal(documents.has(`chapterVideoUploads/${id}`), false);
 
   const replacementBytes = Buffer.concat([Buffer.from([0, 0, 0, 24]), Buffer.from('ftypisom'), Buffer.alloc(12, 2)]);
   const replacementDraft = response();
-  await upload({...req, body: {...req.body, title: 'Updated Video', size: replacementBytes.length, replaceId: id}}, replacementDraft);
+  await upload({...req, body: {...req.body, title: 'Updated Video', chapter: 'One', size: replacementBytes.length, replaceId: id}}, replacementDraft);
   const replacementId = replacementDraft.body.id;
   objects.set(`chapter-videos/${replacementId}`, {bytes: replacementBytes, metadata: {
     size: String(replacementBytes.length), contentType: 'video/mp4',

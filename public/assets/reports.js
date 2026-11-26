@@ -4,7 +4,7 @@ import {saveControl} from './saved-content.js';
 import {importQuestionReview, manualQuestions} from './manual-questions.js?v=bilingual-import-v1';
 import {subjectQuestionManager} from './question-sections.js?v=subject-import-label-v1';
 import {questionData} from './question-data.js';
-import {bindForm, button, el, entries, field, heading, icon, iconAction, idPart, link, loadInto, panel, rule, run, say, status, textValue} from './ui.js?v=refresh-icons-v3';
+import {bindForm, button, el, entries, field, firstAttemptScore, heading, icon, iconAction, idPart, link, loadInto, panel, rule, run, say, status, textValue} from './ui.js?v=refresh-icons-v3';
 
 export const contentKinds = {
   'current-affairs': {title: 'Current Affairs', icon: '◫', description: 'Explore PDF, video, and test updates by year, month, and date.'},
@@ -167,8 +167,9 @@ export function showLearningContent(main, ctx, kind, action) {
             el('small', {class: 'muted'}, item.downloadsEnabled ? 'Downloads allowed' : 'View in app'),
             link(item.media.pdf && item.media.video ? 'View PDF & Video' : item.media.pdf ? 'View PDF' : 'Watch Video',
               `#resource/${idPart(item.id)}`, 'button secondary')) : null,
-          item.test ? link(item.test.live ? 'Take Live Test' : 'Take Mock Test',
-            `#test/current-affairs/${idPart(item.test.id)}`, 'button') : null,
+          item.test ? el('div', {class: 'actions'}, firstAttemptScore(item.test.firstAttempt),
+            link(item.test.live ? 'Take Live Test' : 'Take Mock Test',
+              `#test/current-affairs/${idPart(item.test.id)}`, 'button')) : null,
           item.body ? el('details', {}, el('summary', {}, 'Read Update'), el('div', {class: 'resource-body'}, item.body)) : null);
       };
       const showYears = () => {

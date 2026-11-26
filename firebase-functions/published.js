@@ -1,5 +1,6 @@
 import { fail, validateQuestions } from './documents.js';
 import { expiryInput } from './publishing-media.js';
+import { chapterInput } from './workspace.js';
 
 function istIso(value, label) {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/.test(value)) {
@@ -18,7 +19,7 @@ export function registerPublishedRoutes(api, { db, bucket, value, text, byNewest
   const chapterFields = body => ({
     title: text(body.title, 'Title', 120),
     subject: text(body.subject, 'Subject', 100),
-    chapter: text(body.chapter, 'Chapter', 120),
+    chapter: chapterInput(body.chapter),
   });
   const editors = {
     courses: body => {
@@ -113,15 +114,18 @@ export function registerPublishedRoutes(api, { db, bucket, value, text, byNewest
     const tests = tally(data.tests, 'course');
     const materials = tally([...data.books, ...data.chapterVideos], 'course');
     const linkedVideos = tally(data.videos, 'course');
-    const publicCourses = data.courses.filter(item => !item.publicLearning);
+    const publicCourses = data.courses.filter(item => !item.publicLearning && !item.archived);
     const courseNames = new Map(data.courses.map(item => [item.id, item.title]));
     const withCourse = item => ({ ...item,
       courseTitle: item.resourceId ? 'Current Affairs' : courseNames.get(item.course) || '' });
-    const withChapter = item => withCourse({ ...item, subject: item.subject || 'General', chapter: item.chapter || 'Chapter 1' });
+    const withChapter = item => withCourse({ ...item, subject: item.subject || 'General', chapter: item.chapter ?? 'Chapter 1' });
     res.json({
       courses: publicCourses.map(item => ({ ...item, enrollments: enrollments(item.id), tests: tests(item.id),
         materials: materials(item.id), linkedVideos: linkedVideos(item.id) })),
-      tests: data.tests.map(item => withCourse({ ...item, attempts: results(item.id) })),
+      tests: data.tests.filter(item => item.course !== 'public-free-tests')
+        .map(item => withCourse({ ...item, attempts: results(item.id) })),
+      freeTests: data.tests.filter(item => item.course === 'public-free-tests')
+        .map(item => withCourse({ ...item, attempts: results(item.id) })),
       books: data.books.map(withChapter),
       chapterVideos: data.chapterVideos.map(withChapter),
       videos: data.videos.map(withCourse),
@@ -148,6 +152,10 @@ export function registerPublishedRoutes(api, { db, bucket, value, text, byNewest
     await db.runTransaction(async tx => {
       const existing = value(await tx.get(ref));
       if (!existing) fail(404, 'Published item not found.');
+      if (type === 'tests' && patch.course &&
+          (existing.course === 'public-free-tests') !== (patch.course === 'public-free-tests')) {
+        fail(422, 'Free tests cannot be moved to or from a course.');
+      }
       if (type === 'resources' && existing.kind === 'free-tests') fail(404, 'Published item not found.');
       if (type === 'resources') Object.assign(patch, editors.resources(req.body ?? {}, existing));
       if (type === 'tests' && patch.live === false) {
@@ -185,6 +193,26 @@ export function registerPublishedRoutes(api, { db, bucket, value, text, byNewest
     const type = managed(req.params.type);
     const { id } = req.params;
     const ref = collection(type).doc(id);
+    if (type === 'tests') {
+      await db.runTransaction(async tx => {
+        const existing = value(await tx.get(ref));
+        if (!existing) fail(404, 'Published item not found.');
+        tx.update(ref, { deleting: true });
+      });
+      for (const name of ['attempts', 'examSessions']) {
+        let snapshot;
+        do {
+          snapshot = await at(name, 'test', id).limit(400).get();
+          if (!snapshot.empty) {
+            const batch = db.batch();
+            for (const doc of snapshot.docs) batch.delete(doc.ref);
+            await batch.commit();
+          }
+        } while (!snapshot.empty);
+      }
+      await ref.delete();
+      return res.json({ deleted: true, archived: false });
+    }
     let object = '';
     const archived = await db.runTransaction(async tx => {
       const existing = value(await tx.get(ref));
@@ -197,14 +225,9 @@ export function registerPublishedRoutes(api, { db, bucket, value, text, byNewest
         fail(409, 'Remove the linked test before deleting this Current Affairs resource.');
       }
       if (type === 'courses') {
-        const dependents = await Promise.all(['orders', 'tests', 'books', 'chapterVideos', 'videos'].map(name => has(name, 'course')));
-        if (dependents[0]) fail(409, 'This course has purchase requests or enrolments and cannot be deleted.');
-        if (dependents.some(Boolean)) fail(409, 'Remove or unlink this course’s published content before deleting it.');
-        const folders = await tx.get(at('courseFolders', 'course', id));
-        for (const folder of folders.docs) tx.delete(folder.ref);
-      }
-      if (type === 'tests' && await has('attempts', 'test')) {
-        fail(409, 'This test has student results and cannot be deleted.');
+        if (existing.publicLearning) fail(404, 'Published item not found.');
+        tx.update(ref, { archived: true });
+        return true;
       }
       if (type === 'physicalBooks' && await has('physicalOrders', 'book')) {
         tx.update(ref, { active: false });

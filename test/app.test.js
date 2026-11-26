@@ -35,6 +35,90 @@ function fixturePdf(mediaBox = '0 0 612 792') {
   return Buffer.from(`${pdf}xref\n0 6\n0000000000 65535 f \n${offsets.join('')}trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${pdf.length}\n%%EOF\n`);
 }
 
+test('free study material enforces admin uploads and download permission', async t => {
+  const db = openDatabase(':memory:');
+  const users = new Map([
+    ['student', {uid: 'student', phone: '+919000000001'}],
+    ['admin', {uid: 'admin', phone: '+919000000002'}],
+  ]);
+  const server = createApp({db, verifyToken: async token => users.get(token), adminUids: ['admin']})
+    .listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  t.after(() => new Promise(resolve => server.close(() => { db.close(); resolve(); })));
+  const base = `http://127.0.0.1:${server.address().port}/api`;
+  const request = (path, user, method = 'GET', body, type = 'application/json') => fetch(base + path, {
+    method, headers: {...(user ? {Authorization: `Bearer ${user}`} : {}),
+      ...(body === undefined ? {} : {'Content-Type': type})},
+    body: Buffer.isBuffer(body) ? body : body === undefined ? undefined : JSON.stringify(body),
+  });
+  const pdf = fixturePdf();
+  const create = '/admin/free-materials?title=Free%20PDF&downloadsEnabled=false';
+  assert.equal((await request(create, 'student', 'POST', pdf, 'application/octet-stream')).status, 403);
+  assert.equal((await request(create, 'admin', 'POST', Buffer.from('not pdf'), 'application/octet-stream')).status, 422);
+  const response = await request(create, 'admin', 'POST', pdf, 'application/octet-stream');
+  assert.equal(response.status, 201);
+  const {id} = await response.json();
+  assert.equal((await request('/free-materials', null)).status, 401);
+  assert.equal((await request(`/free-materials/${id}/pages/1`, 'student')).headers.get('content-type'), 'image/png');
+  assert.equal((await request(`/free-materials/${id}/download`, 'student')).status, 403);
+  assert.equal((await request(`/admin/free-materials/${id}`, 'admin', 'PUT',
+    {title: 'Updated PDF', downloadsEnabled: true})).status, 204);
+  const download = await request(`/free-materials/${id}/download`, 'student');
+  assert.equal(download.status, 200);
+  assert.deepEqual(Buffer.from(await download.arrayBuffer()), pdf);
+  assert.equal((await (await request('/free-materials', 'student')).json())[0].title, 'Updated PDF');
+  assert.equal((await request(`/admin/free-materials/${id}`, 'admin', 'DELETE')).status, 204);
+  assert.equal((await request(`/free-materials/${id}/download`, 'student')).status, 404);
+});
+
+test('free tests stay separate from paid courses and enforce publication on every attempt', async t => {
+  const db = openDatabase(':memory:');
+  const users = new Map([
+    ['student', {uid: 'student', phone: '+919000000001'}],
+    ['admin', {uid: 'admin', phone: '+919000000002'}],
+  ]);
+  const server = createApp({db, verifyToken: async token => users.get(token), adminUids: ['admin']})
+    .listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  t.after(() => new Promise(resolve => server.close(() => { db.close(); resolve(); })));
+  const base = `http://127.0.0.1:${server.address().port}/api`;
+  const request = (path, user, method = 'GET', body) => fetch(base + path, {method,
+    headers: {...(user ? {Authorization: `Bearer ${user}`} : {}),
+      ...(body === undefined ? {} : {'Content-Type': 'application/json'})},
+    body: body === undefined ? undefined : JSON.stringify(body)});
+  const input = {title: 'Free practice', questions, durationMinutes: 60, marksPerQuestion: 1, negativeMark: 0};
+  assert.equal((await request('/admin/free-tests', 'student', 'POST', input)).status, 403);
+  const created = await request('/admin/free-tests', 'admin', 'POST', input);
+  assert.equal(created.status, 201);
+  const {id} = await created.json();
+  assert.deepEqual(await (await request('/courses')).json(), []);
+  assert.equal((await (await request('/free-tests', 'student')).json())[0].id, id);
+  assert.equal((await request(`/tests/${id}/start`, 'student', 'POST')).status, 201);
+  const submitted = await request(`/tests/${id}/submit`, 'student', 'POST', {answers: [1]});
+  assert.equal((await submitted.json()).score, 1);
+  assert.equal((await (await request('/progress', 'student')).json()).attempts[0].test, id);
+  assert.equal((await request(`/admin/free-tests/${id}/publication`, 'admin', 'PUT', {published: false})).status, 204);
+  assert.deepEqual(await (await request('/free-tests', 'student')).json(), []);
+  assert.equal((await request(`/tests/${id}`, 'student')).status, 404);
+  assert.equal((await request(`/tests/${id}/start`, 'student', 'POST')).status, 404);
+  assert.equal((await request(`/tests/${id}/submit`, 'student', 'POST', {answers: [1]})).status, 404);
+  assert.equal((await request(`/admin/free-tests/${id}/publication`, 'admin', 'PUT', {published: true})).status, 204);
+  assert.equal((await request(`/tests/${id}`, 'student')).status, 200);
+  const ist = timestamp => new Date(timestamp + 330 * 60_000).toISOString().slice(0, 16);
+  const live = await request('/admin/free-tests', 'admin', 'POST', {...input, title: 'Free live', live: true,
+    startsAt: ist(Date.now() - 60_000), expiresAt: ist(Date.now() + 600_000), attemptsLimit: 1});
+  assert.equal(live.status, 201);
+  const liveId = (await live.json()).id;
+  assert.equal((await request(`/tests/${liveId}/start`, 'student', 'POST')).status, 201);
+  assert.equal((await request(`/tests/${liveId}/submit`, 'student', 'POST', {answers: [1]})).status, 200);
+  const liveCard = (await (await request('/free-tests', 'student')).json()).find(item => item.id === liveId);
+  assert.equal(liveCard.attempts, 1);
+  assert.equal(liveCard.attemptsLimit, 1);
+  assert.equal((await request(`/tests/${liveId}/start`, 'student', 'POST')).status, 409);
+  assert.equal((await request(`/admin/published/tests/${id}`, 'admin', 'DELETE')).status, 200);
+  assert.equal((await request(`/tests/${id}`, 'student')).status, 404);
+});
+
 test('imports formatted text and flags questions without a valid answer for review', async () => {
   assert.deepEqual(await importQuestions(Buffer.from(source), 'txt'), importedQuestions);
   assert.equal((await importQuestions(Buffer.from(source.replace('1.', '23.')), 'txt'))[0].questionNumber, '23');
@@ -628,12 +712,26 @@ test('admins list published content with dates, edit it, and delete it safely', 
   assert.equal(mockTest.questionPaperDownload, 1);
   assert.equal((await request('/admin/published/unknown/x', 'admin', 'DELETE')).status, 404);
 
-  db.prepare('INSERT INTO orders (id, uid, course, amount) VALUES (?, ?, ?, ?)').run('order-1', 'admin', id, 50000);
-  assert.equal((await request(`/admin/published/courses/${id}`, 'admin', 'DELETE')).status, 409);
-  db.prepare('DELETE FROM orders').run();
+  db.prepare(`INSERT INTO attempts (id, uid, course, test, title, score, total, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run('attempt-1', 'student', id, testId, 'Mock 1', 1, 1, new Date().toISOString());
+  db.prepare('INSERT INTO exam_sessions (id, uid, test, started_at) VALUES (?, ?, ?, ?)')
+    .run('session-1', 'student', testId, new Date().toISOString());
+  assert.equal((await request(`/admin/published/tests/${testId}`, 'student', 'DELETE')).status, 403);
+  assert.equal((await request(`/admin/published/tests/${testId}`, 'admin', 'DELETE')).status, 200);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM attempts WHERE test=?').get(testId).n, 0);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM exam_sessions WHERE test=?').get(testId).n, 0);
+  assert.equal((await request(`/tests/${testId}`, 'student')).status, 404);
+
+  db.prepare(`INSERT INTO orders (id, uid, course, amount, payment, payment_status)
+    VALUES (?, ?, ?, ?, ?, ?)`).run('order-1', 'student', id, 50000, 'payment-1', 'approved');
+  assert.equal((await request(`/courses/${id}`, 'student')).status, 200);
   assert.equal((await request(`/admin/published/courses/${id}`, 'admin', 'DELETE')).status, 200);
   const after = (await request('/admin/published', 'admin')).body;
   assert.deepEqual([after.courses.length, after.tests.length], [0, 0]);
+  assert.ok(db.prepare('SELECT id FROM orders WHERE id=?').get('order-1'));
+  assert.equal((await request(`/courses/${id}`, 'student')).status, 404);
+  assert.equal((await request(`/courses/${id}/payment`, 'student')).status, 404);
+  assert.ok(!(await request('/courses', 'student')).body.some(item => item.id === id));
 });
 
 test('standalone e-books unlock after admin payment approval and cannot be exported', async t => {
@@ -692,6 +790,12 @@ test('standalone e-books unlock after admin payment approval and cannot be expor
   const rejected = (await (await request('/ebook-orders', 'buyer')).json())[0];
   assert.equal(rejected.status, 'rejected');
   assert.equal(rejected.reviewNote, 'Transaction could not be verified');
+  const removed = await request(`/admin/ebooks/${id}`, 'admin', 'DELETE');
+  assert.deepEqual(await removed.json(), {deleted: false, archived: true});
+  assert.equal((await (await request('/ebooks')).json()).some(book => book.id === id), false);
+  assert.equal((await request(`/ebooks/${id}/pages/1`, 'buyer')).status, 404);
+  assert.equal((await request(`/ebooks/${id}/payment`, 'buyer')).status, 404);
+  assert.ok((await (await request('/admin/payments', 'admin')).json()).some(order => order.id === orderId));
 });
 
 test('e-book demos are separate public page images managed only by admins', async t => {
@@ -854,10 +958,13 @@ test('live leaderboard is private, rank ordered, and locked until expiry', async
   1, '2026-01-01T00:00:00.000Z', '2099-01-01T00:00:00.000Z', 60);
   db.prepare("INSERT INTO orders (id,uid,course,amount,payment,payment_status) VALUES (?,?,?,?,?,'approved')").run('o1', 'one', 'c', 100, 'paid-one');
   db.prepare("INSERT INTO orders (id,uid,course,amount,payment,payment_status) VALUES (?,?,?,?,?,'approved')").run('o2', 'two', 'c', 100, 'paid-two');
-  for (const [id, uid, score, elapsed] of [
-    ['a1', 'one', 4, 60], ['a2', 'two', 2, 40],
+  for (const [id, uid, score, elapsed, created] of [
+    ['a1', 'one', 4, 60, '2026-01-02T00:00:00.000Z'],
+    ['a2', 'two', 2, 40, '2026-01-02T00:00:00.000Z'],
+    ['a3', 'two', 5, 20, '2026-01-02T01:00:00.000Z'],
+    ['a4', 'one', 6, 10, '2026-01-04T00:00:00.000Z'],
   ]) db.prepare(`INSERT INTO attempts (id,uid,course,test,title,score,total,created_at,max_marks,elapsed_seconds)
-    VALUES (?,?,?,?,?,?,?,?,?,?)`).run(id, uid, 'c', 't', 'Final Live', score, 1, '2026-01-02T00:00:00.000Z', 4, elapsed);
+    VALUES (?,?,?,?,?,?,?,?,?,?)`).run(id, uid, 'c', 't', 'Final Live', score, 1, created, 6, elapsed);
   let response = await fetch(`${base}/tests/t/leaderboard`, {headers:{Authorization:'Bearer one'}});
   assert.equal(response.status, 423);
   db.prepare('UPDATE tests SET expires_at=? WHERE id=?').run('2026-01-03T00:00:00.000Z', 't');
@@ -867,7 +974,24 @@ test('live leaderboard is private, rank ordered, and locked until expiry', async
   assert.equal(board.rows[0].rank, 1);
   assert.equal(board.rows[0].isCurrentUser, true);
   assert.equal(board.rows[1].name, 'B.');
+  assert.equal(board.rows[1].score, 2);
+  assert.equal(board.rows[1].attempts, 2);
   assert.equal(JSON.stringify(board).includes('+919000000062'), false);
+  const details = await (await fetch(`${base}/courses/c`, {headers:{Authorization:'Bearer two'}})).json();
+  assert.deepEqual(details.tests[0].firstAttempt, {score: 2, maxMarks: 6});
+  const progress = await (await fetch(`${base}/progress`, {headers:{Authorization:'Bearer two'}})).json();
+  assert.equal(progress.attempts.length, 2);
+  db.prepare('INSERT INTO courses (id,title,description,price) VALUES (?,?,?,?)')
+    .run('public-current-affairs', 'Current Affairs', '', 0);
+  db.prepare(`INSERT INTO resources (id,kind,title,summary,body,created_at,published_at)
+    VALUES (?,?,?,?,?,?,?)`).run('resource', 'current-affairs', 'Daily Test', '', '', '2026-01-01', '2026-01-01');
+  db.prepare(`INSERT INTO tests (id,course,title,questions,resource_id) VALUES (?,?,?,?,?)`)
+    .run('resource-test', 'public-current-affairs', 'Daily Test', '[]', 'resource');
+  db.prepare(`INSERT INTO attempts (id,uid,course,test,title,score,total,created_at,max_marks)
+    VALUES (?,?,?,?,?,?,?,?,?)`).run('resource-attempt', 'two', 'public-current-affairs', 'resource-test',
+    'Daily Test', 0, 1, '2026-01-01T00:00:00.000Z', 1);
+  const resources = await (await fetch(`${base}/content/current-affairs`, {headers:{Authorization:'Bearer two'}})).json();
+  assert.deepEqual(resources[0].test.firstAttempt, {score: 0, maxMarks: 1});
 });
 
 test('mock and live question paper switches require a completed attempt and preserve access controls', async t => {

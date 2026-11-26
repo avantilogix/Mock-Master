@@ -27,6 +27,10 @@ export function openDatabase(path) {
       id TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT NOT NULL, price INTEGER NOT NULL,
       pages INTEGER NOT NULL, pdf BLOB NOT NULL, created_at TEXT NOT NULL
     ) STRICT;
+    CREATE TABLE IF NOT EXISTS free_materials (
+      id TEXT PRIMARY KEY, title TEXT NOT NULL, pages INTEGER NOT NULL, pdf BLOB NOT NULL,
+      downloads_enabled INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL
+    ) STRICT;
     CREATE TABLE IF NOT EXISTS ebook_orders (
       id TEXT PRIMARY KEY, uid TEXT NOT NULL REFERENCES students, ebook TEXT NOT NULL REFERENCES ebooks,
       amount INTEGER NOT NULL, transaction_ref TEXT NOT NULL DEFAULT '', payment_note TEXT NOT NULL DEFAULT '',
@@ -136,6 +140,7 @@ export function openDatabase(path) {
   const ebookColumns = new Set(db.prepare('PRAGMA table_info(ebooks)').all().map(column => column.name));
   if (!ebookColumns.has('demo_pdf')) db.exec('ALTER TABLE ebooks ADD COLUMN demo_pdf BLOB');
   if (!ebookColumns.has('demo_pages')) db.exec('ALTER TABLE ebooks ADD COLUMN demo_pages INTEGER NOT NULL DEFAULT 0');
+  if (!ebookColumns.has('archived')) db.exec('ALTER TABLE ebooks ADD COLUMN archived INTEGER NOT NULL DEFAULT 0');
   const testColumns = new Set(db.prepare('PRAGMA table_info(tests)').all().map(column => column.name));
   if (!testColumns.has('resource_id')) db.exec('ALTER TABLE tests ADD COLUMN resource_id TEXT');
   if (!testColumns.has('live')) db.exec('ALTER TABLE tests ADD COLUMN live INTEGER NOT NULL DEFAULT 0');
@@ -147,6 +152,7 @@ export function openDatabase(path) {
   if (!testColumns.has('negative_mark')) db.exec('ALTER TABLE tests ADD COLUMN negative_mark REAL NOT NULL DEFAULT 0');
   if (!testColumns.has('sections')) db.exec("ALTER TABLE tests ADD COLUMN sections TEXT NOT NULL DEFAULT '[]'");
   if (!testColumns.has('question_paper_download')) db.exec("ALTER TABLE tests ADD COLUMN question_paper_download INTEGER NOT NULL DEFAULT 0");
+  if (!testColumns.has('published')) db.exec('ALTER TABLE tests ADD COLUMN published INTEGER NOT NULL DEFAULT 1');
   const attemptColumns = new Set(db.prepare('PRAGMA table_info(attempts)').all().map(column => column.name));
   if (!attemptColumns.has('answers')) db.exec("ALTER TABLE attempts ADD COLUMN answers TEXT NOT NULL DEFAULT '[]'");
   if (!attemptColumns.has('max_marks')) db.exec('ALTER TABLE attempts ADD COLUMN max_marks REAL NOT NULL DEFAULT 0');
@@ -156,6 +162,7 @@ export function openDatabase(path) {
   if (!studentColumns.has('exam_preference')) db.exec("ALTER TABLE students ADD COLUMN exam_preference TEXT NOT NULL DEFAULT ''");
   const courseColumns = new Set(db.prepare('PRAGMA table_info(courses)').all().map(column => column.name));
   if (!courseColumns.has('downloads_enabled')) db.exec('ALTER TABLE courses ADD COLUMN downloads_enabled INTEGER NOT NULL DEFAULT 0');
+  if (!courseColumns.has('archived')) db.exec('ALTER TABLE courses ADD COLUMN archived INTEGER NOT NULL DEFAULT 0');
   const additions = [
     ['payment_status', "TEXT NOT NULL DEFAULT 'pending'"],
     ['transaction_ref', 'TEXT NOT NULL DEFAULT \'\''],

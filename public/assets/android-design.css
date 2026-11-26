@@ -386,7 +386,15 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px
   transition: transform .2s ease;
 }
 .course-workspace .workspace-refresh:hover .line-icon { transform: rotate(45deg); }
-.course-workspace .folder-create-form { gap: .75rem; }
+.course-workspace .folder-create-form, .course-workspace .folder-edit-form {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: .75rem;
+}
+.course-workspace .folder-create-form > .field, .course-workspace .folder-edit-form > .field { min-width: 0; }
+.course-workspace .folder-create-form > button, .course-workspace .folder-edit-form > button {
+  grid-column: 1 / -1;
+  justify-self: start;
+}
 .course-workspace .workspace-folder-list { gap: .7rem; }
 .course-workspace .workspace-folder {
   padding: .85rem;

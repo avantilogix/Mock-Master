@@ -3,6 +3,7 @@ import { once } from 'node:events';
 import test from 'node:test';
 import express from 'express';
 import { registerWorkspaceRoutes } from '../firebase-functions/workspace-routes.js';
+import { registerPublishedRoutes } from '../firebase-functions/published.js';
 
 function fakeFirestore() {
   const data = new Map();
@@ -14,12 +15,14 @@ function fakeFirestore() {
   const db = {
     collection(name) {
       return {
-        doc(id = `generated${++nextId}`) { return { collectionName: name, id }; },
+        doc(id = `generated${++nextId}`) { return { collectionName: name, id,
+          async delete() { data.delete(`${name}/${id}`); } }; },
         where(field, op, expected) {
           assert.equal(op, '==');
           return {
             collectionName: name, field, expected,
             async get() { return query(this); },
+            limit(count) { return { ...this, count }; },
           };
         },
       };
@@ -36,14 +39,55 @@ function fakeFirestore() {
       writes.forEach(write => write());
       return result;
     },
+    batch() {
+      const refs = [];
+      return {
+        delete(ref) { refs.push(ref); },
+        async commit() { for (const ref of refs) data.delete(`${ref.collectionName}/${ref.id}`); },
+      };
+    },
   };
   function query(ref) {
-    return { docs: [...data.keys()].filter(key => key.startsWith(`${ref.collectionName}/`))
+    const docs = [...data.keys()].filter(key => key.startsWith(`${ref.collectionName}/`))
       .map(key => snapshot({ collectionName: ref.collectionName, id: key.slice(ref.collectionName.length + 1) }))
-      .filter(doc => doc.data()[ref.field] === ref.expected) };
+      .filter(doc => doc.data()[ref.field] === ref.expected).slice(0, ref.count);
+    return { docs, size: docs.length, empty: docs.length === 0 };
   }
   return { db, data };
 }
+
+test('Firebase published deletion retains courses and removes test results and sessions', async t => {
+  const { db, data } = fakeFirestore();
+  data.set('courses/c', { title: 'Course' });
+  data.set('orders/o', { course: 'c' });
+  data.set('tests/t', { course: 'c' });
+  data.set('attempts/a', { test: 't' });
+  data.set('examSessions/s', { test: 't' });
+  const app = express();
+  registerPublishedRoutes(app, {
+    db, bucket: {}, value: snap => snap.exists ? { id: snap.id, ...snap.data() } : null,
+    text: value => value, byNewest: () => 0, queryCollection: async () => [], media: {}, affairs: {},
+  });
+  app.use((err, _req, res, _next) => res.status(err.status || 500).json({ error: err.message }));
+  const server = app.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const remove = (type, id) => fetch(`http://127.0.0.1:${server.address().port}/admin/published/${type}/${id}`, {method: 'DELETE'});
+  const course = await remove('courses', 'c');
+  assert.deepEqual(await course.json(), { deleted: false, archived: true });
+  assert.equal(data.get('courses/c').archived, true);
+  assert.equal(data.has('orders/o'), true);
+  assert.equal(data.has('tests/t'), true);
+  assert.equal((await remove('tests', 't')).status, 200);
+  assert.equal(data.has('tests/t'), false);
+  assert.equal(data.has('attempts/a'), false);
+  assert.equal(data.has('examSessions/s'), false);
+  data.set('tests/large', { course: 'c' });
+  for (let i = 0; i < 500; i++) data.set(`attempts/large${i}`, { test: 'large' });
+  assert.equal((await remove('tests', 'large')).status, 200);
+  assert.equal(data.has('tests/large'), false);
+  assert.equal(data.has('attempts/large0'), false);
+});
 
 test('Firebase workspace routes persist validated folders and item moves transactionally', async t => {
   const { db, data } = fakeFirestore();

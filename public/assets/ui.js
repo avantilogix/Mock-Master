@@ -36,6 +36,8 @@ export function icon(name, className) {
 }
 export const empty = text => el('p', {class: 'empty'}, text);
 export const status = () => el('p', {class: 'status', role: 'status', 'aria-atomic': 'true'});
+export const firstAttemptScore = attempt => attempt ?
+  el('span', {class: 'first-attempt-score'}, `First attempt: ${attempt.score}/${attempt.maxMarks}`) : null;
 export const panel = (title, ...children) => el('section', {class: 'panel section'}, el('h2', {}, title), children);
 export const idPart = id => encodeURIComponent(String(id));
 

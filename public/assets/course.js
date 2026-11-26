@@ -1,6 +1,6 @@
 import {api} from './services.js';
 import {coverGallery} from './publishing-media.js';
-import {bindForm, button, el, entries, field, formatDate, heading, icon, idPart, link, loadInto, panel, rule, run, say, status, textValue} from './ui.js?v=course-payment-close-v1';
+import {bindForm, button, el, entries, field, firstAttemptScore, formatDate, heading, icon, idPart, link, loadInto, panel, rule, run, say, status, textValue} from './ui.js?v=course-payment-close-v1';
 
 export const upiReference = control => rule(control, value =>
   /^[A-Za-z0-9][A-Za-z0-9 _/.-]{2,79}$/.test(value) ? '' :
@@ -64,8 +64,9 @@ export function showDashboard(main, ctx, me) {
         shortcut('test', 'Test Series', 'Practice exam questions', '#test-series', 'blue'),
         shortcut('courses', 'Book Store', 'Find secure study books', '#book-store', 'orange'),
         shortcut('files', 'Study Materials', 'Open your saved PDFs', '#materials', 'purple'),
+        shortcut('files', 'Free Study Material', 'Read free PDFs', '#free-materials', 'purple'),
+        shortcut('test', 'Free Test Series', 'Practise free tests', '#free-tests', 'blue'),
         shortcut('news', 'Current Affairs', 'Daily exam updates', '#current-affairs', 'rose'),
-        shortcut('bell', 'Notifications', 'Course and payment updates', '#notifications', 'blue'),
         shortcut('history', 'Previous Year Questions', 'Practice earlier questions', '#pyqs', 'mint'),
         shortcut('news', 'Syllabus', 'View topics and learning plan', '#syllabus', 'purple'),
         shortcut('calendar', 'Timetable', 'Plan your study week', '#timetable', 'blue'),
@@ -113,8 +114,9 @@ function chapterGroups(books, videos) {
   const add = (item, key) => {
     if (!subjects.has(item.subject)) subjects.set(item.subject, new Map());
     const chapters = subjects.get(item.subject);
-    if (!chapters.has(item.chapter)) chapters.set(item.chapter, {books: [], videos: []});
-    chapters.get(item.chapter)[key].push(item);
+    const chapter = item.chapter ?? 'Chapter 1';
+    if (!chapters.has(chapter)) chapters.set(chapter, {books: [], videos: []});
+    chapters.get(chapter)[key].push(item);
   };
   books.forEach(book => add(book, 'books'));
   videos.forEach(video => add(video, 'videos'));
@@ -158,6 +160,15 @@ function chapterFolders(subjects, courseId, navigation = {}) {
   if (!subjects.size) return el('p', {class: 'empty'}, 'No study books or videos have been added to this course yet.');
   const sortNames = ([a], [b]) => a.localeCompare(b, undefined, {numeric: true});
   const browser = el('div', {class: 'course-folder-browser course-chapter-browser'});
+  const fileEntries = material => [
+    ...material.books.map(book => navigation.removeBreadcrumbs ?
+      materialFileEntry(book.title, 'PDF', `#book/${idPart(courseId)}/${idPart(book.id)}`) :
+      el('div', {class: 'chapter-book'}, coverGallery(book, 'book-gallery'),
+        link(`PDF · ${book.title}`, `#book/${idPart(courseId)}/${idPart(book.id)}`, 'chapter-link'))),
+    ...material.videos.map(video => navigation.removeBreadcrumbs ?
+      materialFileEntry(video.title, 'Video', `#video/${idPart(courseId)}/${idPart(video.id)}`) :
+      link(`Video · ${video.title}`, `#video/${idPart(courseId)}/${idPart(video.id)}`, 'chapter-link video-link')),
+  ];
 
   function show(subject = '', chapter = '', focusHeading = false) {
     let breadcrumbs = null;
@@ -198,7 +209,9 @@ function chapterFolders(subjects, courseId, navigation = {}) {
     if (!subject) {
       const entries = el('div', {class: 'course-folder-entries'});
       for (const [name, chapters] of [...subjects].sort(sortNames)) {
-        const fileCount = chapters.size;
+        const direct = chapters.get('');
+        const fileCount = chapters.size - Number(Boolean(direct)) +
+          (direct ? direct.books.length + direct.videos.length : 0);
         entries.append(materialFolderEntry(name, fileCount,
           () => show(name, '', true), 'subject'));
       }
@@ -209,31 +222,24 @@ function chapterFolders(subjects, courseId, navigation = {}) {
       if (!chapter) {
         const entries = el('div', {class: 'course-folder-entries'});
         for (const [name, material] of [...chapters].sort(sortNames)) {
+          if (!name) continue;
           const itemCount = material.books.length + material.videos.length;
           entries.append(materialFolderEntry(name, itemCount,
             () => show(subject, name, true), 'chapter'));
         }
+        const direct = chapters.get('');
+        if (direct) entries.append(...fileEntries(direct));
         section = navigation.removeBreadcrumbs ? entries :
-          el('section', {class: 'course-folder-section'}, el('h4', {}, 'Chapters'), entries);
+          el('section', {class: 'course-folder-section'},
+            el('h4', {}, direct ? (chapters.size > 1 ? 'Chapters and study materials' : 'Study materials') : 'Chapters'), entries);
       } else {
         const material = chapters.get(chapter);
         if (navigation.removeBreadcrumbs) {
-          const files = [
-            ...material.books.map(book => materialFileEntry(book.title, 'PDF',
-              `#book/${idPart(courseId)}/${idPart(book.id)}`)),
-            ...material.videos.map(video => materialFileEntry(video.title, 'Video',
-              `#video/${idPart(courseId)}/${idPart(video.id)}`)),
-          ];
+          const files = fileEntries(material);
           section = files.length ? el('div', {class: 'course-folder-entries'}, files) :
             el('p', {class: 'course-folder-empty'}, 'No study materials in this folder.');
         } else {
-          const links = [
-            ...material.books.map(book => el('div', {class: 'chapter-book'},
-              coverGallery(book, 'book-gallery'),
-              link(`PDF · ${book.title}`, `#book/${idPart(courseId)}/${idPart(book.id)}`, 'chapter-link'))),
-            ...material.videos.map(video =>
-              link(`Video · ${video.title}`, `#video/${idPart(courseId)}/${idPart(video.id)}`, 'chapter-link video-link')),
-          ];
+          const links = fileEntries(material);
           section = el('section', {class: 'course-folder-section'},
             el('h4', {}, 'Study materials'),
             links.length ? el('div', {class: 'chapter-list'}, links) :
@@ -399,6 +405,7 @@ function testRows(ctx, items, courseId) {
       el('div', {class: 'actions test-row-actions'},
         leaderboard,
         test.questionPaperDownload && test.completedAttempt ? questionPaperButton(ctx, test) : null,
+        firstAttemptScore(test.firstAttempt),
         iconStartTest(courseId, test.id)));
   });
 }
@@ -437,7 +444,7 @@ export function showContentLibrary(main, ctx, me, kind, action) {
       const material = await api(`/courses/${idPart(course.id)}`, {ctx, auth: true});
       if (config.item === 'books') {
         const subjects = chapterGroups(material.books, material.videos || []);
-        const chapterCount = [...subjects.values()].reduce((sum, chapters) => sum + chapters.size, 0);
+        const chapterCount = [...subjects.values()].reduce((sum, chapters) => sum + chapters.size - Number(chapters.has('')), 0);
         const content = materialFolderBrowser(material.folders?.filter(folder => folder.kind === 'content'),
           [...material.books, ...(material.videos || [])],
           folderItems => chapterFolders(chapterGroups(
@@ -471,6 +478,7 @@ export function showContentLibrary(main, ctx, me, kind, action) {
                 leaderboard,
                 item.questionPaperDownload && item.completedAttempt ?
                   questionPaperButton(ctx, item) : null,
+                firstAttemptScore(item.firstAttempt),
                 iconStartTest(course.id, item.id)));
           })));
     }));

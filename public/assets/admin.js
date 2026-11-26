@@ -1,5 +1,6 @@
 import {api} from './services.js';
 import {publishedManager, weekdays} from './admin-manage.js?v=ebook-demo-plus-v1';
+import {freeMaterialsAdmin} from './free-materials.js';
 import {adminContentForm} from './reports.js?v=refresh-icons-v3';
 import {coverPicker} from './publishing-media.js';
 import {importQuestionReview, manualQuestions} from './manual-questions.js?v=bilingual-import-v1';
@@ -179,7 +180,7 @@ export function showAdmin(main, ctx, folderTarget = null) {
         ...list.map(course => el('option', {value: course.id}, course.title)));
       if (list.some(course => String(course.id) === selected)) select.value = selected;
     }
-    if (folderTarget) {
+    if (folderTarget && !freeTestMode) {
       const found = list.some(course => String(course.id) === folderTarget.courseId);
       testCourse.value = found ? folderTarget.courseId : '';
       publish.disabled = !found;
@@ -304,13 +305,13 @@ export function showAdmin(main, ctx, folderTarget = null) {
         await loadEbooks(result?.warning || `E-book updated: ${values.title}.`);
       }, 'Saving e-book…');
       const remove = iconAction(button('', 'danger secondary'), 'trash', 'Delete e-book');
-      remove.disabled = book.orders > 0;
-      remove.title = book.orders ? 'Cannot delete an e-book with purchase requests.' : 'Delete e-book';
       remove.addEventListener('click', () => {
-        if (!window.confirm(`Delete “${book.title}”?`)) return;
+        if (!window.confirm(book.orders ?
+          `Remove “${book.title}” from students? Access will end, but purchase records will be retained.` :
+          `Permanently delete “${book.title}”?`)) return;
         run(remove, ebookFeedback, async () => {
-          await api(`/admin/ebooks/${idPart(book.id)}`, {ctx, auth: true, method: 'DELETE'});
-          await loadEbooks();
+          const result = await api(`/admin/ebooks/${idPart(book.id)}`, {ctx, auth: true, method: 'DELETE'});
+          await loadEbooks(result.warning || (result.archived ? 'E-book hidden from students; purchase records retained.' : 'E-book deleted.'));
         }, 'Deleting e-book…');
       });
       const demoPdf = rule(el('input', {type: 'file', accept: pdfAccept, required: ''}), (_, control) => {
@@ -578,6 +579,7 @@ export function showAdmin(main, ctx, folderTarget = null) {
   const subjectManager = subjectQuestionManager(editor, (file, format) =>
     post(`/admin/import?format=${format}`, {binary: file}));
   const [testCourse, testField] = courseField();
+  let freeTestMode = false;
   if (folderTarget) testCourse.disabled = true;
   const testTitle = el('input', {required: '', maxlength: '120'});
   rule(editor, value => {
@@ -652,9 +654,9 @@ export function showAdmin(main, ctx, folderTarget = null) {
     }
     testFields.disabled = creationMethod.disabled = importButton.disabled = true;
     try {
-      await post(`/admin/courses/${idPart(testCourse.value)}/tests`, {json: {
+      await post(freeTestMode ? '/admin/free-tests' : `/admin/courses/${idPart(testCourse.value)}/tests`, {json: {
         title: textValue(testTitle, 'Test title'), questions, live: !sectionWise && testType.value === 'live',
-        ...(folderTarget ? {folderId: folderTarget.folderId} : {}),
+        ...(folderTarget && !freeTestMode ? {folderId: folderTarget.folderId} : {}),
         startsAt: !sectionWise && testType.value === 'live' ? startsAt.value : undefined,
         expiresAt: !sectionWise && testType.value === 'live' ? expiresAt.value : undefined,
         durationMinutes: durationMinutes.valueAsNumber,
@@ -663,20 +665,22 @@ export function showAdmin(main, ctx, folderTarget = null) {
         marksPerQuestion: sectionWise ? 1 : marksPerQuestion.valueAsNumber, negativeMark: negativeMark.valueAsNumber,
       }});
       testForm.reset();
-      if (folderTarget) testCourse.value = folderTarget.courseId;
+      if (folderTarget && !freeTestMode) testCourse.value = folderTarget.courseId;
       manual.reset();
       review.reset();
       subjectManager.reset();
       updateTestType();
+      if (freeTestMode) manager.reload();
       say(testStatus, 'Test published.');
     } finally {
       testFields.disabled = creationMethod.disabled = false;
       updateCreationMethod();
     }
   }, 'Publishing test…');
+  const folderNotice = folderTarget ? el('p', {}, 'Publishing into the selected test folder. ',
+    link('Return to Course Workspace', `#admin-course/${idPart(folderTarget.courseId)}`)) : null;
   const publishPanel = panel('Publish a Test',
-    folderTarget ? el('p', {}, 'Publishing into the selected test folder. ',
-      link('Return to Course Workspace', `#admin-course/${idPart(folderTarget.courseId)}`)) : null,
+    folderNotice,
     field('Test Creation Method', creationMethod), importSection,
     el('section', {class: 'publish-test-review'}, el('h3', {}, 'Review, Edit, and Publish'), testForm));
   publishPanel.classList.add('publish-test-panel');
@@ -736,7 +740,8 @@ export function showAdmin(main, ctx, folderTarget = null) {
   const renderChapters = (current = '') => {
     newSubject.hidden = subjectSelect.disabled || subjectSelect.value !== addNew;
     chapterSelect.disabled = subjectSelect.disabled || !subjectSelect.value;
-    choose(chapterSelect, 'a chapter', items.filter(item => item.subject === chosen(subjectSelect, subject)).map(item => item.chapter), current);
+    choose(chapterSelect, 'a chapter', items.filter(item => item.subject === chosen(subjectSelect, subject))
+      .map(item => item.chapter).filter(Boolean), current);
     newChapter.hidden = chapterSelect.disabled || chapterSelect.value !== addNew;
   };
   const loadPlacement = async (keep = {}) => {
@@ -822,6 +827,7 @@ export function showAdmin(main, ctx, folderTarget = null) {
   const findPanel = title => panels.find(section => sectionTitle(section) === title);
   const workspace = el('div', {class: 'admin-workspace'});
   const menu = el('div', {class: 'admin-area-grid'});
+  const freeMaterials = freeMaterialsAdmin(ctx);
   const openList = ({label, managerType, list, add, addLabel, onOpen}) => {
     if (!list) return;
     const toolbar = el('div', {class: 'admin-section-toolbar'},
@@ -865,12 +871,34 @@ export function showAdmin(main, ctx, folderTarget = null) {
     if (add) add.hidden = true;
   };
   const areas = [
+    {label: 'Free Study Material', description: 'Publish free PDFs and manage downloads', icon: 'book-open',
+      open: () => openList({label: 'Free Study Material', list: freeMaterials.list, add: freeMaterials.add,
+        addLabel: 'Add Free Study Material', onOpen: freeMaterials.reload})},
     {label: 'Courses', description: 'Course list, price, expiry, and access', icon: 'course-stack',
       open: () => openList({label: 'Courses', managerType: 'courses', list: manager.node, add: findPanel('Create a Course'), addLabel: 'Add Course'})},
     {label: 'Mock Tests', description: 'Regular, timed, and live mock tests', icon: 'test',
-      open: () => openList({label: 'Mock Tests', managerType: 'tests', list: manager.node, add: findPanel('Publish a Test'), addLabel: 'Add Mock Test'})},
+      open: () => {
+        freeTestMode = false;
+        if (folderNotice) folderNotice.hidden = false;
+        testField.hidden = false;
+        testCourse.disabled = Boolean(folderTarget);
+        if (folderTarget) setCourses(courseList);
+        openList({label: 'Mock Tests', managerType: 'tests', list: manager.node, add: findPanel('Publish a Test'), addLabel: 'Add Mock Test'});
+      }},
+    {label: 'Free Test Series', description: 'Create and manage free tests', icon: 'test',
+      open: () => {
+        freeTestMode = true;
+        if (folderNotice) folderNotice.hidden = true;
+        publish.disabled = false;
+        testField.hidden = true;
+        testCourse.disabled = true;
+        openList({label: 'Free Test Series', managerType: 'freeTests', list: manager.node,
+          add: findPanel('Publish a Test'), addLabel: 'Add Free Test'});
+      }},
     {label: 'Study Materials', description: 'Chapter PDFs and uploaded videos', icon: 'book-open',
       open: () => openList({label: 'Study Materials', managerType: 'books', list: manager.node, add: findPanel('Upload a Study Book or Video'), addLabel: 'Add Study Material'})},
+    {label: 'Chapter Videos', description: 'Manage uploaded chapter videos', icon: 'play',
+      open: () => openList({label: 'Chapter Videos', managerType: 'chapterVideos', list: manager.node, add: findPanel('Upload a Study Book or Video'), addLabel: 'Add Study Material'})},
     {label: 'YouTube Videos', description: 'Published learning video library', icon: 'play',
       open: () => openList({label: 'YouTube Videos', managerType: 'videos', list: manager.node, add: findPanel('YouTube Videos'), addLabel: 'Add YouTube Video'})},
     {label: 'Learning Resources', description: 'Current affairs, PYQs, syllabus, and free tests', icon: 'resource-globe',
@@ -896,7 +924,7 @@ export function showAdmin(main, ctx, folderTarget = null) {
   ];
   const showOverview = () => {
     const groups = [
-      ['Learning', ['Courses', 'Mock Tests', 'Study Materials', 'Learning Resources']],
+      ['Learning', ['Courses', 'Mock Tests', 'Free Test Series', 'Study Materials', 'Free Study Material', 'Learning Resources']],
       ['Commerce', ['Course Payments', 'E-Books', 'Physical Books', 'Book Orders', 'Payment Settings']],
       ['Operations', ['YouTube Videos', 'Timetable', 'Students', 'Support', 'Social Links']],
     ];

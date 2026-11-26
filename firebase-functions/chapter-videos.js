@@ -1,7 +1,7 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { pipeline } from 'node:stream/promises';
 import { fail } from './documents.js';
-import { idInput, validateFolderSnapshot } from './workspace.js';
+import { chapterInput, idInput, validateFolderSnapshot } from './workspace.js';
 
 const types = new Map([['video/mp4', 'mp4'], ['video/webm', 'webm'], ['video/quicktime', 'mov']]);
 const maxBytes = 300 * 1024 * 1024;
@@ -89,7 +89,8 @@ export function registerVideoRoutes(api, { db, bucket, value, text, course, requ
     const id = randomUUID();
     const expires = Date.now() + 30 * 60_000;
     const item = { course: courseId, title: text(title, 'Title', 120), subject: text(subject, 'Subject', 100),
-      chapter: text(chapter, 'Chapter', 120), type, size, folderId, replaceId, uid: req.user.uid, expires };
+      chapter: chapterInput(chapter === undefined && folderId ? '' : chapter),
+      type, size, folderId, replaceId, uid: req.user.uid, expires };
     const headers = { 'x-goog-if-generation-match': '0', 'x-goog-meta-upload-id': id,
       'cache-control': 'private, no-store' };
     const [url] = await bucket.file(pathFor(id)).getSignedUrl({

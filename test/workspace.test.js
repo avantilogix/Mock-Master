@@ -105,7 +105,8 @@ test('course workspaces enforce scope, hierarchy and item placement', async t =>
   assert.equal(edited.status, 204, await edited.text());
   assert.equal(db.prepare("SELECT folder_id FROM tests WHERE id='t'").get().folder_id, null);
   assert.equal((await request('/admin/published/courses/two', 'DELETE')).status, 200);
-  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM course_folders WHERE course='two'").get().count, 0);
+  assert.equal(db.prepare("SELECT archived FROM courses WHERE id='two'").get().archived, 1);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM course_folders WHERE course='two'").get().count, 1);
 });
 
 test('legacy SQLite databases migrate and retain workspace data after reopening', t => {

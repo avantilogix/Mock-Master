@@ -10,8 +10,10 @@ export function showTest(main, ctx, courseId, testId, phone) {
   const path = `/tests/${idPart(testId)}`;
   const content = el('div', {class: 'exam-shell'});
   const isCurrentAffairs = courseId === 'current-affairs';
-  const back = () => link(isCurrentAffairs ? 'Back to Current Affairs' : 'Back to Course',
-    isCurrentAffairs ? '#current-affairs' : `#course/${idPart(courseId)}`, 'back');
+  const isFreeTest = courseId === 'free-tests';
+  const backTarget = isFreeTest ? '#free-tests' : isCurrentAffairs ? '#current-affairs' : `#course/${idPart(courseId)}`;
+  const back = () => link(isFreeTest ? 'Back to Free Test Series' : isCurrentAffairs ? 'Back to Current Affairs' : 'Back to Course',
+    backTarget, 'back');
   main.append(back(), ...heading('Exam Room'), content);
   loadInto(content, ctx, async () => {
     const test = await protectedGet(ctx, path);
@@ -25,6 +27,33 @@ export function showTest(main, ctx, courseId, testId, phone) {
       Number.isInteger(session.answers?.[index]) ? session.answers[index] : null);
     const marked = new Set((session.marked || []).filter(index => Number.isInteger(index)));
     const sections = [...new Set(test.questions.map(question => question.section || 'General'))];
+    const guardKey = `mission-exam-visibility-${session.id}`;
+    let visibilityState = {switches: 0, pending: false};
+    try {
+      const saved = sessionStorage.getItem(guardKey);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (!Number.isInteger(parsed.switches) || parsed.switches < 0 || typeof parsed.pending !== 'boolean' ||
+            (parsed.pending && (!Array.isArray(parsed.answers) || parsed.answers.length !== answers.length))) {
+          throw new Error('Invalid saved exam visibility state.');
+        }
+        visibilityState = parsed;
+        if (parsed.pending) answers.splice(0, answers.length, ...parsed.answers);
+      }
+    } catch (error) {
+      console.error('Could not restore exam visibility state:', error);
+      throw new Error('Could not restore this test safely. Check browser storage and try again.');
+    }
+    const persistVisibility = () => {
+      try {
+        sessionStorage.setItem(guardKey, JSON.stringify(visibilityState));
+        return true;
+      } catch (error) {
+        console.error('Could not save exam visibility state:', error);
+        say(feedback, 'Could not save the test warning. Keep this page open and check browser storage.', true);
+        return false;
+      }
+    };
     const subjectTabs = el('div', {
       class: 'exam-subject-tabs', role: 'tablist', 'aria-label': 'Subject sections',
     });
@@ -39,6 +68,7 @@ export function showTest(main, ctx, courseId, testId, phone) {
         el('span', {class: 'score-chip score-neutral'},
           el('span', {}, 'Wrong answer'), el('strong', {}, 'No penalty')));
     let submitted = false;
+    let finished = false;
     const questionArea = el('div', {class: 'exam-question'});
     questionArea.id = 'exam-question-panel';
     const palette = el('div', {class: 'question-palette'});
@@ -46,6 +76,9 @@ export function showTest(main, ctx, courseId, testId, phone) {
     const counters = el('div', {class: 'exam-counters'});
     const timer = el('strong', {class: 'exam-timer', role: 'timer'});
     const feedback = status();
+    const switchWarning = el('p', {class: 'exam-switch-warning', role: 'alert', hidden: ''});
+    const retrySubmission = button('Retry Submission', 'secondary');
+    retrySubmission.hidden = true;
     const previous = button('← Previous', 'secondary exam-nav-button exam-prev-button');
     const next = button('Next →', 'exam-nav-button exam-next-button');
     previous.setAttribute('aria-label', 'Previous question');
@@ -153,13 +186,19 @@ export function showTest(main, ctx, courseId, testId, phone) {
     });
     const deadline = Date.parse(session.startedAt) + (test.durationMinutes || 90) * 60_000;
     let timerId;
+    let releaseNavigation = () => {};
     const finish = async () => {
       if (submitted) return;
       submitted = true;
       submit.disabled = true;
+      retrySubmission.hidden = true;
       clearInterval(timerId);
       try {
         const result = await api(`${path}/submit`, {ctx, auth: true, method: 'POST', json: {answers}});
+        finished = true;
+        releaseNavigation();
+        try { sessionStorage.removeItem(guardKey); }
+        catch (error) { console.error('Could not clear exam visibility state:', error); }
         const resultTitle = el('h2', {tabindex: '-1'}, 'Your Result');
         const score = Number(result.score) || 0;
         const maxMarks = Number(result.maxMarks || result.total) || 0;
@@ -179,7 +218,7 @@ export function showTest(main, ctx, courseId, testId, phone) {
           control.replaceChildren(icon(iconName, 'line-icon'), el('span', {}, label));
           return control;
         };
-        const returnButton = resultAction(isCurrentAffairs ? 'Return to Current Affairs' : 'Return to Course',
+        const returnButton = resultAction(isFreeTest ? 'Return to Free Test Series' : isCurrentAffairs ? 'Return to Current Affairs' : 'Return to Course',
           'back', 'result-action-back');
         const resultButton = result.attemptId ?
           resultAction('Download Result PDF', 'download', 'secondary result-action-download') : null;
@@ -191,7 +230,8 @@ export function showTest(main, ctx, courseId, testId, phone) {
         const resultActions = el('div', {class: 'result-actions'},
           returnButton, resultButton, paperButton, leaderboardButton);
         content.replaceChildren(el('section', {class: 'exam-result'},
-          resultTitle, scoreCircle,
+          resultTitle, visibilityState.pending ?
+            el('p', {role: 'status'}, 'Your test was submitted automatically after a second tab or app switch.') : null, scoreCircle,
           el('div', {class: 'result-stats'},
             el('span', {class: 'result-stat-correct'}, el('strong', {}, String(result.correct ?? result.score)), el('small', {}, 'Correct')),
             el('span', {class: 'result-stat-incorrect'}, el('strong', {}, String(result.wrong ?? 0)), el('small', {}, 'Incorrect')),
@@ -203,7 +243,7 @@ export function showTest(main, ctx, courseId, testId, phone) {
             })} IST.`) : null,
           resultActions, feedback));
         returnButton.addEventListener('click', () => {
-          location.hash = isCurrentAffairs ? '#current-affairs' : `#course/${idPart(courseId)}`;
+          location.hash = backTarget;
         });
         if (resultButton) {
           resultButton.addEventListener('click', () => run(resultButton, feedback, async () => {
@@ -247,11 +287,21 @@ export function showTest(main, ctx, courseId, testId, phone) {
         resultTitle.focus();
       } catch (error) {
         submitted = false;
-        submit.disabled = false;
-        say(feedback, error.message, true);
+        if (visibilityState.pending) {
+          retrySubmission.hidden = false;
+          say(feedback, `Automatic submission failed: ${error.message} Retry submission before leaving.`, true);
+        } else {
+          submit.disabled = false;
+          say(feedback, error.message, true);
+          if (Date.now() < deadline) {
+            timerId = setInterval(tick, 1000);
+            tick();
+          }
+        }
       }
 
     };
+    retrySubmission.addEventListener('click', finish);
     submit.addEventListener('click', () => {
       if (window.confirm('Submit this attempt? You cannot change answers after submission.')) finish();
     });
@@ -261,26 +311,93 @@ export function showTest(main, ctx, courseId, testId, phone) {
       timer.classList.toggle('danger', remaining <= 300);
       if (!remaining) finish();
     };
-    ctx.signal.addEventListener('abort', () => clearInterval(timerId), {once: true});
-    timerId = setInterval(tick, 1000);
-    tick();
+    const lockForSubmission = () => {
+      questionArea.querySelectorAll('input').forEach(input => { input.disabled = true; });
+      subjectTabs.querySelectorAll('button').forEach(control => { control.disabled = true; });
+      palette.querySelectorAll('button').forEach(control => { control.disabled = true; });
+      previous.disabled = next.disabled = mark.disabled = submit.disabled = true;
+    };
+    let lastVisibility = document.visibilityState;
+    const onVisibilityChange = () => {
+      if (finished) return;
+      if (document.visibilityState === lastVisibility) return;
+      lastVisibility = document.visibilityState;
+      if (document.visibilityState === 'hidden') {
+        if (submitted || visibilityState.pending) return;
+        visibilityState.switches++;
+        if (visibilityState.switches >= 2) {
+          visibilityState.pending = true;
+          visibilityState.answers = [...answers];
+          persistVisibility();
+          lockForSubmission();
+          switchWarning.hidden = false;
+          switchWarning.textContent = 'A second tab or app switch was detected. Submitting your test…';
+          finish();
+        } else {
+          persistVisibility();
+          switchWarning.hidden = false;
+          switchWarning.textContent = 'Tab or app switching is not allowed. A second switch will submit your test automatically.';
+        }
+      } else if (visibilityState.pending && !submitted) {
+        finish();
+      }
+    };
+    const beforeUnload = event => {
+      if (!finished) {
+        event.preventDefault();
+        event.returnValue = '';
+      }
+    };
+    const onConnectionChange = event => {
+      if (event.detail.connected && visibilityState.pending && !finished && !submitted) finish();
+    };
+    releaseNavigation = ctx.guardExamNavigation(() => {
+      if (submitted || visibilityState.pending) {
+        say(feedback, 'Your test must finish submitting before you leave.', true);
+      } else if (window.confirm('Submit this test before leaving? Your answers cannot be changed after submission.')) {
+        finish();
+      }
+    });
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    window.addEventListener('beforeunload', beforeUnload);
+    window.addEventListener('mission-connection-change', onConnectionChange);
+    ctx.signal.addEventListener('abort', () => {
+      clearInterval(timerId);
+      releaseNavigation();
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      window.removeEventListener('beforeunload', beforeUnload);
+      window.removeEventListener('mission-connection-change', onConnectionChange);
+    }, {once: true});
     main.replaceChildren(back(), ...heading(test.title, test.live ?
       `Live attempt ${test.attempts + 1}${test.limited ? ` of ${test.attemptsLimit}` : ' · unlimited window'}` :
       'Practice attempt · unlimited'), content);
-    content.replaceChildren(subjectTabs, el('div', {class: 'exam-topbar'},
+    content.replaceChildren(switchWarning, subjectTabs, el('div', {class: 'exam-topbar'},
       scoringInfo, timer),
       el('div', {class: 'exam-layout'}, questionArea,
         el('aside', {class: 'exam-sidebar'}, paletteHeading, counters, palette)),
-      el('div', {class: 'exam-actions'}, previous, next, mark, submit), feedback);
+      el('div', {class: 'exam-actions'}, previous, next, mark, submit, retrySubmission), feedback);
     renderQuestion();
+    if (visibilityState.pending) {
+      switchWarning.hidden = false;
+      switchWarning.textContent = 'A second tab or app switch was detected. Submitting your test…';
+      lockForSubmission();
+      finish();
+    } else {
+      if (visibilityState.switches) {
+        switchWarning.hidden = false;
+        switchWarning.textContent = 'Tab or app switching is not allowed. A second switch will submit your test automatically.';
+      }
+      timerId = setInterval(tick, 1000);
+      tick();
+    }
   });
 }
 
 export function showLeaderboard(main, ctx, courseId, testId) {
   const content = el('div', {class: 'leaderboard-shell'});
-  main.append(link(courseId === 'current-affairs' ? 'Back to Current Affairs' : 'Back to Course',
-    courseId === 'current-affairs' ? '#current-affairs' : `#course/${idPart(courseId)}`, 'back'),
-    ...heading('Live Test Leaderboard', 'Rankings are finalized when the live window closes.'), content);
+  main.append(link(courseId === 'free-tests' ? 'Back to Free Test Series' : courseId === 'current-affairs' ? 'Back to Current Affairs' : 'Back to Course',
+    courseId === 'free-tests' ? '#free-tests' : courseId === 'current-affairs' ? '#current-affairs' : `#course/${idPart(courseId)}`, 'back'),
+    ...heading('Live Test Leaderboard', 'Rankings use the first attempt and are finalized when the live window closes.'), content);
   loadInto(content, ctx, async () => {
     const board = await protectedGet(ctx, `/tests/${idPart(testId)}/leaderboard`);
     const top = board.rows.slice(0, 3);

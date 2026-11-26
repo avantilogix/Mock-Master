@@ -153,7 +153,7 @@ export function showAdminCourseWorkspace(main, ctx, courseId) {
       if (activeKind === 'content') {
         const title = el('input', {required: '', maxlength: '120'});
         const subject = el('input', {required: '', maxlength: '100', value: 'General'});
-        const chapter = el('input', {required: '', maxlength: '120', value: 'Chapter 1'});
+        const chapter = el('input', {maxlength: '120'});
         const type = el('select', {}, el('option', {value: 'pdf'}, 'PDF Study Book'),
           el('option', {value: 'video'}, 'Chapter Video'));
         const pdf = rule(el('input', {type: 'file', accept: '.pdf,application/pdf', required: ''}),
@@ -182,11 +182,11 @@ export function showAdminCourseWorkspace(main, ctx, courseId) {
           }
         });
         uploadForm = el('form', {class: 'section'}, field('Content Type', type), field('Title', title), field('Subject', subject),
-          field('Chapter', chapter), fileField,
+          field('Chapter (optional)', chapter, 'Leave blank to show the file directly inside the subject.'), fileField,
           covers?.node, upload, uploadFeedback);
         bindForm(uploadForm, upload, uploadFeedback, async () => {
           const placement = {title: textValue(title, 'Title'), subject: textValue(subject, 'Subject'),
-            chapter: textValue(chapter, 'Chapter'), folderId: folder.id};
+            chapter: chapter.value.trim(), folderId: folder.id};
           const query = new URLSearchParams(placement);
           const file = pdf.files[0];
           const video = type.value === 'video';

@@ -17,8 +17,9 @@ import { registerPublishedRoutes } from './published.js';
 import { courseCutoff, expiryInput, publishingMedia, requireActive } from './publishing-media.js';
 import { currentAffairs } from './current-affairs.js';
 import { registerWorkspaceRoutes } from './workspace-routes.js';
-import { folderView, idInput, validateFolderSnapshot } from './workspace.js';
+import { chapterInput, folderView, idInput, validateFolderSnapshot } from './workspace.js';
 import { approvedCourseOrder, isPublicResourceTest, legacyCourseOrder } from './course-entitlements.js';
+import { rankFirstAttempts } from './attempt-ranking.js';
 
 initializeApp();
 
@@ -245,6 +246,7 @@ function byNewest(a, b) {
 }
 
 const CURRENT_AFFAIRS_COURSE_ID = 'public-current-affairs';
+const FREE_TEST_COURSE_ID = 'public-free-tests';
 
 function publicCourse(item) {
   return {
@@ -267,7 +269,7 @@ async function course(id) {
 
 async function courseForSale(id) {
   const item = await course(id);
-  if (item.publicLearning) fail(404, 'Course not found.');
+  if (item.publicLearning || item.archived) fail(404, 'Course not found.');
   return item;
 }
 
@@ -280,6 +282,7 @@ async function requirePurchase(user, courseId, allowAdmin = true) {
   const item = await course(courseId);
   if (item.publicLearning) fail(404, 'Course not found.');
   if (allowAdmin && user.admin) return null;
+  if (item.archived) fail(404, 'Course not found.');
   const cutoff = requireActive(item);
   if (!await owned(user.uid, courseId)) fail(403, 'Purchase this course to unlock it.');
   return cutoff;
@@ -398,21 +401,21 @@ function createApp() {
     res.json(Object.fromEntries(['youtube', 'instagram', 'telegram'].map(key => [key, social?.[key] || ''])));
   });
   api.get('/courses', async (_req, res) => {
-    res.json((await queryCollection('courses')).filter(item => !item.publicLearning).sort(byNewest).map(publicCourse));
+    res.json((await queryCollection('courses')).filter(item => !item.publicLearning && !item.archived).sort(byNewest).map(publicCourse));
   });
   api.get('/ebooks', async (_req, res) => {
-    res.json((await queryCollection('ebooks')).sort(byNewest).map(book =>
+    res.json((await queryCollection('ebooks')).filter(book => !book.archived).sort(byNewest).map(book =>
       ({ id: book.id, title: book.title, description: book.description, price: book.price,
         pages: book.pages, demoPages: book.demoFile ? book.demoPages : 0, createdAt: book.createdAt })));
   });
   api.get('/ebooks/:id/demo', demoLimit, async (req, res) => {
     const book = value(await db.collection('ebooks').doc(req.params.id).get());
-    if (!book?.demoFile || !book.demoPages) fail(404, 'A demo is not available for this e-book.');
+    if (!book?.demoFile || !book.demoPages || book.archived) fail(404, 'A demo is not available for this e-book.');
     res.json({ id: book.id, title: book.title, pages: book.demoPages });
   });
   api.get('/ebooks/:id/demo/pages/:page', demoLimit, async (req, res) => {
     const book = value(await db.collection('ebooks').doc(req.params.id).get());
-    if (!book?.demoFile || !book.demoPages) fail(404, 'A demo is not available for this e-book.');
+    if (!book?.demoFile || !book.demoPages || book.archived) fail(404, 'A demo is not available for this e-book.');
     const page = Number(req.params.page);
     if (!Number.isInteger(page) || page < 1 || page > book.demoPages) fail(404, 'Page not found.');
     const [pdf] = await bucket.file(book.demoFile).download();
@@ -445,7 +448,7 @@ function createApp() {
     res.type('svg').send(await QRCode.toString(uri, { type: 'svg', margin: 1, errorCorrectionLevel: 'M' }));
   });
   api.get('/courses/:id/reviews', async (req, res) => {
-    await course(req.params.id);
+    await courseForSale(req.params.id);
     const reviews = (await db.collection('reviews').where('course', '==', req.params.id).get()).docs.map(value);
     const output = await Promise.all(reviews.sort(byNewest).slice(0, 100).map(async review => {
       const student = value(await db.collection('students').doc(review.uid).get());
@@ -496,7 +499,7 @@ function createApp() {
     res.json(videos.filter(video => {
       if (!video.course) return true;
       const selected = courseMap.get(video.course);
-      return selected && !selected.publicLearning &&
+      return selected && !selected.publicLearning && (req.user.admin || !selected.archived) &&
         (req.user.admin || (ownedCourses.has(video.course) && (courseCutoff(selected.expiresOn) ?? Infinity) > Date.now()));
     }).sort(byNewest).map(video => ({id: video.id, title: video.title, description: video.description,
       videoId: video.videoId, courseTitle: courseMap.get(video.course)?.title || '', createdAt: video.createdAt})));
@@ -505,6 +508,8 @@ function createApp() {
     const { uid, phone, admin: isAdmin } = req.user;
     const student = value(await db.collection('students').doc(uid).get());
     const orders = (await db.collection('orders').where('uid', '==', uid).get()).docs.map(value);
+    const purchased = orders.filter(approvedCourseOrder);
+    const selectedCourses = await Promise.all(purchased.map(order => db.collection('courses').doc(order.course).get()));
     res.json({
       uid,
       name: student?.name || '',
@@ -513,7 +518,10 @@ function createApp() {
       examPreference: student?.examPreference || '',
       examPreferences: student?.examPreferences || (student?.examPreference ?
         student.examPreference.split(',').map(item => item.trim()).filter(Boolean) : []),
-      purchases: orders.filter(approvedCourseOrder).map(order => order.course),
+      purchases: purchased.filter((_, index) => {
+        const selected = value(selectedCourses[index]);
+        return selected && !selected.archived;
+      }).map(order => order.course),
     });
   });
   api.put('/me', async (req, res) => {
@@ -653,15 +661,21 @@ function createApp() {
     const rawTests = (await db.collection('tests').where('course', '==', id).get()).docs.map(value).sort(byNewest).reverse();
     const completed = (await db.collection('attempts').where('uid', '==', req.user.uid)
       .where('course', '==', id).get()).docs.map(value);
-    const completedTests = new Set(completed.map(attempt => attempt.test));
+    const firstByTest = new Map();
+    for (const attempt of [...completed].sort((a, b) =>
+      String(a.createdAt).localeCompare(String(b.createdAt)) || String(a.id).localeCompare(String(b.id)))) {
+      if (!firstByTest.has(attempt.test)) firstByTest.set(attempt.test, attempt);
+    }
     const tests = rawTests.map(item => ({ id: item.id, title: item.title, folderId: item.folderId ?? null, live: Boolean(item.live),
       startsAt: item.startsAt || '', expiresAt: item.expiresAt || '', durationMinutes: item.durationMinutes || 0,
       questionPaperDownload: Boolean(item.questionPaperDownload),
-      completedAttempt: completedTests.has(item.id) }));
+      completedAttempt: firstByTest.has(item.id),
+      firstAttempt: firstByTest.has(item.id) ? {score: firstByTest.get(item.id).score,
+        maxMarks: firstByTest.get(item.id).maxMarks || firstByTest.get(item.id).total} : null }));
     const books = (await db.collection('books').where('course', '==', id).get()).docs.map(value)
       .sort((a, b) => `${a.subject || ''}${a.chapter || ''}`.localeCompare(`${b.subject || ''}${b.chapter || ''}`))
       .map(item => ({ id: item.id, title: item.title, folderId: item.folderId ?? null, pages: item.pages,
-        subject: item.subject || 'General', chapter: item.chapter || 'Chapter 1', images: item.images || [] }));
+        subject: item.subject || 'General', chapter: item.chapter ?? 'Chapter 1', images: item.images || [] }));
     const videos = (await db.collection('chapterVideos').where('course', '==', id).get()).docs.map(value).sort(byNewest)
       .map(({ id, title, subject, chapter, type, size, folderId }) => ({ id, title, subject, chapter, type, size, folderId: folderId ?? null }));
     const folders = (await db.collection('courseFolders').where('course', '==', id).get()).docs.map(value).map(folderView);
@@ -759,7 +773,7 @@ function createApp() {
         transaction.get(referralRef), transaction.get(db.collection('courses').doc(id)),
       ]);
       const currentCourse = value(courseSnapshot);
-      if (!currentCourse) fail(404, 'Course not found.');
+      if (!currentCourse || currentCourse.archived) fail(404, 'Course not found.');
       requireActive(currentCourse);
       const { price } = currentCourse;
       const existingOrders = orderSnapshots.docs.map(value);
@@ -806,7 +820,7 @@ function createApp() {
   });
   api.get('/ebooks/:id/payment', async (req, res) => {
     const book = value(await db.collection('ebooks').doc(req.params.id).get());
-    if (!book) fail(404, 'E-book not found.');
+    if (!book || book.archived) fail(404, 'E-book not found.');
     const orders = (await db.collection('ebookOrders').where('uid', '==', req.user.uid)
       .where('ebook', '==', book.id).limit(1).get()).docs.map(value);
     const item = orders[0];
@@ -820,7 +834,7 @@ function createApp() {
   });
   api.post('/ebooks/:id/payment', paymentLimit, async (req, res) => {
     const book = value(await db.collection('ebooks').doc(req.params.id).get());
-    if (!book) fail(404, 'E-book not found.');
+    if (!book || book.archived) fail(404, 'E-book not found.');
     const details = await paymentDetails();
     if (!details.configured) fail(503, 'Payment details are not configured.');
     const reference = paymentReference(req.body?.reference);
@@ -829,11 +843,16 @@ function createApp() {
     const orderRef = db.collection('ebookOrders').doc(orderId);
     const submittedAt = new Date().toISOString();
     await db.runTransaction(async transaction => {
-      const existing = value(await transaction.get(orderRef));
+      const [orderSnapshot, bookSnapshot] = await Promise.all([
+        transaction.get(orderRef), transaction.get(db.collection('ebooks').doc(book.id)),
+      ]);
+      const currentBook = value(bookSnapshot);
+      if (!currentBook || currentBook.archived) fail(404, 'E-book not found.');
+      const existing = value(orderSnapshot);
       if (existing?.paymentStatus === 'approved') fail(409, 'You already own this e-book.');
       if (existing?.paymentStatus === 'pending') fail(409, 'A payment request is already waiting for admin review.');
       transaction.set(orderRef, {
-        uid: req.user.uid, ebook: book.id, amount: book.price, transactionRef: reference,
+        uid: req.user.uid, ebook: book.id, amount: currentBook.price, transactionRef: reference,
         paymentNote: typeof req.body?.note === 'string' ? req.body.note.trim().slice(0, 500) : '',
         payment: '', paymentStatus: 'pending', reviewNote: '', submittedAt,
         reviewedAt: '', reviewedBy: '', createdAt: existing?.createdAt || submittedAt,
@@ -849,7 +868,7 @@ function createApp() {
   });
   async function ownedEbook(req, id) {
     const book = value(await db.collection('ebooks').doc(id).get());
-    if (!book) fail(404, 'E-book not found.');
+    if (!book || (book.archived && !req.user.admin)) fail(404, 'E-book not found.');
     if (!req.user.admin) {
       const order = await db.collection('ebookOrders').where('uid', '==', req.user.uid)
         .where('ebook', '==', id).where('paymentStatus', '==', 'approved').limit(1).get();
@@ -868,12 +887,46 @@ function createApp() {
   });
   api.get('/ebooks/:id/download', () => fail(403, 'Save this e-book inside the app instead.'));
 
+  async function freeMaterial(id) {
+    const item = value(await db.collection('freeMaterials').doc(id).get());
+    if (!item) fail(404, 'Free study material not found.');
+    return item;
+  }
+  const freeMaterialView = item => ({
+    id: item.id, title: item.title, pages: item.pages, downloadsEnabled: Boolean(item.downloadsEnabled),
+    createdAt: item.createdAt,
+  });
+  api.get('/free-materials', async (_req, res) => {
+    const items = await queryCollection('freeMaterials');
+    res.json(items.sort(byNewest).map(freeMaterialView));
+  });
+  api.get('/free-materials/:id', async (req, res) => res.json(freeMaterialView(await freeMaterial(req.params.id))));
+  api.get('/free-materials/:id/pages/:page', async (req, res) => {
+    const item = await freeMaterial(req.params.id);
+    const page = Number(req.params.page);
+    if (!Number.isSafeInteger(page) || page < 1 || page > item.pages) fail(404, 'Page not found.');
+    const [pdf] = await bucket.file(item.pdfFile).download();
+    const png = await processDocument(() => item.downloadsEnabled ?
+      renderUnmarkedPage(pdf, page) : renderPage(pdf, page, req.user.phone));
+    res.type('png').send(png);
+  });
+  api.get('/free-materials/:id/download', async (req, res) => {
+    const item = await freeMaterial(req.params.id);
+    if (!item.downloadsEnabled) fail(403, 'Downloading this material is disabled.');
+    const [pdf] = await bucket.file(item.pdfFile).download();
+    res.type('pdf').attachment(`${item.title.replace(/[^a-z0-9 ._-]+/gi, '_')}.pdf`).send(pdf);
+  });
+
   async function test(id) {
     const item = value(await db.collection('tests').doc(id).get());
-    if (!item) fail(404, 'Test not found.');
+    if (!item || item.deleting) fail(404, 'Test not found.');
     return item;
   }
   async function requireTestAccess(user, item) {
+    if (item.course === FREE_TEST_COURSE_ID) {
+      if (!item.published && !user.admin) fail(404, 'Test not found.');
+      return;
+    }
     if (isPublicResourceTest(item.course, item.resourceId)) {
       const resource = value(await db.collection('resources').doc(item.resourceId).get());
       if (!resource || resource.kind !== 'current-affairs') fail(404, 'Current Affairs resource not found.');
@@ -881,6 +934,23 @@ function createApp() {
     }
     await requirePurchase(user, item.course);
   }
+  api.get('/free-tests', async (req, res) => {
+    const [snapshot, attempts] = await Promise.all([
+      db.collection('tests').where('course', '==', FREE_TEST_COURSE_ID).get(),
+      db.collection('attempts').where('uid', '==', req.user.uid).get(),
+    ]);
+    const mine = attempts.docs.map(value);
+    res.json(snapshot.docs.map(value).filter(item => item.published && !item.deleting).sort(byNewest).map(item => {
+      const testAttempts = mine.filter(attempt => attempt.test === item.id);
+      const first = testAttempts
+        .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)) || a.id.localeCompare(b.id))[0];
+      return {id: item.id, title: item.title, questionCount: item.questions.length,
+        durationMinutes: item.durationMinutes, marksPerQuestion: item.marksPerQuestion,
+        live: Boolean(item.live), attemptsLimit: item.attemptsLimit, attempts: testAttempts.length,
+        startsAt: item.startsAt, expiresAt: item.expiresAt,
+        firstAttempt: first ? {score: first.score, maxMarks: first.maxMarks || first.total} : null};
+    }));
+  });
   api.get('/tests/:id', async (req, res) => {
     const item = await test(req.params.id);
     await requireTestAccess(req.user, item);
@@ -934,20 +1004,31 @@ function createApp() {
     if (limited && attempts >= attemptsLimit) {
       fail(409, `You have used ${attemptsLimit} attempts. Unlimited attempts open after the live window ends.`);
     }
-    const active = await db.collection('examSessions').where('uid', '==', req.user.uid)
-      .where('test', '==', item.id).where('active', '==', true).limit(1).get();
-    if (!active.empty) {
-      const session = value(active.docs[0]);
-      return res.json({ id: session.id, startedAt: session.startedAt,
-        answers: Array.isArray(session.answers) ? session.answers : [],
-        marked: Array.isArray(session.marked) ? session.marked : [] });
-    }
-    const id = randomUUID();
-    const startedAt = new Date().toISOString();
-    await db.collection('examSessions').doc(id).create({
-      uid: req.user.uid, test: item.id, startedAt, answers: [], marked: [], active: true,
+    const outcome = await db.runTransaction(async tx => {
+      const [current, active] = await Promise.all([
+        tx.get(db.collection('tests').doc(item.id)),
+        tx.get(db.collection('examSessions').where('uid', '==', req.user.uid)
+          .where('test', '==', item.id).where('active', '==', true).limit(1)),
+      ]);
+      if (!current.exists || current.data().deleting ||
+          (current.data().course === FREE_TEST_COURSE_ID && !current.data().published && !req.user.admin)) {
+        fail(404, 'Test not found.');
+      }
+      if (!active.empty) {
+        const session = value(active.docs[0]);
+        return {existing: true, id: session.id, startedAt: session.startedAt,
+          answers: Array.isArray(session.answers) ? session.answers : [],
+          marked: Array.isArray(session.marked) ? session.marked : []};
+      }
+      const id = randomUUID();
+      const startedAt = new Date().toISOString();
+      tx.create(db.collection('examSessions').doc(id), {
+        uid: req.user.uid, test: item.id, startedAt, answers: [], marked: [], active: true,
+      });
+      return {existing: false, id, startedAt};
     });
-    res.status(201).json({ id, startedAt });
+    const {existing, ...session} = outcome;
+    res.status(existing ? 200 : 201).json(session);
   });
   api.put('/tests/:id/progress', async (req, res) => {
     await requireTestAccess(req.user, await test(req.params.id));
@@ -1014,20 +1095,26 @@ function createApp() {
       timedOut,
       questionPaperDownload: Boolean(item.questionPaperDownload),
     };
-    const attemptId = await createWithId('attempts', {
-      uid: req.user.uid,
-      course: item.course,
-      test: item.id,
-      title: item.title,
-      score,
-      total: questions.length,
-      answers,
-      maxMarks: total,
-      negative: wrong * penalty,
-      elapsedSeconds: elapsed,
-      sectionScores,
+    const attemptId = randomUUID();
+    await db.runTransaction(async tx => {
+      const [current, currentSession, prior] = await Promise.all([
+        tx.get(db.collection('tests').doc(item.id)), tx.get(active.docs[0].ref),
+        tx.get(db.collection('attempts').where('uid', '==', req.user.uid).where('test', '==', item.id)),
+      ]);
+      if (!current.exists || current.data().deleting ||
+          (current.data().course === FREE_TEST_COURSE_ID && !current.data().published && !req.user.admin)) {
+        fail(404, 'Test not found.');
+      }
+      if (!currentSession.exists || !currentSession.data().active) fail(409, 'Start the test before submitting.');
+      const latest = prior.docs.map(value).reduce((max, entry) =>
+        Math.max(max, Date.parse(entry.createdAt) || 0), 0);
+      tx.create(db.collection('attempts').doc(attemptId), {
+        uid: req.user.uid, course: item.course, test: item.id, title: item.title,
+        score, total: questions.length, answers, maxMarks: total, negative: wrong * penalty,
+        elapsedSeconds: elapsed, sectionScores, createdAt: new Date(Math.max(Date.now(), latest + 1)).toISOString(),
+      });
+      tx.update(active.docs[0].ref, { active: false });
     });
-    await active.docs[0].ref.update({ active: false });
     res.json({...result, attemptId});
   });
   api.get('/attempts/:id/result.pdf', async (req, res) => {
@@ -1043,10 +1130,9 @@ function createApp() {
     attempt.correct = questions.filter((question,index) => attempt.answers[index] === question.answer).length;
     attempt.wrong = questions.filter((question,index) => attempt.answers[index] !== null && attempt.answers[index] !== question.answer).length;
     attempt.unanswered = questions.length - attempt.correct - attempt.wrong;
-    const ranked = (await db.collection('attempts').where('test','==',attempt.test).get()).docs.map(value);
-    const best = [...new Map(ranked.sort((a,b)=>b.score-a.score || a.elapsedSeconds-b.elapsedSeconds)
-      .map(item => [item.uid,item])).values()].sort((a,b)=>b.score-a.score || a.elapsedSeconds-b.elapsedSeconds);
-    const rank = best.findIndex(item => item.uid === req.user.uid) + 1;
+    const ranked = (await db.collection('attempts').where('test','==',attempt.test).get()).docs.map(value)
+      .filter(item => !selectedTest.live || Date.parse(item.createdAt) <= Date.parse(selectedTest.expiresAt));
+    const rank = rankFirstAttempts(ranked).find(item => item.uid === req.user.uid)?.rank;
     res.type('pdf').attachment(`${selectedTest.title}-result.pdf`).send(
       await buildResultPdf({student:value(student) || {phone:req.user.phone}, attempt,
         course: linkedResource ? {...selectedCourse, title: linkedResource.title} : selectedCourse,
@@ -1091,22 +1177,11 @@ function createApp() {
     }
     const snapshots = (await db.collection('attempts').where('test', '==', item.id).get()).docs.map(value)
       .filter(attempt => Date.parse(attempt.createdAt) <= expires);
-    const byBest = new Map();
-    for (const attempt of snapshots.sort((a, b) => b.score - a.score ||
-      a.elapsedSeconds - b.elapsedSeconds || String(a.createdAt).localeCompare(String(b.createdAt)))) {
-      if (!byBest.has(attempt.uid)) byBest.set(attempt.uid, attempt);
-    }
-    let previous = null;
     const rows = [];
-    let index = 0;
-    for (const entry of [...byBest.values()]) {
-      index++;
-      if (!previous || entry.score !== previous.score || entry.elapsedSeconds !== previous.elapsedSeconds) {
-        previous = {...entry, rank: index};
-      }
+    for (const entry of rankFirstAttempts(snapshots)) {
       const student = value(await db.collection('students').doc(entry.uid).get());
       const name = student?.name || 'Student';
-      rows.push({rank: previous.rank, name: entry.uid === req.user.uid ? name : `${name.slice(0, 1)}.`,
+      rows.push({rank: entry.rank, name: entry.uid === req.user.uid ? name : `${name.slice(0, 1)}.`,
         score: entry.score, maxMarks: entry.maxMarks, elapsedSeconds: entry.elapsedSeconds,
         attempts: snapshots.filter(attempt => attempt.uid === entry.uid).length,
         isCurrentUser: entry.uid === req.user.uid});
@@ -1149,8 +1224,9 @@ function createApp() {
   api.get('/notifications', async (req, res) => {
     const orders = (await db.collection('orders').where('uid', '==', req.user.uid).get()).docs.map(value)
       .sort(byNewest).slice(0, 50);
-    const paymentNotices = await Promise.all(orders.map(async order => {
+    const paymentNotices = (await Promise.all(orders.map(async order => {
       const selected = value(await db.collection('courses').doc(order.course).get());
+      if (selected?.archived) return null;
       const title = typeof selected?.title === 'string' && selected.title.trim() ? selected.title : 'Course';
       return {
         id: `payment-${order.id}`,
@@ -1163,10 +1239,12 @@ function createApp() {
         date: order.submittedAt,
         unread: order.paymentStatus === 'pending',
       };
-    }));
-    const owned = new Set(orders.filter(approvedCourseOrder).map(order => order.course));
+    }))).filter(Boolean);
+    const courses = await queryCollection('courses');
+    const visibleCourses = new Set(courses.filter(item => !item.archived).map(item => item.id));
+    const owned = new Set(orders.filter(order => approvedCourseOrder(order) && visibleCourses.has(order.course)).map(order => order.course));
     const liveTests = (await db.collection('tests').where('live', '==', true).get()).docs.map(value)
-      .filter(test => owned.has(test.course) && (!test.expiresAt || Date.parse(test.expiresAt) > Date.now()))
+      .filter(test => !test.deleting && owned.has(test.course) && (!test.expiresAt || Date.parse(test.expiresAt) > Date.now()))
       .sort((a, b) => String(a.startsAt).localeCompare(String(b.startsAt))).slice(0, 20)
       .map(test => ({
         id: `live-test-${test.id}`,
@@ -1182,10 +1260,20 @@ function createApp() {
     if (!['current-affairs', 'pyqs', 'syllabus'].includes(req.params.kind)) fail(404, 'Content not found.');
     const resources = (await db.collection('resources').where('kind', '==', req.params.kind).get()).docs.map(value);
     const linkedTests = req.params.kind === 'current-affairs' ?
-      (await queryCollection('tests')).filter(item => item.resourceId) : [];
+      (await queryCollection('tests')).filter(item => item.resourceId && !item.deleting) : [];
+    const attempts = req.params.kind === 'current-affairs' ?
+      (await db.collection('attempts').where('uid', '==', req.user.uid)
+        .where('course', '==', CURRENT_AFFAIRS_COURSE_ID).get()).docs.map(value) : [];
+    const firstByTest = new Map();
+    for (const attempt of attempts.sort((a, b) =>
+      String(a.createdAt).localeCompare(String(b.createdAt)) || String(a.id).localeCompare(String(b.id)))) {
+      if (!firstByTest.has(attempt.test)) firstByTest.set(attempt.test, attempt);
+    }
     const testsByResource = new Map(linkedTests.map(item => [item.resourceId, {
       id: item.id, title: item.title, live: Boolean(item.live),
       startsAt: item.startsAt || '', expiresAt: item.expiresAt || '',
+      firstAttempt: firstByTest.has(item.id) ? {score: firstByTest.get(item.id).score,
+        maxMarks: firstByTest.get(item.id).maxMarks || firstByTest.get(item.id).total} : null,
     }]));
     res.json(resources.map(item => ({
       ...item,
@@ -1237,7 +1325,7 @@ function createApp() {
         students: new Set(results.map(result => result.uid)).size, attempts: results.length, average};
     }));
     res.json({
-      students: students.length, courses: courses.filter(item => !item.publicLearning).length,
+      students: students.length, courses: courses.filter(item => !item.publicLearning && !item.archived).length,
       purchases: approved.length + ebookOrders.filter(order => Boolean(order.payment)).length,
       revenue: approved.reduce((sum, order) => sum + Number(order.amount || 0), 0) +
         ebookOrders.filter(order => Boolean(order.payment)).reduce((sum, order) => sum + Number(order.amount || 0), 0),
@@ -1263,11 +1351,8 @@ function createApp() {
       const student = value(await db.collection('students').doc(result.uid).get());
       return {...result, name: student?.name || 'Student'};
     }));
-    const best = new Map();
-    for (const result of entries.sort((a,b) => b.score-a.score || String(a.createdAt).localeCompare(String(b.createdAt)))) {
-      if (!best.has(result.uid)) best.set(result.uid, result);
-    }
-    const finalRows = [...best.values()];
+    const finalRows = rankFirstAttempts(entries.filter(result =>
+      !selected.live || Date.parse(result.createdAt) <= Date.parse(selected.expiresAt)));
     const pdf = await PDFDocument.create();
     const regular = await pdf.embedFont(StandardFonts.Helvetica), bold = await pdf.embedFont(StandardFonts.HelveticaBold);
     let page = pdf.addPage([595,842]);
@@ -1279,7 +1364,7 @@ function createApp() {
     let y=725;
     finalRows.forEach((result,index)=>{
       page.drawRectangle({x:36,y:y-8,width:523,height:24,color:index%2?rgb(1,1,1):rgb(.94,.98,.96),borderColor:rgb(.15,.25,.35),borderWidth:.35});
-      page.drawText(String(index+1),{x:51,y,size:9,font:regular});
+      page.drawText(String(result.rank),{x:51,y,size:9,font:regular});
       page.drawText(result.name,{x:105,y,size:9,font:regular});
       page.drawText(`${result.score} / ${result.maxMarks||result.total||0}`,{x:480,y,size:9,font:bold});
       y-=25;
@@ -1625,7 +1710,9 @@ function createApp() {
     res.status(201).json({ id });
   });
   api.post('/admin/courses/:id/tests', async (req, res) => {
-    const { id: courseId } = await course(req.params.id);
+    const selectedCourse = await course(req.params.id);
+    if (selectedCourse.publicLearning) fail(404, 'Course not found.');
+    const courseId = selectedCourse.id;
     const folderId = idInput(req.body?.folderId === undefined ? null : req.body.folderId);
     const testRecord = testValues(req.body ?? {}, courseId, folderId);
     const id = randomUUID();
@@ -1642,8 +1729,93 @@ function createApp() {
     });
     res.status(201).json({ id });
   });
+  api.post('/admin/free-tests', async (req, res) => {
+    const testRecord = testValues(req.body ?? {}, FREE_TEST_COURSE_ID, null);
+    const id = randomUUID();
+    const createdAt = new Date().toISOString();
+    await db.runTransaction(async tx => {
+      const courseRef = db.collection('courses').doc(FREE_TEST_COURSE_ID);
+      const category = await tx.get(courseRef);
+      if (category.exists && (!category.data().publicLearning || category.data().title !== 'Free Test Series')) {
+        fail(409, 'The reserved free-test category is unavailable.');
+      }
+      if (!category.exists) tx.create(courseRef, {
+        title: 'Free Test Series', description: '', price: 0, publicLearning: true, createdAt,
+      });
+      tx.create(db.collection('tests').doc(id), {...testRecord, createdAt, published: true});
+    });
+    res.status(201).json({id});
+  });
+  api.put('/admin/free-tests/:id/publication', async (req, res) => {
+    if (typeof req.body?.published !== 'boolean') fail(422, 'Choose a valid publication status.');
+    const ref = db.collection('tests').doc(req.params.id);
+    await db.runTransaction(async tx => {
+      const item = value(await tx.get(ref));
+      if (!item || item.deleting || item.course !== FREE_TEST_COURSE_ID) fail(404, 'Free test not found.');
+      tx.update(ref, {published: req.body.published});
+    });
+    res.sendStatus(204);
+  });
   api.post('/admin/import', raw, async (req, res) => {
     res.json({ questions: await processDocument(() => importQuestions(req.body, req.query.format)) });
+  });
+  api.post('/admin/free-materials', raw, async (req, res) => {
+    const title = text(req.query.title, 'Title', 120);
+    if (!['true', 'false'].includes(req.query.downloadsEnabled)) fail(422, 'Choose whether downloads are allowed.');
+    const pages = await processDocument(() => pageCount(req.body));
+    const id = randomUUID();
+    const pdfFile = `free-materials/${id}/${randomUUID()}.pdf`;
+    await bucket.file(pdfFile).save(req.body, {resumable: false, contentType: 'application/pdf',
+      metadata: {cacheControl: 'private, no-store'}});
+    try {
+      await db.collection('freeMaterials').doc(id).create({
+        title, pages, pdfFile, downloadsEnabled: req.query.downloadsEnabled === 'true',
+        createdAt: new Date().toISOString(),
+      });
+    } catch (error) {
+      await bucket.file(pdfFile).delete({ignoreNotFound: true});
+      throw error;
+    }
+    res.status(201).json({id});
+  });
+  api.put('/admin/free-materials/:id', raw, async (req, res) => {
+    const binary = Buffer.isBuffer(req.body);
+    const values = binary ? req.query : req.body;
+    const title = text(values?.title, 'Title', 120);
+    const allowed = binary ? values.downloadsEnabled === 'true' : values?.downloadsEnabled;
+    if (binary ? !['true', 'false'].includes(values.downloadsEnabled) : typeof allowed !== 'boolean') {
+      fail(422, 'Choose whether downloads are allowed.');
+    }
+    const pages = binary ? await processDocument(() => pageCount(req.body)) : null;
+    const ref = db.collection('freeMaterials').doc(req.params.id);
+    const pdfFile = binary ? `free-materials/${req.params.id}/${randomUUID()}.pdf` : null;
+    if (pdfFile) await bucket.file(pdfFile).save(req.body, {resumable: false, contentType: 'application/pdf',
+      metadata: {cacheControl: 'private, no-store'}});
+    let oldFile;
+    try {
+      oldFile = await db.runTransaction(async tx => {
+        const snapshot = await tx.get(ref);
+        if (!snapshot.exists) fail(404, 'Free study material not found.');
+        tx.update(ref, {title, downloadsEnabled: allowed, ...(binary ? {pages, pdfFile} : {})});
+        return snapshot.data().pdfFile;
+      });
+    } catch (error) {
+      if (pdfFile) await bucket.file(pdfFile).delete({ignoreNotFound: true});
+      throw error;
+    }
+    if (pdfFile) await bucket.file(oldFile).delete({ignoreNotFound: true});
+    res.sendStatus(204);
+  });
+  api.delete('/admin/free-materials/:id', async (req, res) => {
+    const ref = db.collection('freeMaterials').doc(req.params.id);
+    const pdfFile = await db.runTransaction(async tx => {
+      const snapshot = await tx.get(ref);
+      if (!snapshot.exists) fail(404, 'Free study material not found.');
+      tx.delete(ref);
+      return snapshot.data().pdfFile;
+    });
+    await bucket.file(pdfFile).delete({ignoreNotFound: true});
+    res.sendStatus(204);
   });
   api.post('/admin/courses/:id/books', raw, async (req, res) => {
     const { id: courseId } = await course(req.params.id);
@@ -1661,7 +1833,7 @@ function createApp() {
     try {
       const book = {
         course: courseId, title, pages, images, folderId, subject: text(req.query.subject || 'General', 'Subject', 100),
-        chapter: text(req.query.chapter || 'Chapter 1', 'Chapter', 120), createdAt: new Date().toISOString(),
+        chapter: chapterInput(req.query.chapter ?? (folderId ? '' : 'Chapter 1')), createdAt: new Date().toISOString(),
       };
       await db.runTransaction(async tx => {
         const courseRef = db.collection('courses').doc(courseId);
@@ -1687,7 +1859,7 @@ function createApp() {
     if (!Buffer.isBuffer(req.body)) fail(400, 'Upload a replacement PDF.');
     const title = text(req.query.title, 'Title', 120);
     const subject = text(req.query.subject, 'Subject', 100);
-    const chapter = text(req.query.chapter, 'Chapter', 120);
+    const chapter = chapterInput(req.query.chapter);
     const images = req.query.images === undefined ? existing.images || [] :
       await media.validate(String(req.query.images).split(','));
     const pages = await processDocument(() => pageCount(req.body));
@@ -1721,7 +1893,7 @@ function createApp() {
   });
   api.get('/admin/ebooks', async (_req, res) => {
     const [books, orders] = await Promise.all([queryCollection('ebooks'), queryCollection('ebookOrders')]);
-    res.json(books.sort(byNewest).map(book => ({
+    res.json(books.filter(book => !book.archived).sort(byNewest).map(book => ({
       id: book.id, title: book.title, description: book.description, price: book.price,
       pages: book.pages, demoPages: book.demoFile ? book.demoPages : 0, createdAt: book.createdAt,
       orders: orders.filter(order => order.ebook === book.id).length,
@@ -1816,13 +1988,28 @@ function createApp() {
     res.sendStatus(204);
   });
   api.delete('/admin/ebooks/:id', async (req, res) => {
-    const book = await db.collection('ebooks').doc(req.params.id).get();
-    if (!book.exists) fail(404, 'E-book not found.');
-    const orders = await db.collection('ebookOrders').where('ebook', '==', req.params.id).limit(1).get();
-    if (!orders.empty) fail(409, 'This e-book has purchase requests and cannot be deleted.');
-    await Promise.all([book.ref.delete(), bucket.file(book.data().pdfFile || `ebooks/${req.params.id}.pdf`).delete({ ignoreNotFound: true }),
-      ...(book.data().demoFile ? [bucket.file(book.data().demoFile).delete({ ignoreNotFound: true })] : [])]);
-    res.sendStatus(204);
+    const ref = db.collection('ebooks').doc(req.params.id);
+    const result = await db.runTransaction(async tx => {
+      const book = value(await tx.get(ref));
+      if (!book) fail(404, 'E-book not found.');
+      const orders = await tx.get(db.collection('ebookOrders').where('ebook', '==', req.params.id).limit(1));
+      if (!orders.empty) {
+        tx.update(ref, {archived: true});
+        return {archived: true};
+      }
+      tx.delete(ref);
+      return {archived: false, book};
+    });
+    if (!result.archived) {
+      try {
+        await Promise.all([bucket.file(result.book.pdfFile || `ebooks/${req.params.id}.pdf`).delete({ ignoreNotFound: true }),
+          ...(result.book.demoFile ? [bucket.file(result.book.demoFile).delete({ ignoreNotFound: true })] : [])]);
+      } catch (error) {
+        console.error('E-book media cleanup failed:', req.params.id, error.code);
+        return res.json({deleted: true, archived: false, warning: 'The e-book was deleted, but its stored files could not be removed.'});
+      }
+    }
+    res.json({ deleted: !result.archived, archived: result.archived });
   });
   api.get('/admin/payments', async (_req, res) => {
     const [courseOrders, ebookOrders] = await Promise.all([queryCollection('orders'), queryCollection('ebookOrders')]);

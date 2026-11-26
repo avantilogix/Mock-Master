@@ -62,6 +62,314 @@ async function signIn(page, phone = '98765 43210') {
   signedInPages.add(page);
 }
 
+test('notification bell is in the mobile header instead of quick access', async ({page}) => {
+  await page.setViewportSize({width: 390, height: 844});
+  await signIn(page);
+  await page.goto('/#home');
+  const bell = page.locator('.site-header').getByRole('link', {name: 'Notifications'});
+  await expect(bell.locator('use')).toHaveAttribute('href', /#bell$/);
+  await expect(bell).toBeVisible();
+  await expect(page.locator('.shortcut-grid').getByRole('link', {name: /Notifications/})).toHaveCount(0);
+  const bounds = await bell.boundingBox();
+  expect(bounds.x + bounds.width).toBeGreaterThan(330);
+  await bell.click();
+  await expect(page).toHaveURL(/#notifications$/);
+});
+
+test('exam navigation asks before submitting and protects browser back', async ({page, request}) => {
+  const admin = {Authorization: 'Bearer dummy:+919999999999'};
+  const student = {Authorization: 'Bearer dummy:+919876543210'};
+  const created = await request.post('/api/admin/free-tests', {headers: admin,
+    data: {title: `Exit guard ${Date.now()}`, questions: [{prompt: 'Pick four', options: ['3', '4'], answer: 1}]}});
+  expect(created.status()).toBe(201);
+  const {id} = await created.json();
+  try {
+    await signIn(page);
+    await page.goto('/#free-tests');
+    await page.locator('article').filter({hasText: 'Exit guard'}).getByRole('link', {name: 'Start Test'}).click();
+    await page.locator('.exam-option').nth(1).click();
+    page.once('dialog', dialog => dialog.dismiss());
+    await page.getByRole('link', {name: 'Back to Free Test Series'}).click();
+    await expect(page.getByRole('button', {name: 'Submit Exam'})).toBeVisible();
+    page.once('dialog', dialog => dialog.dismiss());
+    await page.goBack();
+    await expect(page.getByRole('button', {name: 'Submit Exam'})).toBeVisible();
+    expect((await (await request.get('/api/progress', {headers: student})).json()).attempts
+      .filter(attempt => attempt.test === id)).toHaveLength(0);
+    page.once('dialog', dialog => dialog.dismiss());
+    await page.locator('.site-header').getByRole('link', {name: 'Notifications'}).click();
+    await expect(page.getByRole('button', {name: 'Submit Exam'})).toBeVisible();
+    page.once('dialog', dialog => dialog.accept());
+    await page.goBack();
+    await expect(page.getByRole('heading', {name: 'Your Result'})).toBeVisible();
+    await expect(page.getByRole('img', {name: 'Score 1 out of 1 marks'})).toBeVisible();
+    await page.locator('.site-header').getByRole('link', {name: 'Notifications'}).click();
+    await expect(page).toHaveURL(/#notifications$/);
+  } finally {
+    await request.delete(`/api/admin/published/tests/${id}`, {headers: admin});
+  }
+});
+
+test('second background switch submits once and retries a failed submission', async ({page, request}) => {
+  const admin = {Authorization: 'Bearer dummy:+919999999999'};
+  const student = {Authorization: 'Bearer dummy:+919876543210'};
+  const created = await request.post('/api/admin/free-tests', {headers: admin,
+    data: {title: `Switch guard ${Date.now()}`, questions: [{prompt: 'Pick four', options: ['3', '4'], answer: 1}]}});
+  expect(created.status()).toBe(201);
+  const {id} = await created.json();
+  try {
+    await signIn(page);
+    await page.goto('/#free-tests');
+    await page.locator('article').filter({hasText: 'Switch guard'}).getByRole('link', {name: 'Start Test'}).click();
+    await page.locator('.exam-option').nth(1).click();
+    const visibility = state => page.evaluate(value => {
+      Object.defineProperty(document, 'visibilityState', {configurable: true, get: () => value});
+      document.dispatchEvent(new Event('visibilitychange'));
+    }, state);
+    await visibility('hidden');
+    await visibility('hidden');
+    await visibility('visible');
+    await expect(page.getByRole('alert')).toContainText('A second switch will submit');
+    expect((await (await request.get('/api/progress', {headers: student})).json()).attempts
+      .filter(attempt => attempt.test === id)).toHaveLength(0);
+    page.once('dialog', dialog => dialog.accept());
+    await page.reload();
+    await expect(page.getByRole('alert')).toContainText('A second switch will submit');
+    let failed = false;
+    await page.route(`**/api/tests/${id}/submit`, async route => {
+      if (!failed) {
+        failed = true;
+        await route.fulfill({status: 503, contentType: 'application/json', body: JSON.stringify({error: 'Test failure'})});
+      } else await route.continue();
+    });
+    await visibility('hidden');
+    await expect(page.getByRole('button', {name: 'Retry Submission'})).toBeVisible();
+    await expect(page.locator('.exam-option input').first()).toBeDisabled();
+    await visibility('visible');
+    await expect(page.getByRole('heading', {name: 'Your Result'})).toBeVisible();
+    await expect(page.getByText('Your test was submitted automatically after a second tab or app switch.')).toBeVisible();
+    await expect(page.getByRole('img', {name: 'Score 1 out of 1 marks'})).toBeVisible();
+    expect((await (await request.get('/api/progress', {headers: student})).json()).attempts
+      .filter(attempt => attempt.test === id)).toHaveLength(1);
+  } finally {
+    await request.delete(`/api/admin/published/tests/${id}`, {headers: admin});
+  }
+});
+
+test('free study material can be published, viewed, updated and deleted', async ({page, request}) => {
+  await page.setViewportSize({width: 390, height: 844});
+  const title = `Free PDF ${Date.now()}`;
+  const admin = {Authorization: 'Bearer dummy:+919999999999'};
+  const student = {Authorization: 'Bearer dummy:+919876543210'};
+  await signIn(page, '99999 99999');
+  await page.goto('/#admin');
+  await page.getByRole('button', {name: /Free Study Material/}).click();
+  await page.getByRole('button', {name: 'Add Free Study Material'}).click();
+  await page.getByLabel('Title', {exact: true}).fill(title);
+  await page.getByLabel('Choose File').setInputFiles({name: 'sample.pdf', mimeType: 'application/pdf', buffer: samplePdf()});
+  await page.getByRole('button', {name: 'Publish Material'}).click();
+  const card = page.locator('.manage-item').filter({hasText: title});
+  await expect(card).toBeVisible();
+  const item = (await (await request.get('/api/free-materials', {headers: admin})).json()).find(row => row.title === title);
+  expect(item).toBeTruthy();
+  expect((await request.get(`/api/free-materials/${item.id}/download`, {headers: student})).status()).toBe(403);
+  await card.getByRole('button', {name: 'Edit'}).click();
+  await card.getByLabel('Title', {exact: true}).fill(`${title} edited`);
+  await card.getByLabel('Replace PDF (optional)').setInputFiles({name: 'replacement.pdf', mimeType: 'application/pdf', buffer: samplePdf()});
+  await card.getByRole('switch', {name: 'Allow PDF download'}).check();
+  await card.getByRole('button', {name: 'Save Changes'}).click();
+  const edited = page.locator('.manage-item').filter({hasText: `${title} edited`});
+  await expect(edited).toBeVisible();
+  expect((await request.get(`/api/free-materials/${item.id}/download`, {headers: student})).status()).toBe(200);
+  await signIn(page);
+  await page.goto('/#home');
+  await page.getByRole('link', {name: /Free Study Material/}).click();
+  const material = page.locator('article').filter({hasText: `${title} edited`});
+  await expect(material.getByRole('button', {name: 'Download'})).toBeVisible();
+  const downloadPromise = page.waitForEvent('download');
+  await material.getByRole('button', {name: 'Download'}).click();
+  expect((await downloadPromise).suggestedFilename()).toMatch(/\.pdf$/);
+  await material.getByRole('link', {name: 'View PDF'}).click();
+  await expect(page.getByRole('region', {name: `${title} edited PDF pages`})).toBeVisible();
+  await expect(page.locator('.pdf-reader-pages img').first()).toBeVisible();
+  await signIn(page, '99999 99999');
+  await page.goto('/#admin');
+  await page.getByRole('button', {name: /Free Study Material/}).click();
+  const toDelete = page.locator('.manage-item').filter({hasText: `${title} edited`});
+  await toDelete.getByRole('button', {name: 'Edit'}).click();
+  await toDelete.getByRole('switch', {name: 'Allow PDF download'}).uncheck();
+  await toDelete.getByRole('button', {name: 'Save Changes'}).click();
+  await expect(toDelete).toContainText('View only');
+  expect((await request.get(`/api/free-materials/${item.id}/download`, {headers: student})).status()).toBe(403);
+  await signIn(page);
+  await page.goto('/#free-materials');
+  const viewOnly = page.locator('article').filter({hasText: `${title} edited`});
+  await expect(viewOnly).toBeVisible();
+  await expect(viewOnly.getByRole('button', {name: 'Download'})).toHaveCount(0);
+  await viewOnly.getByRole('link', {name: 'View PDF'}).click();
+  await expect(page.locator('.pdf-reader-pages img').first()).toBeVisible();
+  await signIn(page, '99999 99999');
+  await page.goto('/#admin');
+  await page.getByRole('button', {name: /Free Study Material/}).click();
+  const finalCard = page.locator('.manage-item').filter({hasText: `${title} edited`});
+  await finalCard.getByRole('button', {name: 'Delete'}).click();
+  await finalCard.getByRole('button', {name: 'Yes, Delete'}).click();
+  await expect(finalCard).toHaveCount(0);
+  expect((await request.get(`/api/free-materials/${item.id}`, {headers: student})).status()).toBe(404);
+});
+
+test('free tests reuse manual and imported questions and respect publication', async ({page, request}) => {
+  await page.setViewportSize({width: 390, height: 844});
+  const suffix = Date.now();
+  const manualTitle = `Free manual ${suffix}`;
+  const importTitle = `Free import ${suffix}`;
+  const admin = {Authorization: 'Bearer dummy:+919999999999'};
+  const student = {Authorization: 'Bearer dummy:+919876543210'};
+  try {
+    await signIn(page, '99999 99999');
+    await page.goto('/#admin');
+    await page.getByRole('button', {name: /Free Test Series/}).click();
+    await page.getByRole('button', {name: 'Add Free Test'}).click();
+    const form = page.locator('.publish-test-panel');
+    await form.getByLabel('Test Creation Method').selectOption('manual');
+    await form.getByLabel('Test Title').fill(manualTitle);
+    const manual = form.locator('.manual-questions:not(.imported-question-review)');
+    await manual.getByLabel('Question Text').fill('What is 2 + 2?');
+    await manual.getByLabel('Option A', {exact: true}).fill('3');
+    await manual.getByLabel('Option B', {exact: true}).fill('4');
+    await manual.getByLabel('Option C', {exact: true}).fill('5');
+    await manual.getByLabel('Option D', {exact: true}).fill('6');
+    await manual.getByLabel('Correct Answer').selectOption('1');
+    await form.getByRole('button', {name: 'Publish Test'}).click();
+    const manualCard = page.locator('.manage-item').filter({hasText: manualTitle});
+    await expect(manualCard).toBeVisible();
+    await manualCard.locator('summary').click();
+    await manualCard.getByRole('button', {name: 'Unpublish'}).click();
+    await expect(manualCard.getByRole('button', {name: 'Publish', exact: true})).toBeVisible();
+    const adminList = await (await request.get('/api/admin/published', {headers: admin})).json();
+    const id = adminList.freeTests.find(item => item.title === manualTitle).id;
+    expect(adminList.tests.some(item => item.id === id)).toBe(false);
+    expect((await request.get(`/api/tests/${id}`, {headers: student})).status()).toBe(404);
+    await manualCard.getByRole('button', {name: 'Publish', exact: true}).click();
+    await expect(manualCard.getByRole('button', {name: 'Unpublish'})).toBeVisible();
+    await manualCard.getByRole('button', {name: 'Edit', exact: true}).click();
+    await manualCard.getByLabel('Test Title').fill(`${manualTitle} edited`);
+    await manualCard.getByRole('button', {name: 'Save Changes'}).click();
+    await expect(page.locator('.manage-item').filter({hasText: `${manualTitle} edited`})).toBeVisible();
+
+    await form.getByLabel('Test Creation Method').selectOption('existing');
+    await form.getByLabel('Test Title').fill(importTitle);
+    await form.getByLabel('Question File', {exact: false}).first().setInputFiles({
+      name: 'questions.txt', mimeType: 'text/plain',
+      buffer: Buffer.from('1. What is 2 + 2?\nA. 3\nB. 4\nAnswer: B'),
+    });
+    await form.locator('.publish-test-import').getByRole('button', {name: 'Import', exact: true}).click();
+    await expect(form.locator('.publish-test-import')).toContainText('Imported 1 questions');
+    await form.getByRole('button', {name: 'Publish Test'}).click();
+    await expect(page.locator('.manage-item').filter({hasText: importTitle})).toBeVisible();
+
+    await signIn(page);
+    await page.goto('/#home');
+    await page.getByRole('link', {name: /Free Test Series/}).click();
+    const card = page.locator('article').filter({hasText: `${manualTitle} edited`});
+    await expect(card).toContainText('1 question');
+    await card.getByRole('link', {name: 'Start Test'}).click();
+    await page.getByText('4', {exact: true}).click();
+    page.once('dialog', dialog => dialog.accept());
+    await page.getByRole('button', {name: 'Submit Exam'}).click();
+    await expect(page.getByRole('heading', {name: 'Your Result'})).toBeVisible();
+    await expect(page.getByRole('img', {name: 'Score 1 out of 1 marks'})).toBeVisible();
+    await page.getByRole('button', {name: 'Return to Free Test Series'}).click();
+    await expect(page.locator('article').filter({hasText: `${manualTitle} edited`})).toContainText('First attempt: 1/1');
+    await signIn(page, '99999 99999');
+    await page.goto('/#admin');
+    await page.getByRole('button', {name: /Free Test Series/}).click();
+    const deleteCard = page.locator('.manage-item').filter({hasText: `${manualTitle} edited`});
+    await deleteCard.locator('summary').click();
+    await deleteCard.getByRole('button', {name: 'Delete', exact: true}).click();
+    await deleteCard.getByRole('button', {name: 'Yes, Delete'}).click();
+    await expect(deleteCard).toHaveCount(0);
+    expect((await request.get(`/api/tests/${id}`, {headers: student})).status()).toBe(404);
+  } finally {
+    const response = await request.get('/api/admin/published', {headers: admin});
+    if (response.ok()) {
+      const data = await response.json();
+      for (const item of data.freeTests.filter(row => row.title.includes(String(suffix)))) {
+        await request.delete(`/api/admin/published/tests/${item.id}`, {headers: admin});
+      }
+    }
+  }
+});
+
+test('admin can remove a test with results and hide its course', async ({page, request}) => {
+  const suffix = Date.now().toString();
+  const title = `Deletion Course ${suffix}`;
+  const admin = {Authorization: 'Bearer dummy:+919999999999'};
+  const created = await request.post('/api/admin/courses', {headers: admin,
+    data: {title, description: 'Deletion workflow', price: 14900}});
+  expect(created.status()).toBe(201);
+  const {id} = await created.json();
+  const madeTest = await request.post(`/api/admin/courses/${id}/tests`, {headers: admin,
+    data: {title: 'Completed test', questions: [{prompt: '2 + 2?', options: ['3', '4'], answer: 1}]}});
+  const testId = (await madeTest.json()).id;
+  expect((await request.post(`/api/tests/${testId}/start`, {headers: admin})).status()).toBe(201);
+  expect((await request.post(`/api/tests/${testId}/submit`, {headers: admin, data: {answers: [1]}})).status()).toBe(200);
+  await signIn(page, '99999 99999');
+  await page.goto('/#admin');
+  await page.getByRole('button', {name: /Mock Tests/}).click();
+  const testCard = page.locator('.manage-item').filter({hasText: title});
+  await testCard.locator('summary').click();
+  await expect(testCard.getByText('1 student attempt')).toBeVisible();
+  await testCard.getByRole('button', {name: 'Delete', exact: true}).click();
+  await expect(testCard.getByRole('alert')).toContainText('student attempts, results and active sessions');
+  await testCard.getByRole('button', {name: 'Yes, Delete'}).click();
+  await expect(testCard).toHaveCount(0);
+  expect((await request.get(`/api/tests/${testId}`, {headers: admin})).status()).toBe(404);
+  await page.getByRole('button', {name: /All Areas/}).click();
+  await page.getByRole('button', {name: /^Courses/}).click();
+  const courseCard = page.locator('.manage-item').filter({hasText: title});
+  await courseCard.locator('summary').click();
+  await courseCard.getByRole('button', {name: 'Delete', exact: true}).click();
+  await expect(courseCard.getByRole('alert')).toContainText('payment records will be retained');
+  await courseCard.getByRole('button', {name: 'Yes, Delete'}).click();
+  await expect(courseCard).toHaveCount(0);
+  expect((await (await request.get('/api/courses')).json()).some(course => course.id === id)).toBe(false);
+});
+
+test('first test score stays beside start while later attempts reach progress', async ({page, request}) => {
+  const suffix = Date.now().toString();
+  const phone = `98768${suffix.slice(-5)}`;
+  const admin = {Authorization: 'Bearer dummy:+919999999999'};
+  const student = {Authorization: `Bearer dummy:+91${phone}`};
+  const title = `First Score ${suffix}`;
+  const created = await request.post('/api/admin/courses', {headers: admin,
+    data: {title, description: 'First score workflow', price: 14900}});
+  const {id} = await created.json();
+  const madeTest = await request.post(`/api/admin/courses/${id}/tests`, {headers: admin,
+    data: {title: 'First score test', questions: [{prompt: '2 + 2?', options: ['3', '4'], answer: 1}]}});
+  const testId = (await madeTest.json()).id;
+  expect((await request.get('/api/me', {headers: student})).status()).toBe(200);
+  const payment = await request.post(`/api/courses/${id}/payment`, {headers: student,
+    data: {reference: `TEST${suffix}`}});
+  expect(payment.status()).toBe(201);
+  expect((await request.post(`/api/admin/payments/${(await payment.json()).id}/approve`, {headers: admin, data: {}})).status()).toBe(204);
+  for (const answer of [0, 1]) {
+    expect((await request.post(`/api/tests/${testId}/start`, {headers: student})).status()).toBe(201);
+    expect((await request.post(`/api/tests/${testId}/submit`, {headers: student, data: {answers: [answer]}})).status()).toBe(200);
+  }
+  await signIn(page, phone);
+  await page.goto(`/#course/${id}`);
+  await page.getByRole('tab', {name: 'Test', exact: true}).click();
+  const row = page.locator('.test-series-row').filter({hasText: 'First score test'});
+  await expect(row.getByText('First attempt: 0/1')).toBeVisible();
+  await expect(row.getByRole('link', {name: 'Start test'})).toBeVisible();
+  await page.goto('/#test-series');
+  await expect(page.locator('.test-series-row').filter({hasText: 'First score test'})
+    .getByText('First attempt: 0/1')).toBeVisible();
+  const progress = await (await request.get('/api/progress', {headers: student})).json();
+  expect(progress.attempts.filter(attempt => attempt.test === testId)).toHaveLength(2);
+});
+
 test('dummy student sign-in and protected course access', async ({ page, request }) => {
   await signIn(page);
   await page.goto('/#catalog');
@@ -398,10 +706,22 @@ test('admin can create, edit and delete course content folders locally', async (
   const editedName = `Edited ${suffix}`;
   const childName = `Child ${suffix}`;
   const bookName = `Folder book ${suffix}`;
+  const videoName = `Folder video ${suffix}`;
+  const chapterBook = `Chapter book ${suffix}`;
+  await page.setViewportSize({width: 1100, height: 800});
   await signIn(page, '99999 99999');
   await page.goto('/#admin-course/sample-bank-exam');
   const create = page.locator('.folder-create-form');
   await expect(create).toBeVisible();
+  for (const width of [1100, 390]) {
+    await page.setViewportSize({width, height: 800});
+    const panel = await create.locator('..').boundingBox();
+    const control = await create.getByRole('button', {name: 'Create Folder'}).boundingBox();
+    expect(control.width).toBeGreaterThan(90);
+    expect(control.height).toBeLessThan(80);
+    expect(control.x + control.width).toBeLessThanOrEqual(panel.x + panel.width);
+  }
+  await page.setViewportSize({width: 1100, height: 800});
   await create.getByLabel('New Folder Name').fill(parentName);
   await create.getByRole('button', {name: 'Create Folder'}).click();
   await expect(page.getByText('Folder created.')).toBeVisible();
@@ -446,9 +766,37 @@ test('admin can create, edit and delete course content folders locally', async (
   await upload.getByLabel('PDF File').setInputFiles({name: 'book.pdf', mimeType: 'application/pdf', buffer: samplePdf()});
   await upload.getByRole('button', {name: 'Upload PDF to Folder'}).click();
   await expect(page.getByText('PDF uploaded to the folder.')).toBeVisible();
+  const videoUpload = child.locator(':scope > details > form.section');
+  await videoUpload.getByLabel('Content Type').selectOption('video');
+  await videoUpload.getByLabel('Title').fill(videoName);
+  await videoUpload.getByLabel('Video File').setInputFiles({name: 'lesson.mp4', mimeType: 'video/mp4',
+    buffer: Buffer.concat([Buffer.from([0, 0, 0, 24]), Buffer.from('ftypisom'), Buffer.alloc(64, 1)])});
+  await videoUpload.getByRole('button', {name: 'Upload Video to Folder'}).click();
+  await expect(page.getByText('Video uploaded to the folder.')).toBeVisible();
+  const chapterUpload = child.locator(':scope > details > form.section');
+  await chapterUpload.getByLabel('Title').fill(chapterBook);
+  await chapterUpload.getByLabel('Chapter (optional)').fill('Chapter Two');
+  await chapterUpload.getByLabel('PDF File').setInputFiles({name: 'chapter.pdf', mimeType: 'application/pdf', buffer: samplePdf()});
+  await chapterUpload.getByRole('button', {name: 'Upload PDF to Folder'}).click();
+  await expect(page.getByText('PDF uploaded to the folder.')).toBeVisible();
   const headers = {Authorization: 'Bearer dummy:+919999999999'};
   const workspace = async () => (await (await request.get('/api/admin/courses/sample-bank-exam/workspace?kind=content', {headers})).json());
   expect((await workspace()).items.some(item => item.title === bookName)).toBe(true);
+  const content = await (await request.get('/api/courses/sample-bank-exam', {headers})).json();
+  expect(content.books.find(item => item.title === bookName).chapter).toBe('');
+  expect(content.videos.find(item => item.title === videoName).chapter).toBe('');
+  await page.goto('/#course/sample-bank-exam');
+  await page.getByRole('tab', {name: 'Content'}).click();
+  for (const name of [parentName, editedName, childName]) {
+    await page.getByRole('button', {name: `Open folder ${name}`, exact: false}).click();
+  }
+  await page.getByRole('button', {name: 'Open subject General', exact: false}).click();
+  await expect(page.getByRole('link', {name: `Open PDF ${bookName}`})).toBeVisible();
+  await expect(page.getByRole('link', {name: `Open Video ${videoName}`})).toBeVisible();
+  await expect(page.getByRole('button', {name: /Open chapter Chapter 1/})).toHaveCount(0);
+  await page.getByRole('button', {name: 'Open chapter Chapter Two', exact: false}).click();
+  await expect(page.getByRole('link', {name: `Open PDF ${chapterBook}`})).toBeVisible();
+  await page.goto('/#admin-course/sample-bank-exam');
 
   page.once('dialog', dialog => dialog.dismiss());
   await folder(editedName).getByRole('button', {name: 'Delete Folder'}).first().click();

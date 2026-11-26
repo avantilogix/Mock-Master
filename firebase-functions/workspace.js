@@ -6,6 +6,11 @@ export const itemTypes = {
   test: { collection: 'tests', table: 'tests', kind: 'tests' },
 };
 
+export function chapterInput(value) {
+  if (typeof value !== 'string' || value.length > 120) fail(422, 'Chapter must be at most 120 characters.');
+  return value.trim();
+}
+
 export function kindInput(kind) {
   if (kind !== 'content' && kind !== 'tests') fail(422, 'Choose a valid workspace kind.');
   return kind;

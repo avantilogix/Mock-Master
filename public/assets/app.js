@@ -1,4 +1,6 @@
 import {showAdmin} from './admin.js?v=bilingual-import-v1';
+import {showFreeMaterial, showFreeMaterials} from './free-materials.js';
+import {showFreeTests} from './free-tests.js';
 import {showAdminCourseWorkspace} from './admin-course-workspace.js?v=workspace-refresh-v1';
 import {showCatalog, showContentLibrary, showCourse, showDashboard, showMyCourses} from './course.js?v=purchased-course-no-overview-v1';
 import {api, firebaseAuth} from './services.js?v=persistent-session';
@@ -17,8 +19,10 @@ const main = document.querySelector('#main');
 const nav = document.querySelector('#nav');
 const notice = document.querySelector('#notice');
 const offlineArea = document.querySelector('#offline-area');
+const notificationLink = document.querySelector('.header-notifications');
 const routes = new Map([
   ['home', 0], ['catalog', 0], ['my-courses', 0], ['test-series', 0], ['book-store', 0], ['materials', 0],
+  ['free-materials', 0], ['free-material', 1], ['free-tests', 0],
   ['current-affairs', 0], ['pyqs', 0], ['syllabus', 0], ['progress', 0], ['notifications', 0],
   ['timetable', 0], ['referrals', 0], ['downloads', 0],
   ['videos', 0], ['groups', 0], ['share-app', 0], ['about', 0], ['privacy', 0], ['terms', 0], ['copyright', 0], ['saved', 2],
@@ -32,6 +36,15 @@ let authState = 'idle';
 let signingOut = false;
 let phoneLoginPending = false;
 let activeHash;
+let examNavigationGuard;
+
+function guardExamNavigation(guard) {
+  examNavigationGuard = guard;
+  history.pushState({examGuard: true}, '', location.href);
+  return () => {
+    if (examNavigationGuard === guard) examNavigationGuard = null;
+  };
+}
 
 function route(hash = location.hash) {
   const [path, query] = hash.slice(1).split('?', 2);
@@ -467,13 +480,17 @@ function render(focus = false) {
   const current = session;
   const ctx = {
     user: current?.user, signal: view.signal, publishingMedia: firebase?.publishingMedia,
+    guardExamNavigation,
     current: () => !ctx.signal.aborted && session === current && (!current || current.current())
   };
   main.replaceChildren();
   main.dataset.page = parsed.page;
   renderNav(parsed);
+  if (parsed.page === 'notifications') notificationLink.setAttribute('aria-current', 'page');
+  else notificationLink.removeAttribute('aria-current');
   const backTargets = {
     'my-courses': '#home', 'test-series': '#home', 'book-store': '#home', 'materials': '#home',
+    'free-materials': '#home', 'free-tests': '#home',
     'progress': '#profile', 'notifications': '#home', 'timetable': '#home', 'referrals': '#profile',
     'downloads': '#home', 'videos': '#home', 'groups': '#profile', 'share-app': '#profile',
     'about': '#profile', 'privacy': '#profile', 'terms': '#profile', 'copyright': '#profile',
@@ -498,6 +515,9 @@ function render(focus = false) {
     case 'my-courses': showMyCourses(main, ctx, current?.me, {signInLink}); break;
     case 'test-series':
     case 'materials': showContentLibrary(main, ctx, current?.me, parsed.page, {signInLink}); break;
+    case 'free-materials': showFreeMaterials(main, ctx, {signInLink}); break;
+    case 'free-material': if (current) showFreeMaterial(main, ctx, courseId); else needSignIn(); break;
+    case 'free-tests': showFreeTests(main, ctx, {signInLink}); break;
     case 'book-store': showEbookStore(main, ctx, {signInLink}); break;
     case 'progress': showProgress(main, ctx, {signInLink}); break;
     case 'notifications': showNotifications(main, ctx, {signInLink}); break;
@@ -598,8 +618,29 @@ function render(focus = false) {
   if (focus) main.focus();
 }
 
+document.addEventListener('click', event => {
+  if (!examNavigationGuard || event.defaultPrevented || event.button !== 0 ||
+      event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+  const anchor = event.target.closest('a[href]');
+  if (!anchor || anchor.target || anchor.hasAttribute('download')) return;
+  const destination = new URL(anchor.href, location.href);
+  if (destination.origin !== location.origin || destination.pathname !== location.pathname ||
+      destination.search !== location.search || destination.hash === activeHash || !destination.hash) return;
+  event.preventDefault();
+  examNavigationGuard();
+}, true);
+window.addEventListener('popstate', () => {
+  if (!examNavigationGuard) return;
+  history.pushState({examGuard: true}, '', activeHash || '#home');
+  examNavigationGuard();
+});
 window.addEventListener('hashchange', () => {
   if (location.hash !== activeHash) {
+    if (examNavigationGuard) {
+      history.replaceState({examGuard: true}, '', activeHash || '#home');
+      examNavigationGuard();
+      return;
+    }
     notice.textContent = '';
     render(true);
   }

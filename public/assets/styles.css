@@ -28,6 +28,16 @@ body { margin: 0; background: var(--bg); color: var(--ink); overflow-wrap: anywh
 .brand small { display: block; color: #a9c9c0; font-size: .68rem; font-weight: 650; letter-spacing: .015em; margin-top: -.1rem; }
 .brand-mark { display: block; flex: none; width: 3.5rem; height: 3.5rem; object-fit: contain; box-shadow: 0 0 0 1px rgba(255,255,255,.35); }
 .site-header a { color: white; text-decoration: none; }
+.header-notifications {
+  display: inline-grid; place-items: center; flex: none; width: 2.75rem; height: 2.75rem;
+  margin-left: auto; border-radius: .8rem; background: rgba(255,255,255,.15);
+}
+.header-notifications:hover, .header-notifications[aria-current="page"] { background: rgba(255,255,255,.25); }
+.header-notifications .line-icon { width: 1.4rem; height: 1.4rem; }
+.exam-switch-warning {
+  margin: 0; padding: .8rem 1rem; border: 1px solid #d59b23;
+  border-radius: .75rem; background: #fff6d8; color: #654400; font-weight: 650;
+}
 nav, .actions { display: flex; align-items: center; gap: .4rem; }
 nav a { display: inline-flex; align-items: center; min-height: 2.75rem; padding: .45rem .8rem; border-radius: .7rem; font-weight: 700; }
 nav a:hover, nav a[aria-current="page"] { background: rgba(255,255,255,.13); }
