@@ -1,17 +1,17 @@
-import {showAdmin} from './admin.js?v=public-learning-resources-v3';
-import {showAdminCourseWorkspace} from './admin-course-workspace.js';
-import {showCatalog, showContentLibrary, showCourse, showDashboard, showMyCourses} from './course.js?v=public-learning-resources-v3';
+import {showAdmin} from './admin.js?v=student-actions-v2';
+import {showAdminCourseWorkspace} from './admin-course-workspace.js?v=workspace-refresh-v1';
+import {showCatalog, showContentLibrary, showCourse, showDashboard, showMyCourses} from './course.js?v=purchased-course-no-overview-v1';
 import {api, firebaseAuth} from './services.js?v=persistent-session';
 import {showSignIn} from './signin.js?v=persistent-session';
-import {showBook, showLeaderboard, showTest, showVideo} from './study.js?v=sectionwise-test-ui';
-import {showLearningContent, showNotifications, showProgress, showResource} from './reports.js?v=public-learning-resources-v3';
-import {showDownloads, showReferrals, showSaved, showTimetable, socialFooter} from './features.js?v=stable-mobile-admin-downloads';
+import {showBook, showLeaderboard, showTest, showVideo} from './study.js?v=pdf-reader-save-icon-v7';
+import {showLearningContent, showNotifications, showProgress, showResource} from './reports.js?v=refresh-icons-v3';
+import {showDownloads, showReferrals, showSaved, showTimetable, socialFooter} from './features.js?v=icon-only-actions-v1';
 import {showCourseGroups, showShareRate, showVideos} from './engagement.js?v=youtube-rotate-v2';
-import {showEbook, showEbookDemo, showEbookStore} from './ebooks.js?v=continuous-reader-v2';
+import {showEbook, showEbookDemo, showEbookStore} from './ebooks.js?v=pdf-reader-save-icon-v7';
 import {examPreferenceField, normalizeExamPreferences} from './exam-preferences.js';
 import {changePasswordForPhoneUser} from './password-verification.js';
 import {checkConnection, isConnected} from './connection.js';
-import {bindForm, button, el, field, heading, icon, idPart, link, loadInto, panel, run, say, status, textValue} from './ui.js';
+import {bindForm, button, el, field, heading, icon, iconAction, idPart, link, loadInto, panel, run, say, status, textValue} from './ui.js?v=refresh-icons-v3';
 
 const main = document.querySelector('#main');
 const nav = document.querySelector('#nav');
@@ -573,7 +573,7 @@ function render(focus = false) {
       if (!current) needSignIn();
       else if (!current.me) main.append(...heading('Admin Workspace'), profileUnavailable());
       else if (!current.me.admin) {
-        const refresh = button('Refresh Admin Access', 'secondary');
+        const refresh = iconAction(button('', 'secondary icon-button refresh-action'), 'refresh', 'Refresh admin access');
         const feedback = status();
         refresh.addEventListener('click', () => run(refresh, feedback, async () => {
           await refreshProfile(current);

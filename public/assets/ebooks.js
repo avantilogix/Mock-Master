@@ -1,7 +1,7 @@
 import {priceText, upiReference} from './course.js?v=ist-payment-fixes-final';
 import {api} from './services.js?v=ist-payment-fixes-final';
 import {saveControl} from './saved-content.js';
-import {bindForm, button, el, field, heading, idPart, link, loadInto, run, say, status, textValue} from './ui.js';
+import {bindForm, button, el, field, heading, icon, idPart, link, loadInto, run, say, status, textValue} from './ui.js';
 
 export function showEbookStore(main, ctx, action) {
   main.append(...heading('E-Book Store', 'Buy protected digital books. Access and download unlock after admin payment approval.'));
@@ -156,6 +156,7 @@ export function showEbookDemo(main, ctx, bookId) {
 }
 
 export function pdfReader(main, ctx, book) {
+  main.classList.add('pdf-reader');
   let page = 1;
   const objectUrls = new Map();
   const loadingPages = new Set();
@@ -164,19 +165,52 @@ export function pdfReader(main, ctx, book) {
     el('article', {class: 'pdf-page-shell', 'data-page': String(index + 1),
       'aria-label': `Page ${index + 1} of ${book.pages}`}));
   const counter = status();
-  const previous = button('Previous Page', 'secondary');
-  const next = button('Next Page', 'secondary');
-  const controls = el('div', {class: 'actions reader-controls'}, previous, counter, next);
-  if (book.savedItem) controls.append(saveControl(ctx, book.savedItem));
+  counter.classList.add('pdf-reader-counter');
+  const previous = button('', 'secondary pdf-reader-page-button');
+  previous.setAttribute('aria-label', 'Previous page');
+  previous.title = 'Previous page';
+  previous.prepend(icon('back', 'line-icon'));
+  const next = button('', 'secondary pdf-reader-page-button pdf-reader-next');
+  next.setAttribute('aria-label', 'Next page');
+  next.title = 'Next page';
+  next.prepend(icon('arrow-right', 'line-icon'));
+  const controls = el('div', {class: 'actions reader-controls pdf-reader-controls'}, counter, previous, next);
+  let saveAction = null;
+  if (book.savedItem) {
+    saveAction = saveControl(ctx, book.savedItem);
+    const saveButton = saveAction.querySelector('button');
+    if (saveButton) {
+      saveButton.textContent = '';
+      saveButton.setAttribute('aria-label', 'Save to Downloads');
+      saveButton.title = 'Save to Downloads';
+      saveButton.prepend(icon('download', 'line-icon'));
+    }
+    saveAction.querySelector('a')?.remove();
+    if (book.readerTools && saveButton) {
+      saveButton.classList.add('pdf-reader-save-top');
+      saveAction.classList.add('pdf-reader-save-action-top');
+    } else {
+      controls.append(saveAction);
+    }
+  }
   const imageArea = el('div', {class: 'pdf-reader-pages', role: 'region', 'aria-label': `${book.title} PDF pages`},
     pageNodes);
   if (book.readerTools) {
     const pageInput = el('input', {type: 'number', min: '1', max: String(book.pages), value: '1',
       inputmode: 'numeric', 'aria-label': 'Go to page'});
-    const go = button('Go', 'secondary');
-    const zoomOut = button('Zoom out', 'secondary');
-    const zoomIn = button('Zoom in', 'secondary');
-    const zoomLabel = el('span', {role: 'status'}, '100%');
+    const go = button('', 'secondary pdf-reader-go');
+    go.setAttribute('aria-label', 'Go to page');
+    go.title = 'Go to page';
+    go.prepend(icon('arrow-right', 'line-icon'));
+    const zoomOut = button('', 'secondary pdf-reader-zoom-button');
+    zoomOut.prepend(icon('minus', 'line-icon'));
+    zoomOut.setAttribute('aria-label', 'Zoom out');
+    zoomOut.title = 'Zoom out';
+    const zoomIn = button('', 'secondary pdf-reader-zoom-button');
+    zoomIn.prepend(icon('plus', 'line-icon'));
+    zoomIn.setAttribute('aria-label', 'Zoom in');
+    zoomIn.title = 'Zoom in';
+    const zoomLabel = el('span', {class: 'pdf-reader-zoom-label', role: 'status'}, '100%');
     let zoom = 100;
     const updateZoom = () => {
       imageArea.style.width = `${zoom}%`;
@@ -186,7 +220,12 @@ export function pdfReader(main, ctx, book) {
     };
     zoomOut.addEventListener('click', () => { zoom = Math.max(100, zoom - 25); updateZoom(); });
     zoomIn.addEventListener('click', () => { zoom = Math.min(200, zoom + 25); updateZoom(); });
-    const tools = el('div', {class: 'pdf-reader-tools'}, field('Page', pageInput), go, zoomOut, zoomLabel, zoomIn);
+    const pageTools = el('div', {class: 'pdf-reader-page-tools'}, field('Page', pageInput), go);
+    const zoomControls = el('div', {class: 'pdf-reader-zoom-controls'},
+      zoomOut, zoomLabel, zoomIn);
+    const zoomTools = el('div', {class: 'pdf-reader-zoom-tools'},
+      el('span', {class: 'pdf-reader-tool-label'}, 'Zoom'), zoomControls);
+    const tools = el('div', {class: 'pdf-reader-tools'}, pageTools, zoomTools);
     go.addEventListener('click', () => {
       const selected = pageInput.valueAsNumber;
       if (!Number.isInteger(selected) || selected < 1 || selected > book.pages) {
@@ -200,8 +239,7 @@ export function pdfReader(main, ctx, book) {
       if (event.key === 'Enter') { event.preventDefault(); go.click(); }
     });
     updateZoom();
-    main.append(controls, tools);
-    if (book.savedItem) main.append(el('p', {class: 'muted'}, 'This download is available inside the app while access remains active.'));
+    main.append(el('div', {class: 'pdf-reader-topbar'}, saveAction || el('span')), controls, tools);
     main.append(el('div', {class: 'pdf-reader-scroll'}, imageArea));
   } else main.append(controls, imageArea);
   const placeholder = pageNumber => el('div', {class: 'pdf-page-placeholder', 'aria-hidden': 'true'},
@@ -270,6 +308,7 @@ export function pdfReader(main, ctx, book) {
   previous.addEventListener('click', () => scrollToPage(page - 1));
   next.addEventListener('click', () => scrollToPage(page + 1));
   ctx.signal.addEventListener('abort', () => {
+    main.classList.remove('pdf-reader');
     observer?.disconnect();
     for (const objectUrl of objectUrls.values()) URL.revokeObjectURL(objectUrl);
     objectUrls.clear();

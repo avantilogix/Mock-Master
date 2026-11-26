@@ -1,7 +1,7 @@
 import {api} from './services.js';
-import {pdfReader} from './ebooks.js?v=continuous-reader-v2';
+import {pdfReader} from './ebooks.js?v=minimal-reader-v6';
 import {openSaved, removeSaved, savedItems, savedPart} from './saved-content.js';
-import {bindForm, button, confirmDelete, el, entries, field, heading, icon, idPart, link, loadInto, panel, run, say, status, textValue} from './ui.js';
+import {bindForm, button, confirmDelete, el, entries, field, heading, icon, iconAction, idPart, link, loadInto, panel, run, say, status, textValue} from './ui.js?v=icon-only-actions-v1';
 
 export const socialLinks = [
   ['YouTube', 'youtube', '▶'],
@@ -50,7 +50,7 @@ export function showTimetable(main, ctx, action) {
   const start = el('input', {type: 'time', required: ''});
   const duration = el('input', {type: 'number', required: '', min: '5', max: '720', step: '1', inputmode: 'numeric', placeholder: '60'});
   const notes = el('textarea', {rows: '3', maxlength: '1000', placeholder: 'Topics, chapters, or a test to attempt'});
-  const save = button('Add to Timetable', null, 'submit');
+  const save = iconAction(button('', null, 'submit'), 'plus', 'Add to Timetable');
   const cancel = button('Cancel Edit', 'secondary');
   cancel.hidden = true;
   const feedback = status();
@@ -72,7 +72,12 @@ export function showTimetable(main, ctx, action) {
       notes.value = item.description || '';
     }
     formTitle.textContent = item ? 'Edit Study Session' : 'Add a Study Session';
-    save.textContent = item ? 'Save Changes' : 'Add to Timetable';
+    if (item) {
+      save.textContent = 'Save Changes';
+      save.classList.remove('icon-action');
+      save.removeAttribute('aria-label');
+      save.removeAttribute('title');
+    } else iconAction(save, 'plus', 'Add to Timetable');
     cancel.hidden = !item;
   };
   cancel.addEventListener('click', () => { setEditing(null); say(feedback, ''); });
@@ -88,7 +93,7 @@ export function showTimetable(main, ctx, action) {
     list.replaceChildren(...weekDays.filter(name => rows.some(item => item.day === name)).map(name =>
       el('section', {class: 'timetable-day'}, el('h3', {}, name), rows.filter(item => item.day === name).map(item => {
         const rowFeedback = status();
-        const edit = button('Edit', 'secondary');
+        const edit = iconAction(button('', 'secondary'), 'edit', 'Edit');
         edit.addEventListener('click', () => {
           setEditing(item);
           say(feedback, `Editing “${item.title}”. Save your changes or cancel.`);

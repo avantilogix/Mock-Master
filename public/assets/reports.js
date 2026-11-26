@@ -1,10 +1,10 @@
 import {api} from './services.js';
-import {pdfReader} from './ebooks.js?v=continuous-reader-v2';
+import {pdfReader} from './ebooks.js?v=minimal-reader-v6';
 import {saveControl} from './saved-content.js';
-import {manualQuestions} from './manual-questions.js';
-import {subjectQuestionManager} from './question-sections.js?v=sectionwise-v2';
+import {manualQuestions} from './manual-questions.js?v=publish-icons-v1';
+import {subjectQuestionManager} from './question-sections.js?v=subject-import-label-v1';
 import {questionData} from './question-data.js';
-import {bindForm, button, el, entries, field, heading, icon, idPart, link, loadInto, panel, rule, run, say, status, textValue} from './ui.js';
+import {bindForm, button, el, entries, field, heading, icon, iconAction, idPart, link, loadInto, panel, rule, run, say, status, textValue} from './ui.js?v=refresh-icons-v3';
 
 export const contentKinds = {
   'current-affairs': {title: 'Current Affairs', icon: '◫', description: 'Explore PDF, video, and test updates by year, month, and date.'},
@@ -102,7 +102,7 @@ export function showNotifications(main, ctx, action) {
     return;
   }
   const list = el('div', {class: 'notification-list'});
-  const refresh = button('Refresh Notifications', 'secondary');
+  const refresh = iconAction(button('', 'secondary icon-button refresh-action'), 'refresh', 'Refresh notifications');
   main.append(el('div', {class: 'actions'}, refresh), list);
   loadInto(list, ctx, async () => {
     const rows = await api(`/notifications?at=${Date.now()}`, {ctx, auth: true});

@@ -67,9 +67,7 @@ test('dummy student sign-in and protected course access', async ({ page, request
   await page.goto('/#catalog');
   await expect(page.getByRole('heading', { name: 'All Courses' })).toBeVisible();
   await page.goto('/#course/sample-bank-exam');
-  await expect(page.getByRole('heading', { name: 'Pay ₹149.00' }).or(
-    page.getByRole('heading', { name: 'Course Access' }),
-  ).first()).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Buy Now' }).first()).toBeVisible();
   const direct = await request.get('/api/courses/sample-bank-exam', {
     headers: { Authorization: 'Bearer dummy:+919876543210' },
   });
@@ -81,6 +79,7 @@ test('student can submit course payment and remain locked until approval', async
   const reference = Date.now().toString().slice(-12);
   await signIn(page, phone);
   await page.goto('/#course/sample-bank-exam');
+  await page.getByRole('button', { name: 'Buy Now' }).first().click();
   await page.getByLabel('UPI Transaction Reference').fill(reference);
   await page.getByRole('button', { name: 'Submit for Admin Approval' }).click();
   await expect(page.getByRole('heading', { name: 'Payment Submitted' })).toBeVisible();
@@ -95,19 +94,27 @@ test('admin can approve a pending course payment and grant only that user', asyn
   const reference = Date.now().toString().slice(-12);
   await signIn(page, phone);
   await page.goto('/#course/sample-bank-exam');
+  await page.getByRole('button', { name: 'Buy Now' }).first().click();
   await page.getByLabel('UPI Transaction Reference').fill(reference);
   await page.getByRole('button', { name: 'Submit for Admin Approval' }).click();
+  await expect(page.getByRole('heading', { name: 'Payment Submitted' })).toBeVisible();
 
   await signIn(page, '99999 99999');
   await page.goto('/#admin');
   await expect(page.getByRole('heading', { name: 'Admin Workspace' })).toBeVisible();
   await page.getByRole('button', { name: /Course Payments/ }).click();
   const payment = page.locator('.payment-request').filter({ hasText: reference });
+  await payment.locator('summary').first().click();
   await payment.getByRole('button', { name: 'Approve and Unlock' }).click();
+  await expect(payment.getByText(/is now unlocked for/)).toBeVisible();
 
   await signIn(page, phone);
   await page.goto('/#course/sample-bank-exam');
-  await expect(page.getByRole('heading', { name: 'Practice & Live Tests' }).or(page.getByText('Practice & Live Tests'))).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Buy Now' })).toHaveCount(0);
+  const owned = await request.get('/api/courses/sample-bank-exam', {
+    headers: { Authorization: `Bearer dummy:+91${phone}` },
+  });
+  expect(owned.status()).toBe(200);
 });
 
 test('another student cannot access direct course, test, PDF or video APIs', async ({ request }) => {
@@ -179,7 +186,8 @@ test('course payment approval controls every course resource after refresh and s
 
   await signIn(page, phone);
   await page.goto('/#catalog');
-  await page.getByRole('link', {name: `View course: ${title}`}).click();
+  await page.getByRole('link', {name: `Open course: ${title}`}).click();
+  await page.getByRole('button', {name: 'Buy Now'}).first().click();
   await expect(page.getByText('Payment Pending', {exact: true})).toBeVisible();
   await expect(page.getByText('Not Purchased', {exact: true})).toBeVisible();
   for (const route of [`book/${id}/${bookId}`, `video/${id}/${videoId}`, `test/${id}/${testId}`]) {
@@ -188,11 +196,13 @@ test('course payment approval controls every course resource after refresh and s
   }
   await page.goto(`/#course/${id}`);
   const reference = `UPI${suffix}`;
+  await page.getByRole('button', {name: 'Buy Now'}).first().click();
   await page.getByLabel('UPI Transaction Reference').fill(reference);
   await page.getByLabel('Payment Note').fill('Payment submitted for review');
   await page.getByRole('button', {name: 'Submit for Admin Approval'}).click();
   await expect(page.getByText('Awaiting Admin Approval')).toBeVisible();
   await page.reload();
+  await page.getByRole('button', {name: 'Buy Now'}).first().click();
   await expect(page.getByText('Awaiting Admin Approval')).toBeVisible();
   await blocked(buyer);
 
@@ -200,7 +210,8 @@ test('course payment approval controls every course resource after refresh and s
   await page.goto('/#admin');
   await page.getByRole('button', {name: /Course Payments/}).click();
   let payment = page.locator('.payment-request').filter({hasText: reference});
-  await expect(payment.getByText(title)).toBeVisible();
+  await payment.locator('summary').first().click();
+  await expect(payment.getByRole('heading', {name: title})).toBeVisible();
   await expect(payment.getByText(`+91${phone}`)).toBeVisible();
   await expect(payment.getByText('Payment submitted for review')).toBeVisible();
   await payment.getByLabel('Rejection Reason').fill('Reference not verified');
@@ -209,6 +220,7 @@ test('course payment approval controls every course resource after refresh and s
 
   await signIn(page, phone);
   await page.goto(`/#course/${id}`);
+  await page.getByRole('button', {name: 'Buy Now'}).first().click();
   await expect(page.getByText('Rejected', {exact: true})).toBeVisible();
   await expect(page.getByText('Reference not verified')).toBeVisible();
   await blocked(buyer);
@@ -219,13 +231,20 @@ test('course payment approval controls every course resource after refresh and s
   await page.goto('/#admin');
   await page.getByRole('button', {name: /Course Payments/}).click();
   payment = page.locator('.payment-request').filter({hasText: `${reference}R`});
+  await payment.locator('summary').first().click();
   await payment.getByRole('button', {name: 'Approve and Unlock'}).click();
   await expect(payment.getByText(/is now unlocked/)).toBeVisible();
 
   await signIn(page, phone);
   await page.goto(`/#course/${id}`);
   await expect(page.getByText('Purchased · Approved')).toBeVisible();
-  await expect(page.getByRole('heading', {name: 'Study Materials by Chapter'})).toBeVisible();
+  await expect(page.getByRole('heading', {name: 'Study Materials', exact: true})).toBeVisible();
+  await page.getByLabel('Your Review').fill('A helpful course.');
+  await page.getByRole('button', {name: 'Save Review'}).click();
+  await expect(page.getByText('Choose a rating before saving your review.')).toBeVisible();
+  await page.getByRole('radio', {name: '5 stars'}).check();
+  await page.getByRole('button', {name: 'Save Review'}).click();
+  await expect(page.getByText('Review saved.')).toBeVisible();
   await page.reload();
   await expect(page.getByText('Private folder')).toBeVisible();
   for (const path of [coursePath, `/api/tests/${testId}`, `/api/books/${bookId}/pages/1`, `/api/videos/${videoId}/link`]) {
@@ -252,11 +271,12 @@ test('course payment approval controls every course resource after refresh and s
   await page.goto('/#signin');
   await signIn(page, phone);
   await page.goto(`/#course/${id}`);
-  await expect(page.getByRole('heading', {name: 'Study Materials by Chapter'})).toBeVisible();
+  await expect(page.getByRole('heading', {name: 'Study Materials', exact: true})).toBeVisible();
   await signIn(page, '99999 99999');
   await page.goto('/#admin');
   await page.getByRole('button', {name: /Course Payments/}).click();
   payment = page.locator('.payment-request').filter({hasText: `${reference}R`});
+  await payment.locator('summary').first().click();
   await payment.getByLabel('Revocation Reason').fill('Payment reversed');
   await payment.getByRole('button', {name: 'Reject and Revoke Access'}).click();
   await expect(payment.getByText('Request rejected. The student can resubmit payment proof.')).toBeVisible();
@@ -290,6 +310,7 @@ test('admin can create and edit course details locally', async ({ page }) => {
 
   const course = page.locator('.manage-item').filter({hasText: title});
   await expect(course).toBeVisible();
+  await course.locator('summary').first().click();
   await course.getByRole('button', { name: 'Edit' }).click();
   await course.getByRole('textbox', { name: 'Course Title *' }).fill(title + ' Updated');
   await course.getByRole('textbox', { name: 'Description *' }).fill('After edit');
@@ -314,6 +335,8 @@ test('admin can create, edit and delete course content folders locally', async (
   await create.getByLabel('New Folder Name').fill(parentName);
   await create.getByRole('button', {name: 'Create Folder'}).click();
   await expect(page.getByText('Folder created.')).toBeVisible();
+  await page.getByRole('button', {name: 'Refresh folders and content'}).click();
+  await expect(page.locator('.workspace-folder summary strong').filter({hasText: parentName})).toBeVisible();
   await create.getByLabel('New Folder Name').fill(initialName);
   await create.getByRole('button', {name: 'Create Folder'}).click();
   await expect(page.getByText('Folder created.')).toBeVisible();
@@ -468,10 +491,13 @@ test('PYQs and Syllabus PDFs respect save permissions and appear in Downloads', 
   await expect(pyqCard.locator('.lead')).toHaveCount(0);
   await expect(pyqCard.getByText('Open Resource')).toHaveCount(0);
   await pyqCard.getByRole('link', {name: 'View PDF'}).click();
+  await expect(page.getByRole('button', {name: 'Previous page'})).toBeVisible();
+  await page.getByRole('button', {name: 'Zoom in'}).click();
+  await expect(page.getByText('125%', {exact: true})).toBeVisible();
   await expect(page.getByRole('button', {name: 'Save to Downloads'})).toBeVisible();
   await page.getByRole('button', {name: 'Save to Downloads'}).click();
   await expect(page.getByText('Saved inside the app. Open it from Downloads.')).toBeVisible();
-  await page.getByRole('link', {name: 'Open Downloads'}).click();
+  await page.goto('/#downloads');
   await expect(page.locator('.download-row').filter({hasText: pyqTitle})).toBeVisible();
   await page.locator('.download-row').filter({hasText: pyqTitle}).getByRole('link', {name: 'Open'}).click();
   await expect(page.getByRole('heading', {name: pyqTitle})).toBeVisible();

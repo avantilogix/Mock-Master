@@ -1,9 +1,9 @@
 import {api} from './services.js';
-import {contentKinds, uploadCurrentAffairsMedia} from './reports.js?v=public-learning-resources-v3';
+import {contentKinds, uploadCurrentAffairsMedia} from './reports.js?v=refresh-icons-v3';
 import {coverGallery, coverPicker} from './publishing-media.js';
 import {maxVideoBytes, uploadChapterVideo, videoAccept, videoType} from './chapter-upload.js';
-import {subjectQuestionManager} from './question-sections.js?v=sectionwise-v2';
-import {bindForm, button, confirmDelete, el, field, formatDate, icon, idPart, link, loadInto, rule, run, say, status, textValue} from './ui.js';
+import {subjectQuestionManager} from './question-sections.js?v=subject-section-card-v3';
+import {bindForm, button, confirmDelete, el, field, formatDate, icon, iconAction, idPart, link, loadInto, rule, run, say, status, textValue} from './ui.js?v=refresh-icons-v3';
 
 const rupees = paise => new Intl.NumberFormat('en-IN', {style: 'currency', currency: 'INR'}).format(paise / 100);
 const plural = (count, word) => `${count} ${word}${count === 1 ? '' : 's'}`;
@@ -316,6 +316,7 @@ export function publishedManager({ctx, onChange, ...helpers}) {
   let data = Object.fromEntries(keys.map(key => [key, []]));
   let active = 'courses';
   let openEditor = null;
+  let expandedCard = null;
   const tabButtons = keys.map(key => {
     const tab = button(config[key].label, 'tab');
     tab.setAttribute('role', 'tab');
@@ -336,7 +337,7 @@ export function publishedManager({ctx, onChange, ...helpers}) {
   const tabs = el('div', {class: 'tabs manage-tabs', role: 'tablist', 'aria-label': 'Published content type'}, tabButtons);
   const search = el('input', {type: 'search', placeholder: 'Search by title, course, subject, or chapter', 'aria-label': 'Search published content'});
   const courseFilter = el('select', {'aria-label': 'Filter by course'});
-  const refreshButton = button('Refresh', 'secondary');
+  const refreshButton = iconAction(button('', 'secondary icon-button refresh-action'), 'refresh', 'Refresh published content');
   const count = el('p', {class: 'manage-count muted', role: 'status'});
   const feedback = status();
   const list = el('div', {class: 'manage-list', role: 'tabpanel', id: 'published-items', tabindex: '0'});
@@ -345,6 +346,7 @@ export function publishedManager({ctx, onChange, ...helpers}) {
   function select(key) {
     active = key;
     openEditor = null;
+    expandedCard = null;
     tabs.hidden = true;
     node.querySelector('.manage-toolbar').hidden = true;
     render();
@@ -379,7 +381,8 @@ export function publishedManager({ctx, onChange, ...helpers}) {
   function card(type, item) {
     const key = active;
     const rowFeedback = status();
-    const edit = button(openEditor === item.id ? 'Close Editor' : 'Edit', 'secondary');
+    const editLabel = openEditor === item.id ? 'Close Editor' : 'Edit';
+    const edit = iconAction(button('', 'secondary'), openEditor === item.id ? 'minus' : 'edit', editLabel);
     const removal = type.remove(item);
     const remove = removal.blocked ? el('p', {class: 'manage-note muted'}, removal.blocked) :
       confirmDelete(rowFeedback, async () => {
@@ -394,7 +397,7 @@ export function publishedManager({ctx, onChange, ...helpers}) {
       link('Open Course Content', `#admin-course/${idPart(item.id)}`, 'button secondary') : null;
     const manageActions = el('div', {class: 'actions manage-actions'}, openCourse, edit,
       isTest && removal.blocked ? null : remove);
-    const article = el('article', {class: `manage-item${isTest ? ' manage-test-item' : ''}`},
+    const manageBody = el('div', {class: 'manage-item-body'},
       el('div', {class: 'manage-main'},
         el('div', {class: 'manage-title'}, el('h3', {}, item.title),
           item.courseTitle ? el('span', {class: 'badge'}, item.courseTitle) : null,
@@ -407,11 +410,25 @@ export function publishedManager({ctx, onChange, ...helpers}) {
           isTest ? icon(index === 0 ? 'test' : 'profile', 'line-icon') : null, detail))),
         type.text?.(item) ? el('p', {class: 'manage-text muted'}, type.text(item)) : null),
       manageActions, isTest && removal.blocked ? remove : null, rowFeedback);
+    const groupedByCourse = active === 'courses' || isTest || active === 'books' ||
+      active === 'chapterVideos' || active === 'schedules';
+    const summaryTitle = active === 'courses' || active === 'schedules' ? item.title :
+      item.courseTitle || 'Unassigned course';
+    const article = groupedByCourse ?
+      el('details', {class: `manage-item${isTest ? ' manage-test-item' : ''}`},
+        el('summary', {class: 'manage-course-summary'}, summaryTitle),
+        manageBody) :
+      el('article', {class: 'manage-item'}, manageBody);
+    if (groupedByCourse) {
+      const cardKey = `${key}:${item.id}`;
+      article.open = expandedCard === cardKey || openEditor === item.id;
+      article.addEventListener('toggle', () => {
+        expandedCard = article.open ? cardKey : expandedCard === cardKey ? null : expandedCard;
+      });
+    }
     if (active === 'tests') {
-      const results = button('View Results', 'secondary');
-      const pdf = button('Export PDF', 'secondary');
-      results.prepend(icon('progress', 'line-icon'));
-      pdf.prepend(icon('download', 'line-icon'));
+      const results = iconAction(button('', 'secondary'), 'progress', 'View Results');
+      const pdf = iconAction(button('', 'secondary'), 'download', 'Export PDF');
       results.addEventListener('click', () => run(results, rowFeedback, async () => {
         const result = await api(`/admin/tests/${idPart(item.id)}/results`, {ctx, auth: true});
         const summary = el('div', {class: 'result-table'}, el('h4', {}, `${result.results.length} submissions`),
@@ -424,8 +441,8 @@ export function publishedManager({ctx, onChange, ...helpers}) {
               el('span', {}, 'marks')),
             el('time', {class: 'result-date', datetime: row.createdAt || ''},
               formatDate(row.createdAt)))));
-        article.querySelector('.result-table')?.remove();
-        article.append(summary);
+        manageBody.querySelector('.result-table')?.remove();
+        manageBody.append(summary);
         say(rowFeedback, '');
       }, 'Loading results…'));
       pdf.addEventListener('click', () => run(pdf, rowFeedback, async () => {
@@ -446,7 +463,7 @@ export function publishedManager({ctx, onChange, ...helpers}) {
       render();
       if (openEditor) list.querySelector('.manage-editor input, .manage-editor textarea, .manage-editor select')?.focus();
     });
-    if (openEditor === item.id) article.append(editor(type, item));
+    if (openEditor === item.id) manageBody.append(editor(type, item));
     return article;
   }
   function editor(type, item) {
