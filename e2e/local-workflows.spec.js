@@ -62,6 +62,226 @@ async function signIn(page, phone = '98765 43210') {
   signedInPages.add(page);
 }
 
+async function swipeLeft(page, target, expectedDot) {
+  await expect(page.getByRole('status', {name: 'Opening Mission Selection'})).toBeHidden();
+  await target.scrollIntoViewIfNeeded();
+  const touch = await page.context().newCDPSession(page);
+  await touch.send('Emulation.setTouchEmulationEnabled', {enabled: true, maxTouchPoints: 1});
+  const bounds = await target.boundingBox();
+  const y = bounds.y + bounds.height / 2;
+  await touch.send('Input.dispatchTouchEvent', {type: 'touchStart',
+    touchPoints: [{x: bounds.x + bounds.width * .8, y}]});
+  for (const fraction of [.65, .5, .35, .2]) {
+    await touch.send('Input.dispatchTouchEvent', {type: 'touchMove',
+      touchPoints: [{x: bounds.x + bounds.width * fraction, y}]});
+  }
+  await touch.send('Input.dispatchTouchEvent', {type: 'touchEnd', touchPoints: []});
+  await expect(expectedDot).toHaveAttribute('aria-current', 'true');
+  await touch.send('Emulation.setTouchEmulationEnabled', {enabled: false});
+  await touch.detach();
+}
+
+test('startup splash shows the logo briefly and clears for sign-in and navigation', async ({page}) => {
+  await page.setViewportSize({width: 320, height: 740});
+  await page.emulateMedia({reducedMotion: 'reduce'});
+  await page.goto('/#signin', {waitUntil: 'domcontentloaded'});
+  const splash = page.getByRole('status', {name: 'Opening Mission Selection'});
+  const logo = splash.getByRole('img', {name: 'Mission Selection logo'});
+  await expect(splash).toBeVisible();
+  await expect(logo).toBeVisible();
+  await expect(splash.getByText('With you until the selection')).toBeVisible();
+  await expect.poll(() => logo.evaluate(image => image.complete && image.naturalWidth > 0)).toBe(true);
+  const bounds = await logo.boundingBox();
+  expect(bounds.x).toBeGreaterThanOrEqual(0);
+  expect(bounds.x + bounds.width).toBeLessThanOrEqual(320);
+  await page.waitForTimeout(1000);
+  await expect(splash).toBeVisible();
+  await expect(splash).toBeHidden({timeout: 5000});
+  await page.getByLabel('Mobile Number').fill('98765 43210');
+  await page.getByRole('checkbox', {name: 'CCE'}).check();
+  await page.getByRole('button', {name: 'Send OTP'}).click();
+  await page.getByLabel('6-Digit OTP').fill('123456');
+  await page.getByRole('button', {name: 'Verify and Sign In'}).click();
+  await expect(page).not.toHaveURL(/#signin/);
+  await page.getByRole('link', {name: 'Notifications'}).click();
+  await expect(page).toHaveURL(/#notifications$/);
+  await expect(splash).toBeHidden();
+  await page.reload({waitUntil: 'domcontentloaded'});
+  await expect(splash).toBeVisible();
+  await expect(splash).toBeHidden({timeout: 5000});
+  await expect(page.getByRole('heading', {name: 'Notifications'})).toBeVisible();
+});
+
+test('home course slider and device-local recent interest respect course availability and ownership', async ({page}) => {
+  test.setTimeout(60_000);
+  await page.setViewportSize({width: 320, height: 740});
+  const firstTitle = 'Railway Selection Mission 2027';
+  const courses = [
+    {id: 'slider-a', title: firstTitle, price: 12000, images: [], expired: false},
+    {id: 'slider-b', title: 'Second course', price: 24000, images: ['slider-image'], expired: false},
+    {id: 'slider-c', title: 'Third course', price: 36000, images: [], expired: false},
+    {id: 'slider-d', title: 'Fourth course', price: 48000, images: [], expired: false},
+    {id: 'slider-expired', title: 'Expired course', price: 10000, images: [], expired: true},
+  ];
+  let visibleCourses = courses;
+  let purchases = [];
+  await page.route('**/api/courses', route => route.fulfill({json: visibleCourses}));
+  await page.route('**/api/courses/*/reviews', route => route.fulfill({json: []}));
+  await page.route('**/api/publishing-images/slider-image', route => route.fulfill({
+    contentType: 'image/png',
+    body: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aL+0AAAAASUVORK5CYII=', 'base64'),
+  }));
+  await page.route('**/api/me', async route => {
+    const response = await route.fetch();
+    if (route.request().method() !== 'GET' || !response.ok()) return route.fulfill({response});
+    const me = await response.json();
+    await route.fulfill({response, json: {...me, purchases}});
+  });
+  await signIn(page, '98765 43295');
+  await page.goto('/#home');
+  const carousel = page.getByRole('region', {name: 'Course covers'});
+  const recent = page.locator('.home-recent-course');
+  await expect(carousel.locator('.home-course-slide')).toHaveCount(4);
+  await expect(recent).toHaveCount(0);
+  await expect(page.getByRole('link', {name: /^Browse all$/i})).toHaveCount(0);
+  await expect(page.getByRole('button', {name: /^(Previous|Next) course$/})).toHaveCount(0);
+  await expect(carousel.locator('img')).toHaveAttribute('src', '/api/publishing-images/slider-image');
+  await expect(carousel.locator('.catalog-course-placeholder')).toHaveCount(3);
+  await page.evaluate(() => localStorage.setItem('mission-selection-recent-course:dummy-919876543295', 'slider-a'));
+  await page.reload();
+  await expect(recent.getByRole('heading', {name: firstTitle})).toBeVisible();
+  const dismiss = recent.getByRole('button', {name: 'Dismiss recently viewed courses'});
+  const dismissBounds = await dismiss.boundingBox();
+  const titleBounds = await recent.getByRole('heading', {name: 'You are almost there'}).boundingBox();
+  expect(dismissBounds.width).toBeGreaterThanOrEqual(44);
+  expect(dismissBounds.height).toBeGreaterThanOrEqual(44);
+  expect(titleBounds.x + titleBounds.width).toBeLessThanOrEqual(dismissBounds.x);
+  await page.evaluate(() => {
+    const setItem = Storage.prototype.setItem;
+    Storage.prototype.setItem = function(key, value) {
+      if (key.startsWith('mission-selection-recent-courses-dismissed:')) {
+        throw new DOMException('Storage unavailable', 'QuotaExceededError');
+      }
+      return setItem.call(this, key, value);
+    };
+  });
+  await dismiss.click();
+  await expect(recent.getByRole('status')).toHaveText('Could not hide this section. Please try again.');
+  await page.reload();
+  await expect(recent.getByRole('heading', {name: firstTitle})).toBeVisible();
+  await dismiss.click();
+  await expect(recent).toHaveCount(0);
+  await expect(carousel).toBeFocused();
+  await page.reload();
+  await expect(carousel.locator('.home-course-slide')).toHaveCount(4);
+  await expect(recent).toHaveCount(0);
+  await page.goto('/#course/slider-expired');
+  await expect(page.locator('.course-overview h1')).toHaveText('Expired course');
+  await page.goto('/#home');
+  await expect(carousel.locator('.home-course-slide')).toHaveCount(4);
+  await expect(recent).toHaveCount(0);
+  await page.goto('/#course/slider-a');
+  await expect(page.locator('.course-overview h1')).toHaveText(firstTitle);
+  await page.goto('/#home');
+  await expect(recent.getByRole('heading', {name: firstTitle})).toBeVisible();
+  await swipeLeft(page, carousel, page.getByRole('button', {name: 'Show course 2 of 4: Second course'}));
+  const fourthDot = page.getByRole('button', {name: 'Show course 4 of 4: Fourth course'});
+  const coverFrame = page.locator('.home-cover-slider');
+  await expect(coverFrame.locator('.home-slider-dots')).toBeVisible();
+  const coverBounds = await coverFrame.boundingBox();
+  const dotBounds = await fourthDot.boundingBox();
+  expect(dotBounds.y).toBeGreaterThanOrEqual(coverBounds.y);
+  expect(dotBounds.y + dotBounds.height).toBeLessThanOrEqual(coverBounds.y + coverBounds.height);
+  await fourthDot.click();
+  await expect(fourthDot).toHaveAttribute('aria-current', 'true');
+  await carousel.focus();
+  await page.keyboard.press('ArrowLeft');
+  await expect(page.getByRole('button', {name: 'Show course 3 of 4: Third course'}))
+    .toHaveAttribute('aria-current', 'true');
+  for (const width of [320, 360, 390, 1024]) {
+    await page.setViewportSize({width, height: 800});
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+    const bounds = await carousel.boundingBox();
+    expect(bounds.width).toBeLessThanOrEqual(width);
+  }
+  await page.setViewportSize({width: 320, height: 740});
+  await fourthDot.click();
+  await carousel.getByRole('link', {name: 'View course: Fourth course'}).click();
+  await expect(page).toHaveURL(/#course\/slider-d$/);
+  await expect(page.getByRole('heading', {name: 'Fourth course'})).toBeVisible();
+  await page.goto('/#home');
+  const recentCards = recent.locator('.home-recent-card');
+  await expect(recentCards).toHaveCount(2);
+  await expect(recentCards.nth(0).getByRole('heading', {name: 'Fourth course'})).toBeVisible();
+  await expect(recentCards.nth(0).getByRole('link', {name: 'Buy Now'})).toHaveAttribute('href', '#course/slider-d');
+  await recentCards.nth(0).getByRole('link', {name: 'Buy Now'}).click();
+  await expect(page).toHaveURL(/#course\/slider-d$/);
+  await page.goto('/#course/slider-b');
+  await expect(page.getByRole('heading', {name: 'Second course', exact: true})).toBeVisible();
+  await page.goto('/#home');
+  await expect(recentCards).toHaveCount(3);
+  await expect(recentCards.nth(0).getByRole('heading', {name: 'Second course'})).toBeVisible();
+  for (const width of [320, 360, 375, 390, 1024]) {
+    await page.setViewportSize({width, height: 800});
+    const layout = await dismiss.evaluate(element => ({
+      right: element.getBoundingClientRect().right,
+      width: document.documentElement.clientWidth,
+      scrollWidth: document.documentElement.scrollWidth,
+    }));
+    expect(layout.right).toBeLessThanOrEqual(layout.width);
+    expect(layout.scrollWidth).toBeLessThanOrEqual(layout.width);
+  }
+  await page.setViewportSize({width: 320, height: 740});
+  const recentTrack = page.getByRole('region', {name: 'Recently viewed courses'});
+  const recentFourthDot = recent.getByRole('button', {name: 'Show recently viewed course 2 of 3: Fourth course'});
+  await swipeLeft(page, recentTrack, recentFourthDot);
+  await expect(recent.locator('.home-recent-slider .home-slider-dots')).toBeVisible();
+  await recentCards.nth(1).getByRole('link', {name: 'Buy Now'}).click();
+  await expect(page).toHaveURL(/#course\/slider-d$/);
+  await expect(page.locator('.course-overview h1')).toHaveText('Fourth course');
+  await page.goto('/#course/slider-expired');
+  await expect(page.getByRole('heading', {name: 'Expired course', exact: true})).toBeVisible();
+  await page.goto('/#home');
+  await expect(recentCards).toHaveCount(3);
+  await expect(recentCards.nth(0).getByRole('heading', {name: 'Fourth course'})).toBeVisible();
+
+  purchases = ['slider-d'];
+  await page.reload();
+  await expect(carousel.locator('.home-course-slide')).toHaveCount(4);
+  await expect(recentCards).toHaveCount(2);
+  await expect(recent.getByRole('heading', {name: 'Fourth course'})).toHaveCount(0);
+  purchases = [];
+  visibleCourses = courses.map(course => course.id === 'slider-d' ? {...course, expired: true} : course);
+  await page.reload();
+  await expect(carousel.locator('.home-course-slide')).toHaveCount(3);
+  await expect(recentCards).toHaveCount(2);
+  await expect(recent.getByRole('heading', {name: 'Fourth course'})).toHaveCount(0);
+  visibleCourses = courses.filter(course => course.id !== 'slider-d');
+  await page.reload();
+  await expect(carousel.locator('.home-course-slide')).toHaveCount(3);
+  await expect(recentCards).toHaveCount(2);
+  await expect(recent.getByRole('heading', {name: 'Fourth course'})).toHaveCount(0);
+  visibleCourses = courses;
+  await page.reload();
+  await expect(recentCards.nth(0).getByRole('heading', {name: 'Fourth course'})).toBeVisible();
+
+  await page.goto('/#signin');
+  await signIn(page, '98765 43296');
+  await page.goto('/#home');
+  await expect(carousel.locator('.home-course-slide')).toHaveCount(4);
+  await expect(recent).toHaveCount(0);
+  await page.goto('/#course/slider-c');
+  await expect(page.locator('.course-overview h1')).toHaveText('Third course');
+  await page.goto('/#home');
+  await expect(recent.getByRole('heading', {name: 'Third course'})).toBeVisible();
+  await dismiss.click();
+  await expect(recent).toHaveCount(0);
+  await page.goto('/#signin');
+  await signIn(page, '98765 43295');
+  await page.goto('/#home');
+  await expect(recent.getByRole('heading', {name: 'Fourth course'})).toBeVisible();
+});
+
 test('notification bell is in the mobile header instead of quick access', async ({page}) => {
   await page.setViewportSize({width: 390, height: 844});
   await signIn(page);

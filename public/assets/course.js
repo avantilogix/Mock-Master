@@ -1,6 +1,6 @@
 import {api} from './services.js';
 import {coverGallery} from './publishing-media.js';
-import {bindForm, button, createPaymentDialog, el, entries, field, firstAttemptScore, formatDate, heading, icon, idPart, link, loadInto, panel, rule, run, say, status, textValue} from './ui.js?v=merge-resolved-v1';
+import {bindForm, button, createPaymentDialog, el, entries, field, firstAttemptScore, formatDate, heading, icon, iconAction, idPart, link, loadInto, panel, rule, run, say, status, textValue} from './ui.js?v=merge-resolved-v1';
 
 export const upiReference = control => rule(control, value =>
   /^[A-Za-z0-9][A-Za-z0-9 _/.-]{2,79}$/.test(value) ? '' :
@@ -21,6 +21,120 @@ const shortcut = (glyph, title, description, href, tone = '') => el('a',
   {class: `shortcut ${tone}`, href},
   el('span', {class: 'shortcut-icon'}, icon(glyph, 'line-icon')),
   el('strong', {}, title), el('small', {}, description));
+
+const recentCourseKey = uid => `mission-selection-recent-course:${uid}`;
+const recentCoursesKey = uid => `mission-selection-recent-courses:${uid}`;
+const recentDismissedKey = uid => `mission-selection-recent-courses-dismissed:${uid}`;
+
+function recentCourses(uid, viewedId) {
+  try {
+    const saved = localStorage.getItem(recentCoursesKey(uid));
+    const legacy = saved === null ? localStorage.getItem(recentCourseKey(uid)) : null;
+    let ids = saved === null ? (legacy ? [legacy] : []) : JSON.parse(saved);
+    if (!Array.isArray(ids) || ids.some(id => typeof id !== 'string')) {
+      throw new TypeError('Invalid recently viewed courses');
+    }
+    if (viewedId !== undefined) {
+      ids = [viewedId, ...ids.filter(id => id !== viewedId)];
+      localStorage.setItem(recentCoursesKey(uid), JSON.stringify(ids));
+      localStorage.removeItem(recentDismissedKey(uid));
+    } else if (localStorage.getItem(recentDismissedKey(uid)) === '1') {
+      return [];
+    }
+    return ids;
+  } catch (error) {
+    if (!(error instanceof DOMException || error instanceof SyntaxError || error instanceof TypeError)) throw error;
+    console.warn('Recently viewed courses are unavailable on this device:', error);
+    return [];
+  }
+}
+
+function courseCover(course, className = '') {
+  return coverGallery({...course, images: (course.images || []).slice(0, 1)}, className) ||
+    el('div', {class: `catalog-course-placeholder ${className}`}, icon('courses', 'line-icon'));
+}
+
+function courseSlider(courses, slides, {label, dotName, className}) {
+  const track = el('div', {class: 'home-course-track', tabindex: '0', role: 'region', 'aria-label': label}, slides);
+  const dots = courses.map((course, index) => {
+    const dot = button('', 'home-slider-dot');
+    dot.setAttribute('aria-label', `Show ${dotName} ${index + 1} of ${courses.length}: ${course.title}`);
+    dot.addEventListener('click', () => go(index));
+    return dot;
+  });
+  const dotList = el('div', {class: 'home-slider-dots', 'aria-label': 'Choose a course'}, dots);
+  let position = 0;
+  const update = index => {
+    position = Math.max(0, Math.min(courses.length - 1, index));
+    dots.forEach((dot, i) => dot.setAttribute('aria-current', String(i === position)));
+    const dotBounds = dots[position].getBoundingClientRect();
+    const listBounds = dotList.getBoundingClientRect();
+    if (dotBounds.left < listBounds.left) dotList.scrollLeft -= listBounds.left - dotBounds.left;
+    else if (dotBounds.right > listBounds.right) dotList.scrollLeft += dotBounds.right - listBounds.right;
+  };
+  const go = index => {
+    update(index);
+    track.scrollTo({left: track.clientWidth * position, behavior: 'auto'});
+  };
+  track.addEventListener('scroll', () => {
+    if (track.clientWidth) update(Math.round(track.scrollLeft / track.clientWidth));
+  }, {passive: true});
+  track.addEventListener('keydown', event => {
+    if (event.target !== track || !['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
+    event.preventDefault();
+    go(position + (event.key === 'ArrowRight' ? 1 : -1));
+  });
+  update(0);
+  return el('div', {class: `home-slider-frame ${className}${courses.length > 1 ? ' has-dots' : ''}`},
+    track, courses.length > 1 ? dotList : null);
+}
+
+function courseDiscovery(rows, me, uid) {
+  rows = rows.filter(course => !course.expired);
+  const sections = [];
+  const available = new Map(rows.filter(course => !owns(me, course.id)).map(course => [String(course.id), course]));
+  const recent = (uid && me ? recentCourses(uid) : []).map(id => available.get(id)).filter(Boolean);
+  if (recent.length) {
+    const dismiss = iconAction(button('', 'secondary home-recent-dismiss'), 'close', 'Dismiss recently viewed courses');
+    const feedback = status();
+    const slides = recent.map(course => el('div', {class: 'home-recent-card'},
+      courseCover(course, 'home-recent-cover'),
+      el('div', {class: 'home-recent-copy'}, el('h3', {}, course.title),
+        el('strong', {class: 'home-recent-price'}, priceText(course.price)),
+        link('Buy Now', `#course/${idPart(course.id)}`, 'button secondary'))));
+    const section = el('section', {class: 'home-recent-course', 'aria-labelledby': 'home-recent-title'},
+      el('div', {class: 'home-recent-header'},
+        el('div', {class: 'home-recent-heading'}, el('h2', {id: 'home-recent-title'}, 'You are almost there'),
+          el('p', {}, 'Continue exploring courses you recently viewed.')), dismiss),
+      courseSlider(recent, slides, {label: 'Recently viewed courses', dotName: 'recently viewed course',
+        className: 'home-recent-slider'}), feedback);
+    dismiss.addEventListener('click', () => {
+      try {
+        localStorage.setItem(recentDismissedKey(uid), '1');
+      } catch (error) {
+        if (!(error instanceof DOMException)) throw error;
+        console.warn('Could not dismiss recently viewed courses:', error);
+        say(feedback, 'Could not hide this section. Please try again.', true);
+        return;
+      }
+      const next = section.nextElementSibling?.querySelector('.home-course-track');
+      section.remove();
+      next?.focus({preventScroll: true});
+    });
+    sections.push(section);
+  }
+  if (!rows.length) return sections;
+  const slides = rows.map(course => {
+    const slide = link('', `#course/${idPart(course.id)}`, 'home-course-slide');
+    slide.setAttribute('aria-label', `View course: ${course.title}`);
+    slide.append(courseCover(course, 'home-slider-cover'), el('span', {class: 'home-slide-title'}, course.title));
+    return slide;
+  });
+  sections.push(el('section', {class: 'home-course-discovery', 'aria-labelledby': 'home-course-discovery-title'},
+    el('div', {class: 'section-heading'}, el('h2', {id: 'home-course-discovery-title'}, 'Explore courses')),
+    courseSlider(rows, slides, {label: 'Course covers', dotName: 'course', className: 'home-cover-slider'})));
+  return sections;
+}
 
 function courseCard(course, index, me, myCourse = false) {
   const owned = owns(me, course.id);
@@ -55,9 +169,11 @@ function courseCard(course, index, me, myCourse = false) {
 
 export function showDashboard(main, ctx, me, userDisplayName) {
   const courses = el('div', {class: 'grid'});
+  const discovery = el('div', {class: 'home-discovery'});
   const displayName = me?.name?.trim() || me?.displayName?.trim() || userDisplayName?.trim();
   main.append(
     el('section', {class: 'home-greeting'}, el('h1', {}, `Hello, ${displayName || 'learner'}`)),
+    discovery,
     el('section', {class: 'section'},
       el('div', {class: 'section-heading'}, el('h2', {}, 'Quick Access')),
       el('div', {class: 'shortcut-grid'},
@@ -74,11 +190,12 @@ export function showDashboard(main, ctx, me, userDisplayName) {
         shortcut('play', 'YouTube Videos', 'Watch focused lessons', '#videos', 'rose'),
         shortcut('chat', 'Course Groups', 'Discuss with fellow learners', '#groups', 'blue'))),
     el('section', {class: 'section home-course-section'},
-      el('div', {class: 'section-heading'}, el('h2', {}, me?.purchases?.length ? 'Continue Learning' : 'Popular Courses'),
-        link('Browse All', '#catalog')),
+      el('div', {class: 'section-heading'}, el('h2', {}, me?.purchases?.length ? 'Continue Learning' : 'Popular Courses')),
       courses));
   loadInto(courses, ctx, async () => {
     const rows = await api('/courses', {ctx});
+    if (!ctx.current()) return;
+    discovery.replaceChildren(...courseDiscovery(rows, me, ctx.user?.uid));
     const selected = me?.purchases?.length ? rows.filter(course => owns(me, course.id)) : rows.slice(0, 3);
     courses.replaceChildren(...(selected.length ? selected.map(courseCardWithProfile(me)) :
       [el('p', {class: 'empty'}, me ? 'No purchased missions yet. Explore the catalog to begin.' : 'Explore available missions and sign in when you are ready.')]));
@@ -714,6 +831,9 @@ export function showCourse(main, ctx, session, action) {
       access.replaceChildren(el('p', {class: 'empty'}, 'This course is no longer listed in the catalog.'));
       overview.replaceChildren(el('p', {class: 'empty'}, 'This course is no longer listed in the catalog.'));
       return;
+    }
+    if (ctx.current() && ctx.user?.uid && session?.me && !owned && !course.expired) {
+      recentCourses(ctx.user.uid, String(course.id));
     }
     const gallery = coverGallery(course);
     const cover = gallery || el('div', {class: 'course-overview-cover catalog-course-placeholder'},
