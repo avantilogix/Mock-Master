@@ -2,7 +2,7 @@ import {api} from './services.js';
 import {el, empty, firstAttemptScore, heading, idPart, link, loadInto} from './ui.js';
 
 export function showFreeTests(main, ctx, action) {
-  main.append(...heading('Free Test Series', 'Practise without purchasing a course.'));
+  main.append(...heading('Free test series', 'Choose a test and practise without purchasing a course.'));
   if (!ctx.user) {
     main.append(action.signInLink());
     return;

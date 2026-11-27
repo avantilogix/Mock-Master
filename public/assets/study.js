@@ -14,7 +14,7 @@ export function showTest(main, ctx, courseId, testId, phone) {
   const backTarget = isFreeTest ? '#free-tests' : isCurrentAffairs ? '#current-affairs' : `#course/${idPart(courseId)}`;
   const back = () => backLink(isFreeTest ? 'Back to Free Test Series' :
     isCurrentAffairs ? 'Back to Current Affairs' : 'Back to Course', backTarget);
-  main.append(back(), ...heading('Exam Room'), content);
+  main.append(back(), ...heading('Exam room'), content);
   loadInto(content, ctx, async () => {
     const test = await protectedGet(ctx, path);
     if (!test.questions.length) {
@@ -400,7 +400,7 @@ export function showLeaderboard(main, ctx, courseId, testId) {
   main.append(backLink(isFreeTest ? 'Back to Free Test Series' :
     isCurrentAffairs ? 'Back to Current Affairs' : 'Back to Course',
     isFreeTest ? '#free-tests' : isCurrentAffairs ? '#current-affairs' : `#course/${idPart(courseId)}`),
-    ...heading('Live Test Leaderboard', 'Rankings use the first attempt and are finalized when the live window closes.'), content);
+    ...heading('Live test leaderboard', 'Rankings use the first attempt and are finalized when the live window closes.'), content);
   loadInto(content, ctx, async () => {
     const board = await protectedGet(ctx, `/tests/${idPart(testId)}/leaderboard`);
     const top = board.rows.slice(0, 3);
@@ -437,7 +437,7 @@ export function showLeaderboard(main, ctx, courseId, testId) {
 export function showVideo(main, ctx, courseId, videoId) {
   const back = () => backLink('Back to Study Materials', '#materials');
   const content = el('div');
-  main.append(back(), ...heading('Chapter Video'), content);
+  main.append(back(), ...heading('Chapter video'), content);
   loadInto(content, ctx, async () => {
     const {videos = [], downloadsEnabled} = await protectedGet(ctx, `/courses/${idPart(courseId)}`);
     const video = videos.find(item => String(item.id) === videoId);
@@ -460,7 +460,7 @@ export function showBook(main, ctx, courseId, bookId) {
     return control;
   };
   const content = el('div', {class: 'book-reader'});
-  main.append(back(), ...heading('Study Book'), content);
+  main.append(back(), ...heading('Study book'), content);
   loadInto(content, ctx, async () => {
     const {books, downloadsEnabled} = await protectedGet(ctx, `/courses/${idPart(courseId)}`);
     const book = books.find(item => String(item.id) === bookId);

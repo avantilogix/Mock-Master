@@ -1,6 +1,6 @@
 import {api} from './services.js';
 import {pdfReader} from './ebooks.js?v=pdf-reader-minimal-v2';
-import {bindForm, button, confirmDelete, el, empty, field, heading, icon, idPart, link, loadInto, panel, rule, run, say, status, textValue} from './ui.js';
+import {backLink, bindForm, button, confirmDelete, el, empty, field, heading, icon, idPart, link, loadInto, panel, rule, run, say, status, textValue} from './ui.js';
 
 async function download(ctx, item) {
   const blob = await api(`/free-materials/${idPart(item.id)}/download`, {ctx, auth: true, blob: true});
@@ -20,7 +20,7 @@ function downloadButton(ctx, item, feedback) {
 }
 
 export function showFreeMaterials(main, ctx, action) {
-  main.append(...heading('Free Study Material', 'Read free PDFs without purchasing a course.'));
+  main.append(...heading('Free study material', 'Explore free PDFs and read them without purchasing a course.'));
   if (!ctx.user) {
     main.append(action.signInLink());
     return;
@@ -41,7 +41,7 @@ export function showFreeMaterials(main, ctx, action) {
 
 export function showFreeMaterial(main, ctx, id) {
   const content = el('div');
-  main.append(link('Back to Free Study Material', '#free-materials', 'back'), content);
+  main.append(backLink('Back to Free study material', '#free-materials'), content);
   loadInto(content, ctx, async () => {
     const item = await api(`/free-materials/${idPart(id)}`, {ctx, auth: true});
     const feedback = status();

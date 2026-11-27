@@ -64,7 +64,7 @@ export function showDashboard(main, ctx, me, userDisplayName) {
         shortcut('courses', 'My Courses', 'Continue purchased learning', '#my-courses', 'mint'),
         shortcut('test', 'Test Series', 'Practice exam questions', '#test-series', 'blue'),
         shortcut('courses', 'Book Store', 'Find secure study books', '#book-store', 'orange'),
-        shortcut('files', 'Study Materials', 'Open your saved PDFs', '#materials', 'purple'),
+        shortcut('files', 'Study Materials', 'Explore your course PDFs and videos', '#materials', 'purple'),
         shortcut('files', 'Free Study Material', 'Read free PDFs', '#free-materials', 'purple'),
         shortcut('test', 'Free Test Series', 'Practise free tests', '#free-tests', 'blue'),
         shortcut('news', 'Current Affairs', 'Daily exam updates', '#current-affairs', 'rose'),
@@ -72,7 +72,7 @@ export function showDashboard(main, ctx, me, userDisplayName) {
         shortcut('news', 'Syllabus', 'View topics and learning plan', '#syllabus', 'purple'),
         shortcut('calendar', 'Timetable', 'Plan your study week', '#timetable', 'blue'),
         shortcut('play', 'YouTube Videos', 'Watch focused lessons', '#videos', 'rose'),
-        shortcut('chat', 'Course Groups', 'Discuss with purchasers', '#groups', 'blue'))),
+        shortcut('chat', 'Course Groups', 'Discuss with fellow learners', '#groups', 'blue'))),
     el('section', {class: 'section home-course-section'},
       el('div', {class: 'section-heading'}, el('h2', {}, me?.purchases?.length ? 'Continue Learning' : 'Popular Courses'),
         link('Browse All', '#catalog')),
@@ -91,7 +91,7 @@ export function showMyCourses(main, ctx, me, action) {
   const coursesTab = link('Courses', '#my-courses', 'my-course-tab');
   coursesTab.setAttribute('aria-current', 'page');
   const testsTab = link('Test Series', '#test-series', 'my-course-tab');
-  main.append(el('h1', {class: 'sr-only'}, 'My Courses'),
+  main.append(el('h1', {class: 'sr-only'}, 'My courses'),
     el('nav', {class: 'my-course-tabs', 'aria-label': 'Course categories'}, coursesTab, testsTab));
   if (!ctx.user) {
     main.append(panel('Your Learning Library', el('p', {}, 'Sign in to restore courses purchased with your mobile number.'),
@@ -432,9 +432,9 @@ function testRows(ctx, items, courseId) {
 
 export function showContentLibrary(main, ctx, me, kind, action) {
   const config = {
-    'test-series': { title: 'Test Series', icon: 'test', description: 'Choose a purchased mission and start a published mock test.', empty: 'Tests become available after you purchase a mission.', item: 'tests' },
-    'book-store': { title: 'Book Store', icon: '▤', description: 'Browse missions that include protected digital study books.', empty: 'No digital books are currently listed.', item: 'books' },
-    'materials': { title: 'Study Materials', icon: '⌑', description: 'Open secure PDF books and chapter videos from your purchased missions.', empty: 'No purchased study materials yet.', item: 'books' },
+    'test-series': { title: 'Test series', icon: 'test', description: 'Choose a purchased mission and start a published mock test.', empty: 'Tests become available after you purchase a mission.', item: 'tests' },
+    'book-store': { title: 'Book store', icon: '▤', description: 'Browse missions that include protected digital study books.', empty: 'No digital books are currently listed.', item: 'books' },
+    'materials': { title: 'Study materials', icon: '⌑', description: 'Open secure PDF books and chapter videos from your purchased missions.', empty: 'No purchased study materials yet.', item: 'books' },
   }[kind];
   const libraryIcon = () => config.icon === 'test' ? icon('test', 'line-icon') : config.icon;
   main.append(...heading(config.title, config.description));
@@ -593,7 +593,7 @@ function questionPaperButton(ctx, test) {
 export function showCatalog(main, ctx, me) {
   const list = el('div', {class: 'catalog-course-list'});
   main.append(el('section', {class: 'section', id: 'available-courses'},
-    el('h1', {class: 'sr-only'}, 'All Courses'),
+    el('h1', {class: 'sr-only'}, 'All courses'),
     list));
   loadInto(list, ctx, async () => {
     const courses = await api('/courses', {ctx});
@@ -945,7 +945,7 @@ export function showCourseDiscussion(main, ctx, id) {
     if (!course) throw new Error('This course is no longer available.');
     content.replaceChildren(
       el('header', {class: 'course-discussion-header'},
-        el('h1', {}, 'Course Discussion'),
+        el('h1', {}, 'Course discussion'),
         el('p', {class: 'course-discussion-summary'}, 'Connect with fellow learners, exchange ideas, and keep your preparation moving.')),
       courseDiscussion(ctx, path, materials.messages || []));
   });

@@ -4,7 +4,7 @@ import {saveControl} from './saved-content.js?v=merge-resolved-v1';
 import {backLink, bindForm, button, createPaymentDialog, el, field, heading, icon, idPart, link, loadInto, run, say, status, textValue} from './ui.js?v=merge-resolved-v1';
 
 export function showEbookStore(main, ctx, action) {
-  main.append(...heading('E-Book Store', 'Buy protected digital books. Access and download unlock after admin payment approval.'));
+  main.append(...heading('E-book store', 'Buy protected digital books. Access and download unlock after admin payment approval.'));
   const content = el('div', {class: 'grid ebook-grid'});
   main.append(content);
   loadInto(content, ctx, async () => {
@@ -115,16 +115,19 @@ function paymentPanel(target, ctx, book, action) {
 }
 
 export function showEbook(main, ctx, bookId, action) {
-  main.append(...heading('E-Book'), el('div'));
-  loadInto(main, ctx, async () => {
+  const content = el('div');
+  const [title] = heading('E-book');
+  main.append(title, content);
+  loadInto(content, ctx, async () => {
     const books = await api('/ebooks', {ctx});
     const book = books.find(item => String(item.id) === bookId);
     if (!book) throw new Error('E-book not found.');
     const orders = ctx.user ? await api('/ebook-orders', {ctx, auth: true}) : [];
     const order = orders.find(item => item.ebook === book.id);
-    main.replaceChildren(...heading(book.title, book.description));
+    title.textContent = book.title;
+    content.replaceChildren(...(book.description ? [el('p', {class: 'lead'}, book.description)] : []));
     if (!ctx.user) {
-      main.append(action.signInLink('Sign In to Purchase'));
+      content.append(action.signInLink('Sign In to Purchase'));
       return;
     }
     if (order?.status !== 'approved') {
@@ -136,7 +139,7 @@ export function showEbook(main, ctx, bookId, action) {
         paymentPanel(target, ctx, book, action);
         if (!dialog.open) dialog.showModal();
       });
-      main.append(el('section', {class: 'panel ebook-payment-launch-card'},
+      content.append(el('section', {class: 'panel ebook-payment-launch-card'},
         el('h2', {}, order?.status === 'pending' ? 'Payment Under Review' : 'Purchase This E-Book'),
         el('p', {class: 'muted'}, order?.status === 'pending' ?
           'Check your payment status or review the submitted transaction.' :
@@ -145,7 +148,7 @@ export function showEbook(main, ctx, bookId, action) {
       openPayment.click();
       return;
     }
-    pdfReader(main, ctx, {...book, pagePath: `/ebooks/${idPart(book.id)}/pages`,
+    pdfReader(content, ctx, {...book, pagePath: `/ebooks/${idPart(book.id)}/pages`,
       savedItem: {type: 'ebook', id: String(book.id), title: book.title, pages: book.pages,
         pagePath: `/ebooks/${idPart(book.id)}/pages`}});
   });

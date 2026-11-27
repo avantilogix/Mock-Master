@@ -113,6 +113,6 @@ test('service failures show a friendly message and can be retried', async ({page
   expect(await page.locator('body').innerText()).not.toMatch(/net::err_|failed to fetch|stack trace/i);
   await page.unroute('**/api/courses');
   await page.getByRole('button', {name: 'Try Again'}).click();
-  await expect(page.getByRole('heading', {name: 'All Courses'})).toBeVisible();
+  await expect(page.getByRole('heading', {name: 'All courses'})).toBeVisible();
   await expect(page.getByText('Something went wrong. Please try again later.')).toBeHidden();
 });

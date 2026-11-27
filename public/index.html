@@ -9,10 +9,10 @@
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png?v=brand-20261126">
   <link rel="apple-touch-icon" href="/icons/icon-192.png?v=brand-20261126">
-  <link rel="stylesheet" href="/assets/styles.css?v=merge-resolved-v1">
+  <link rel="stylesheet" href="/assets/styles.css?v=course-tabs-mobile-v1">
   <link rel="stylesheet" href="/assets/android-design.css?v=pdf-reader-minimal-v2">
-  <link rel="stylesheet" href="/assets/figma-design.css?v=back-heading-v1">
-  <script type="module" src="/assets/app.js?v=pdf-reader-minimal-v2"></script>
+  <link rel="stylesheet" href="/assets/figma-design.css?v=admin-back-navigation-v1">
+  <script type="module" src="/assets/app.js?v=admin-readability-v1"></script>
 </head>
 <body>
   <a class="skip" href="#main">Skip to content</a>
@@ -22,6 +22,12 @@
         <img class="brand-mark" src="/assets/logo.png?v=brand-20261126" alt="" width="56" height="56">
         <span>Mission Selection<small>Choose · Prepare · Achieve</small></span>
       </a>
+      <div class="header-page" hidden>
+        <button type="button" class="header-page-back" aria-label="Back">
+          <svg class="line-icon" aria-hidden="true" focusable="false"><use href="/assets/icons.svg?v=course-material-file-icon-v1#back"></use></svg>
+        </button>
+        <h1 class="header-page-title"></h1>
+      </div>
       <nav id="nav" aria-label="Main navigation">
         <a href="#catalog">Courses</a>
         <a href="#support">Support</a>

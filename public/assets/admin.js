@@ -40,7 +40,7 @@ const rupeeInput = () => {
 const toPaise = control => Math.round(control.valueAsNumber * 100);
 
 export function showAdmin(main, ctx, folderTarget = null) {
-  main.append(...heading('Admin Workspace', 'Approve course payments, publish learning material, and support students from your phone.'));
+  main.append(...heading('Admin workspace', 'Approve course payments, publish learning material, and support students from your phone.'));
   const analytics = el('div', {class: 'admin-analytics'});
   main.append(analytics);
   loadInto(analytics, ctx, async () => {
@@ -874,8 +874,14 @@ export function showAdmin(main, ctx, folderTarget = null) {
       iconAction(button('', 'admin-back-button'), 'back', 'All Areas'),
       el('h2', {}, label), el('div', {class: 'admin-section-actions'}));
     const actions = toolbar.querySelector('.admin-section-actions');
-    toolbar.querySelector('.admin-back-button').addEventListener('click', showOverview);
-    const search = el('input', {type: 'search', class: 'admin-list-filter', placeholder: 'Filter list…', hidden: ''});
+    toolbar.querySelector('.admin-back-button').addEventListener('click', () => {
+      if (add && workspace.contains(add)) {
+        add.hidden = true;
+        workspace.replaceChildren(toolbar, list);
+      } else showOverview();
+    });
+    const search = el('input', {type: 'search', class: 'admin-list-filter', placeholder: 'Filter list…',
+      'aria-label': `Filter ${label}`, hidden: ''});
     search.addEventListener('input', () => {
       const term = search.value.trim().toLowerCase();
       workspace.querySelectorAll('.manage-item, .payment-request, .student-control, .timetable-card, .entries > li').forEach(row => {

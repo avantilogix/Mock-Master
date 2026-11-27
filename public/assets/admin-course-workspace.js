@@ -25,7 +25,7 @@ export function showAdminCourseWorkspace(main, ctx, courseId) {
       return tab;
     }));
   const contents = el('div', {class: 'course-workspace'});
-  main.append(...heading('Course Workspace', 'Organize course materials and mock tests with nested folders.'),
+  main.append(...heading('Course workspace', 'Organize course materials and mock tests with nested folders.'),
     tabs, feedback, contents);
 
   let activeKind = 'content';

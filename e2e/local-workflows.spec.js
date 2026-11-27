@@ -74,11 +74,10 @@ test('notification bell is in the mobile header instead of quick access', async 
   expect(bounds.x + bounds.width).toBeGreaterThan(330);
   await bell.click();
   await expect(page).toHaveURL(/#notifications$/);
-  const heading = page.getByRole('heading', {name: 'Notifications'});
-  const headingRow = page.locator('.page-heading-row').filter({has: heading});
-  const back = headingRow.locator(':scope > .page-back');
+  const heading = page.locator('.site-header').getByRole('heading', {name: 'Notifications'});
+  const back = page.locator('.site-header').getByRole('button', {name: 'Back'});
   await expect(heading).toBeVisible();
-  await expect(back).toHaveAttribute('aria-label', 'Back');
+  await expect(back).toBeVisible();
   const headingBox = await heading.boundingBox();
   const backBox = await back.boundingBox();
   expect(headingBox.x).toBeGreaterThan(backBox.x + backBox.width);
@@ -114,6 +113,30 @@ test('exam navigation asks before submitting and protects browser back', async (
     await expect(page.getByRole('img', {name: 'Score 1 out of 1 marks'})).toBeVisible();
     await page.locator('.site-header').getByRole('link', {name: 'Notifications'}).click();
     await expect(page).toHaveURL(/#notifications$/);
+  } finally {
+    await request.delete(`/api/admin/published/tests/${id}`, {headers: admin});
+  }
+});
+
+test('mobile header back preserves the exam submission confirmation', async ({page, request}) => {
+  await page.setViewportSize({width: 390, height: 844});
+  const admin = {Authorization: 'Bearer dummy:+919999999999'};
+  const created = await request.post('/api/admin/free-tests', {headers: admin,
+    data: {title: `Mobile exit ${Date.now()}`, questions: [{prompt: 'Pick four', options: ['3', '4'], answer: 1}]}});
+  expect(created.status()).toBe(201);
+  const {id} = await created.json();
+  try {
+    await signIn(page);
+    await page.goto('/#free-tests');
+    await page.locator('article').filter({hasText: 'Mobile exit'}).getByRole('link', {name: 'Start Test'}).click();
+    await page.locator('.exam-option').nth(1).click();
+    page.once('dialog', dialog => dialog.dismiss());
+    await page.locator('.site-header').getByRole('button', {name: 'Back to Free Test Series'}).click();
+    await expect(page.getByRole('button', {name: 'Submit Exam'})).toBeVisible();
+    page.once('dialog', dialog => dialog.accept());
+    await page.locator('.site-header').getByRole('button', {name: 'Back to Free Test Series'}).click();
+    await expect(page.getByRole('heading', {name: 'Your Result'})).toBeVisible();
+    await expect(page.getByRole('img', {name: 'Score 1 out of 1 marks'})).toBeVisible();
   } finally {
     await request.delete(`/api/admin/published/tests/${id}`, {headers: admin});
   }
@@ -193,14 +216,21 @@ test('free study material can be published, viewed, updated and deleted', async 
   await signIn(page);
   await page.goto('/#home');
   await page.getByRole('link', {name: /Free Study Material/}).click();
+  await expect(page.locator('.site-header').getByRole('heading', {name: 'Free study material'})).toBeVisible();
+  await expect(page.locator('.site-header .brand')).toBeHidden();
   const material = page.locator('article').filter({hasText: `${title} edited`});
   await expect(material.getByRole('button', {name: 'Download'})).toBeVisible();
+  expect((await material.boundingBox()).height).toBeLessThan(350);
   const downloadPromise = page.waitForEvent('download');
   await material.getByRole('button', {name: 'Download'}).click();
   expect((await downloadPromise).suggestedFilename()).toMatch(/\.pdf$/);
   await material.getByRole('link', {name: 'View PDF'}).click();
+  await expect(page.locator('.site-header').getByRole('heading', {name: `${title} edited`})).toBeVisible();
   await expect(page.getByRole('region', {name: `${title} edited PDF pages`})).toBeVisible();
   await expect(page.locator('.pdf-reader-pages img').first()).toBeVisible();
+  await page.locator('.site-header').getByRole('button', {name: 'Back to Free study material'}).click();
+  await expect(page).toHaveURL(/#free-materials$/);
+  await expect(page.locator('article').filter({hasText: `${title} edited`})).toBeVisible();
   await signIn(page, '99999 99999');
   await page.goto('/#admin');
   await page.getByRole('button', {name: /Free Study Material/}).click();
@@ -225,6 +255,124 @@ test('free study material can be published, viewed, updated and deleted', async 
   await finalCard.getByRole('button', {name: 'Yes, Delete'}).click();
   await expect(finalCard).toHaveCount(0);
   expect((await request.get(`/api/free-materials/${item.id}`, {headers: student})).status()).toBe(404);
+});
+
+test('mobile page and admin back buttons return to the correct level', async ({page}) => {
+  await page.setViewportSize({width: 320, height: 740});
+  await signIn(page, '99999 99999');
+  await page.goto('/#home');
+  await page.getByRole('link', {name: /Free Test Series/}).click();
+  await expect(page.locator('.site-header').getByRole('heading', {name: 'Free test series'})).toBeVisible();
+  await page.locator('.site-header').getByRole('button', {name: 'Back'}).click();
+  await expect(page).toHaveURL(/#home$/);
+  await expect(page.locator('.site-header .brand')).toBeVisible();
+  await page.goto('/#admin');
+  const area = page.getByRole('button', {name: /Free Study Material/});
+  await expect(page.locator('.admin-analytics')).toBeVisible();
+  await area.hover();
+  await expect(area.locator('small')).toHaveCSS('color', 'rgb(255, 255, 255)');
+  await area.click();
+  await expect(page.locator('.site-header').getByRole('heading', {name: 'Free Study Material'})).toBeVisible();
+  await expect(page.locator('.admin-analytics')).toBeHidden();
+  await expect(page.locator('main > .lead')).toBeHidden();
+  await page.getByRole('button', {name: 'Filter Free Study Material'}).click();
+  await expect(page.getByRole('searchbox', {name: 'Filter Free Study Material'})).toBeVisible();
+  await page.getByRole('button', {name: 'Filter Free Study Material'}).click();
+  await page.getByRole('button', {name: 'Add Free Study Material'}).click();
+  await expect(page.getByRole('button', {name: 'Publish Material'})).toBeVisible();
+  await page.locator('.site-header').getByRole('button', {name: 'All Areas'}).click();
+  await expect(page.getByRole('button', {name: 'Publish Material'})).toBeHidden();
+  await expect(page.getByRole('button', {name: 'Add Free Study Material'})).toBeVisible();
+  await page.locator('.site-header').getByRole('button', {name: 'All Areas'}).click();
+  await expect(page.getByRole('button', {name: /Free Study Material/})).toBeVisible();
+  await expect(page.locator('.admin-analytics')).toBeVisible();
+  await expect(page.locator('.site-header').getByRole('heading', {name: 'Admin workspace'})).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+});
+
+test('desktop admin sections have one back button and return through each level', async ({page}) => {
+  await page.setViewportSize({width: 1024, height: 768});
+  await signIn(page, '99999 99999');
+  await page.goto('/#admin');
+  const workspaceBack = page.locator('main > .page-heading-row > .page-back');
+  await expect(workspaceBack).toBeVisible();
+  for (const label of ['Free Study Material', 'Courses', 'Free Test Series', 'Support']) {
+    await page.locator('.admin-area-card').filter({hasText: label}).click();
+    await expect(workspaceBack).toBeHidden();
+    const sectionBack = page.getByRole('button', {name: 'All Areas'});
+    await expect(sectionBack).toHaveCount(1);
+    await expect(sectionBack).toBeVisible();
+    if (label === 'Free Study Material') {
+      await page.getByRole('button', {name: 'Add Free Study Material'}).click();
+      await expect(page.getByRole('button', {name: 'Publish Material'})).toBeVisible();
+      await sectionBack.click();
+      await expect(page.getByRole('button', {name: 'Publish Material'})).toBeHidden();
+      await expect(page.getByRole('button', {name: 'Add Free Study Material'})).toBeVisible();
+    }
+    await sectionBack.click();
+    await expect(workspaceBack).toBeVisible();
+    await expect(page.locator('.admin-area-grid')).toBeVisible();
+  }
+});
+
+test('mobile home shortcuts remain readable without clipping', async ({page}) => {
+  await signIn(page);
+  for (const width of [320, 360, 390]) {
+    await page.setViewportSize({width, height: 800});
+    await page.goto('/#home');
+    const descriptions = page.locator('.shortcut-grid .shortcut small');
+    await expect(descriptions).toHaveCount(12);
+    for (const description of await descriptions.all()) {
+      const layout = await description.evaluate(element => ({
+        fontSize: parseFloat(getComputedStyle(element).fontSize),
+        clipped: element.scrollWidth > element.clientWidth || element.scrollHeight > element.clientHeight,
+      }));
+      expect(layout.fontSize).toBeGreaterThanOrEqual(12.8);
+      expect(layout.clipped).toBe(false);
+    }
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+  }
+});
+
+test('mobile back follows the current affairs archive levels', async ({page}) => {
+  await page.setViewportSize({width: 390, height: 844});
+  await signIn(page);
+  await page.route('**/api/content/current-affairs', route => route.fulfill({json: [
+    {id: 'archive-example', title: 'Archive example', publishedAt: '2026-03-10'},
+  ]}));
+  await page.goto('/#home');
+  await page.getByRole('link', {name: /Current Affairs/}).click();
+  await page.getByRole('button', {name: '2026', exact: true}).click();
+  await page.getByRole('button', {name: /March-2026/}).click();
+  await expect(page.getByText('Archive example')).toBeVisible();
+  await page.locator('.site-header').getByRole('button', {name: '2026 Months'}).click();
+  await expect(page.getByRole('button', {name: /March-2026/})).toBeVisible();
+  await page.locator('.site-header').getByRole('button', {name: 'All Years'}).click();
+  await expect(page.getByRole('button', {name: '2026', exact: true})).toBeVisible();
+  await page.locator('.site-header').getByRole('button', {name: 'Back'}).click();
+  await expect(page).toHaveURL(/#home$/);
+});
+
+test('ebook details keep the page heading and back button after loading', async ({page}) => {
+  await page.setViewportSize({width: 390, height: 844});
+  await signIn(page);
+  await page.route('**/api/ebooks', route => route.fulfill({json: [
+    {id: 'ebook-example', title: 'Example e-book', description: 'Study notes', price: 10000, pages: 1},
+  ]}));
+  await page.route('**/api/ebook-orders', route => route.fulfill({json: [
+    {ebook: 'ebook-example', status: 'pending', reference: 'TEST123'},
+  ]}));
+  await page.route('**/api/ebooks/ebook-example/payment', route => route.fulfill({json: {
+    amount: 10000, order: {status: 'pending', reference: 'TEST123'},
+  }}));
+  await page.goto('/#book-store');
+  await page.getByRole('link', {name: 'View Payment Status'}).click();
+  await expect(page.locator('.site-header').getByRole('heading', {name: 'Example e-book'})).toBeVisible();
+  await expect(page.getByRole('dialog')).toBeVisible();
+  await page.getByRole('button', {name: 'Close payment options'}).click();
+  await page.locator('.site-header').getByRole('button', {name: 'Back'}).click();
+  await expect(page).toHaveURL(/#book-store$/);
+  await expect(page.getByRole('link', {name: 'View Payment Status'})).toBeVisible();
 });
 
 test('free tests reuse manual and imported questions and respect publication', async ({page, request}) => {
@@ -386,17 +534,43 @@ test('study timetable shows admin-published sessions only', async ({ page }) => 
     title: 'Admin Study Session', day: 'Monday', startsAt: '09:00', duration: '60 minutes', description: 'Revision',
   }]}));
   await page.goto('/#timetable');
-  await expect(page.getByRole('heading', { name: 'Study Timetable' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Study timetable' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Published Sessions' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Admin Study Session' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Add a Study Session' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: /Add to Timetable/ })).toHaveCount(0);
 });
 
+test('locked course tabs keep their labels on one line on mobile', async ({page}) => {
+  await signIn(page);
+  for (const width of [320, 360, 390]) {
+    await page.setViewportSize({width, height: 800});
+    await page.goto('/#course/sample-bank-exam');
+    const tabs = page.getByRole('tablist', {name: 'Course sections'}).getByRole('tab');
+    await expect(tabs).toHaveCount(3);
+    for (const tab of await tabs.all()) {
+      const layout = await tab.evaluate(element => {
+        const range = document.createRange();
+        range.selectNodeContents(element.firstChild);
+        const text = [...range.getClientRects()];
+        const box = element.getBoundingClientRect();
+        return {lines: text.length, left: text[0]?.left, right: text[0]?.right,
+          boxLeft: box.left, boxRight: box.right};
+      });
+      expect(layout.lines).toBe(1);
+      expect(layout.left).toBeGreaterThanOrEqual(layout.boxLeft);
+      expect(layout.right).toBeLessThanOrEqual(layout.boxRight);
+    }
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+    await page.getByRole('tab', {name: 'Content - locked'}).click();
+    await expect(page.getByText('Course Content', {exact: true})).toBeVisible();
+  }
+});
+
 test('dummy student sign-in and protected course access', async ({ page, request }) => {
   await signIn(page);
   await page.goto('/#catalog');
-  await expect(page.getByRole('heading', { name: 'All Courses' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'All courses' })).toBeVisible();
   await page.goto('/#course/sample-bank-exam');
   await page.getByRole('tab', { name: 'Content - locked' }).click();
   await expect(page.getByText('Course Content', {exact: true})).toBeVisible();
@@ -448,7 +622,7 @@ test('admin can approve a pending course payment and grant only that user', asyn
 
   await signIn(page, '99999 99999');
   await page.goto('/#admin');
-  await expect(page.getByRole('heading', { name: 'Admin Workspace' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Admin workspace' })).toBeVisible();
   await page.getByRole('button', { name: /Course Payments/ }).click();
   await page.locator('.admin-payment-group').filter({hasText: reference}).locator(':scope > summary').click();
   const payment = page.locator('.payment-request').filter({ hasText: reference });
@@ -640,6 +814,65 @@ test('downloads page exposes separate PDF and Video tabs and persists items', as
   await expect(page.getByRole('tab', { name: 'Video' })).toBeVisible();
   await page.getByRole('tab', { name: 'Video' }).click();
   await expect(page.getByText('Nothing saved yet')).toBeVisible();
+});
+
+test('downloads search filters PDFs and videos independently and preserves actions', async ({page}) => {
+  await page.setViewportSize({width: 360, height: 800});
+  await signIn(page);
+  await page.goto('/#downloads');
+  await expect(page.getByText('Nothing saved yet')).toBeVisible();
+  await page.evaluate(async () => {
+    const request = indexedDB.open('mission-selection-saved-content', 1);
+    const db = await new Promise((resolve, reject) => {
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    const rows = [
+      {uid: 'dummy-919876543210', type: 'course-pdf', id: 'pdf-1', title: 'Algebra Notes', parts: 1},
+      {uid: 'dummy-919876543210', type: 'course-pdf', id: 'pdf-2', title: 'History Notes', parts: 2},
+      {uid: 'dummy-919876543210', type: 'course-video', id: 'video-1', title: 'Algebra Lesson', parts: 1},
+      {uid: 'dummy-919876543210', type: 'course-video', id: 'video-2', title: 'History Lesson', parts: 1},
+      {uid: 'dummy-910000000000', type: 'course-pdf', id: 'other', title: 'Private Notes', parts: 1},
+    ];
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction('items', 'readwrite');
+      rows.forEach(item => tx.objectStore('items').put({...item, key: JSON.stringify([item.uid, item.type, item.id])}));
+      tx.oncomplete = resolve;
+      tx.onabort = () => reject(tx.error);
+    });
+    db.close();
+  });
+  await page.reload();
+  const pdfSearch = page.getByLabel('Search PDFs');
+  await expect(page.getByText('Algebra Notes')).toBeVisible();
+  await expect(page.getByText('Private Notes')).toHaveCount(0);
+  await pdfSearch.fill('  ALGEBRA  ');
+  await expect(page.getByText('Algebra Notes')).toBeVisible();
+  await expect(page.getByText('History Notes')).toHaveCount(0);
+  await expect(page.getByRole('link', {name: 'Open Algebra Notes'})).toBeVisible();
+  await page.getByRole('tab', {name: 'Video'}).click();
+  const videoSearch = page.getByLabel('Search videos');
+  await expect(videoSearch).toHaveValue('');
+  await videoSearch.fill('history');
+  await expect(page.getByText('History Lesson')).toBeVisible();
+  await expect(page.getByText('Algebra Lesson')).toHaveCount(0);
+  await videoSearch.fill('not found');
+  await expect(page.getByText('No saved videos match your search.')).toBeVisible();
+  await videoSearch.fill('history');
+  await page.getByRole('button', {name: 'Delete'}).click();
+  await page.getByRole('button', {name: 'Yes, Delete'}).click();
+  await expect(page.getByText('No saved videos match your search.')).toBeVisible();
+  await page.getByRole('tab', {name: 'PDF'}).click();
+  await expect(pdfSearch).toHaveValue('  ALGEBRA  ');
+  await expect(page.getByText('Algebra Notes')).toBeVisible();
+  await pdfSearch.clear();
+  await expect(page.getByText('History Notes')).toBeVisible();
+  await page.getByRole('tab', {name: 'Video'}).click();
+  await expect(videoSearch).toHaveValue('history');
+  await videoSearch.clear();
+  await expect(page.getByText('Algebra Lesson')).toBeVisible();
+  await expect(page.getByText('History Lesson')).toHaveCount(0);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
 });
 
 test('admin reviews imported Gujarati questions, fixes missing answers, and publishes without JSON editing', async ({page, request}) => {
@@ -874,7 +1107,7 @@ test('Free Tests are removed while other public learning resources remain availa
   await page.getByRole('button', { name: 'Add Resource' }).click();
   const section = page.getByRole('combobox', { name: /Section/ });
   await expect(section.locator('option')).toHaveText([
-    'Current Affairs', 'Previous Year Questions', 'Syllabus',
+    'Current affairs', 'Previous year questions', 'Syllabus',
   ]);
   await section.selectOption('syllabus');
   await expect(page.getByRole('textbox', {name: 'Short Summary *'})).toHaveCount(0);
@@ -899,7 +1132,7 @@ test('Free Tests are removed while other public learning resources remain availa
   await expect(page.getByRole('link', {name: /Test Series/})).toBeVisible();
   await expect(page.getByRole('link', {name: /Previous Year Questions/})).toBeVisible();
   await page.goto('/#free-tests');
-  await expect(page.getByRole('heading', {name: 'Page Not Found'})).toBeVisible();
+  await expect(page.getByRole('heading', {name: 'Page not found'})).toBeVisible();
   await page.goto('/#syllabus');
   await expect(page.getByRole('heading', {name: 'Syllabus', exact: true})).toBeVisible();
   await expect(page.getByRole('heading', {name: title})).toBeVisible();

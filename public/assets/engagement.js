@@ -25,7 +25,7 @@ export function showShareRate(main) {
 }
 
 export function showCourseGroups(main, ctx, me, action) {
-  main.append(...heading('Course Discussions', 'Private text groups for purchased courses only.'));
+  main.append(...heading('Course discussions', 'Ask questions and share study tips with learners in your purchased courses.'));
   if (!ctx.user) {
     main.append(panel('Purchased Course Groups', el('p', {}, 'Sign in to see the groups unlocked on your account.'),
       action.signInLink()));
@@ -49,7 +49,7 @@ export function showCourseGroups(main, ctx, me, action) {
 }
 
 export function showVideos(main, ctx) {
-  main.append(...heading('YouTube Videos', 'Learn from videos published by the Mission Selection team.'));
+  main.append(...heading('YouTube videos', 'Learn from videos published by the Mission Selection team.'));
   const list = el('div', {class: 'video-grid'});
   main.append(list);
   loadInto(list, ctx, async () => {

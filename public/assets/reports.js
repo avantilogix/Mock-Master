@@ -7,13 +7,13 @@ import {questionData} from './question-data.js';
 import {backLink, bindForm, button, el, entries, field, firstAttemptScore, heading, icon, iconAction, idPart, link, loadInto, panel, rule, run, say, status, textValue} from './ui.js?v=merge-resolved-v1';
 
 export const contentKinds = {
-  'current-affairs': {title: 'Current Affairs', icon: '◫', description: 'Explore PDF, video, and test updates by year, month, and date.'},
-  'pyqs': {title: 'Previous Year Questions', icon: '?', description: 'Revise important question patterns from earlier examinations.'},
+  'current-affairs': {title: 'Current affairs', icon: '◫', description: 'Explore PDF, video, and test updates by year, month, and date.'},
+  'pyqs': {title: 'Previous year questions', icon: '?', description: 'Revise important question patterns from earlier examinations.'},
   'syllabus': {title: 'Syllabus', icon: '☷', description: 'Organize preparation with published topic and syllabus resources.'},
 };
 
 export function showProgress(main, ctx, action) {
-  main.append(...heading('Progress Report', 'Review every submitted test and track your overall accuracy.'));
+  main.append(...heading('Progress report', 'Review every submitted test and track your overall accuracy.'));
   if (!ctx.user) {
     main.append(panel('Your Preparation Analytics', el('p', {}, 'Sign in to see your scored test attempts.'),
       action.signInLink()));

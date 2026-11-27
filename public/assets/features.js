@@ -15,7 +15,7 @@ const clock = value => {
   return `${hours % 12 || 12}:${String(minutes).padStart(2, '0')} ${hours < 12 ? 'AM' : 'PM'}`;
 };
 export function showTimetable(main, ctx) {
-  main.append(...heading('Study Timetable', 'See upcoming classes, tests, and revision sessions.'));
+  main.append(...heading('Study timetable', 'See upcoming classes, tests, and revision sessions.'));
   const sessions = el('div', {class: 'timetable'});
   main.append(panel('Published Sessions', sessions));
   loadInto(sessions, ctx, async () => {
@@ -29,7 +29,7 @@ export function showTimetable(main, ctx) {
 }
 
 export function showReferrals(main, ctx, action) {
-  main.append(...heading('Refer and Grow Together', 'Share Mission Selection and keep your preparation community moving.'));
+  main.append(...heading('Refer and grow together', 'Share Mission Selection and keep your preparation community moving.'));
   if (!ctx.user) {
     main.append(panel('Your Referral Code', el('p', {}, 'Sign in to generate a personal referral code.'), action.signInLink()));
     return;
@@ -64,31 +64,48 @@ export function showReferrals(main, ctx, action) {
 export function showDownloads(main, ctx, action) {
   main.append(...heading('Downloads', 'Content saved on this device. An internet connection is required to check access before opening.'));
   const content = el('div');
+  const search = el('input', {type: 'search', placeholder: 'Search saved PDFs'});
+  const searchField = field('Search PDFs', search);
+  searchField.classList.add('downloads-search');
+  searchField.hidden = !ctx.user;
   main.append(panel('Saved on This Device',
     el('div', {class: 'tabs', role: 'tablist', 'aria-label': 'Download type'},
       el('button', {type: 'button', class: 'tab', role: 'tab', 'aria-selected': 'true'}, 'PDF'),
       el('button', {type: 'button', class: 'tab', role: 'tab', 'aria-selected': 'false'}, 'Video')),
-    content));
+    searchField, content));
   if (!ctx.user) {
     content.append(el('p', {}, 'Sign in to view your downloads.'), action.signInLink());
     return;
   }
   let activeType = 'pdf';
+  const searches = {pdf: '', video: ''};
+  let saved = null;
+  search.addEventListener('input', () => {
+    searches[activeType] = search.value;
+    if (saved) render();
+  });
   const tabs = main.querySelectorAll('.tabs .tab');
   tabs.forEach((tab, index) => tab.addEventListener('click', () => {
     activeType = index === 0 ? 'pdf' : 'video';
     tabs.forEach((value, position) => value.setAttribute('aria-selected', String(position === index)));
-    load();
+    const label = activeType === 'pdf' ? 'PDFs' : 'videos';
+    searchField.querySelector('label').textContent = `Search ${label}`;
+    search.placeholder = `Search saved ${label}`;
+    search.value = searches[activeType];
+    if (saved) render();
   }));
-  const load = () => loadInto(content, ctx, async () => {
-    const items = (await savedItems(ctx.user.uid)).filter(item =>
+  const render = () => {
+    const items = saved.filter(item =>
       activeType === 'video' ? item.type.includes('video') :
         !item.type.includes('video'));
-    content.replaceChildren(...(items.length ? items.map(item => {
+    const query = searches[activeType].trim().toLocaleLowerCase();
+    const matches = items.filter(item => item.title.toLocaleLowerCase().includes(query));
+    content.replaceChildren(...(matches.length ? matches.map(item => {
       const feedback = status();
       const remove = confirmDelete(feedback, async () => {
         await removeSaved(ctx.user.uid, item.type, item.id);
-        load();
+        saved = saved.filter(entry => entry.key !== item.key);
+        render();
       }, {question: 'Remove this saved item?'});
       const open = item.incomplete ? null : iconAction(
         link('', `#saved/${idPart(item.type)}/${idPart(item.id)}`, 'secondary icon-button'),
@@ -99,9 +116,14 @@ export function showDownloads(main, ctx, action) {
             item.incomplete ? 'Incomplete save. Remove and try again.' :
               item.type.includes('video') ? 'Video' : `${item.parts} pages`)),
         el('div', {class: 'download-row-actions'}, open, remove), feedback);
-    }) : [el('p', {class: 'empty-library'}, 'Nothing saved yet. Open eligible learning content and choose Save to Downloads.')]));
+    }) : [el('p', {class: 'empty-library'}, items.length && query ?
+      `No saved ${activeType === 'pdf' ? 'PDFs' : 'videos'} match your search.` :
+      'Nothing saved yet. Open eligible learning content and choose Save to Downloads.')]));
+  };
+  loadInto(content, ctx, async () => {
+    saved = await savedItems(ctx.user.uid);
+    if (ctx.current()) render();
   });
-  load();
 }
 
 export function showSaved(main, ctx, type, id) {

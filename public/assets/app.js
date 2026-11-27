@@ -1,15 +1,15 @@
-import {showAdmin} from './admin.js?v=merge-resolved-v1';
-import {showFreeMaterial, showFreeMaterials} from './free-materials.js?v=pdf-reader-minimal-v2';
-import {showFreeTests} from './free-tests.js';
-import {showAdminCourseWorkspace} from './admin-course-workspace.js?v=workspace-refresh-v1';
-import {showCatalog, showContentLibrary, showCourse, showCourseDiscussion, showDashboard, showMyCourses} from './course.js?v=merge-resolved-v1';
+import {showAdmin} from './admin.js?v=admin-readability-v1';
+import {showFreeMaterial, showFreeMaterials} from './free-materials.js?v=page-navigation-v1';
+import {showFreeTests} from './free-tests.js?v=page-navigation-v1';
+import {showAdminCourseWorkspace} from './admin-course-workspace.js?v=page-navigation-v1';
+import {showCatalog, showContentLibrary, showCourse, showCourseDiscussion, showDashboard, showMyCourses} from './course.js?v=page-navigation-v1';
 import {api, firebaseAuth} from './services.js?v=persistent-session';
 import {showSignIn} from './signin.js?v=icon-only-back-v1';
-import {showBook, showLeaderboard, showTest, showVideo} from './study.js?v=pdf-reader-minimal-v2';
-import {showLearningContent, showNotifications, showProgress, showResource} from './reports.js?v=pdf-reader-minimal-v2';
-import {showDownloads, showReferrals, showSaved, showTimetable, socialFooter} from './features.js?v=pdf-reader-minimal-v2';
-import {showCourseGroups, showShareRate, showVideos} from './engagement.js?v=course-discussion-review-v1';
-import {showEbook, showEbookDemo, showEbookStore} from './ebooks.js?v=pdf-reader-minimal-v2';
+import {showBook, showLeaderboard, showTest, showVideo} from './study.js?v=page-navigation-v1';
+import {showLearningContent, showNotifications, showProgress, showResource} from './reports.js?v=page-navigation-v1';
+import {showDownloads, showReferrals, showSaved, showTimetable, socialFooter} from './features.js?v=page-navigation-v1';
+import {showCourseGroups, showShareRate, showVideos} from './engagement.js?v=page-navigation-v1';
+import {showEbook, showEbookDemo, showEbookStore} from './ebooks.js?v=page-navigation-v1';
 import {examPreferenceField, normalizeExamPreferences} from './exam-preferences.js';
 import {changePasswordForPhoneUser} from './password-verification.js';
 import {checkConnection, isConnected} from './connection.js';
@@ -20,10 +20,29 @@ const nav = document.querySelector('#nav');
 const notice = document.querySelector('#notice');
 const offlineArea = document.querySelector('#offline-area');
 const notificationLink = document.querySelector('.header-notifications');
+const headerPage = document.querySelector('.header-page');
+const headerBack = headerPage.querySelector('.header-page-back');
+const headerTitle = headerPage.querySelector('.header-page-title');
+let currentPageBack;
+headerBack.addEventListener('click', () => currentPageBack?.click());
 function alignPageBackWithHeading() {
   const pageBack = main.querySelector('.page-heading-row > .page-back, .page-heading-row > .back') ||
     main.querySelector(':scope > .page-back, :scope > .back');
   const title = main.querySelector('h1');
+  const adminBack = main.querySelector('.admin-section-toolbar .admin-back-button');
+  const adminTitle = main.querySelector('.admin-section-toolbar h2');
+  const nestedBack = ['materials', 'test-series', 'current-affairs'].includes(main.dataset.page) ?
+    [...main.querySelectorAll('.course-folder-back, .affairs-back')].filter(control => control.getClientRects().length).at(-1) : null;
+  currentPageBack = adminBack || nestedBack || pageBack;
+  headerPage.hidden = !currentPageBack || !title;
+  document.body.classList.toggle('has-page-header', !headerPage.hidden);
+  if (!headerPage.hidden) {
+    const text = (adminTitle || title).textContent;
+    if (headerTitle.textContent !== text) headerTitle.textContent = text;
+    const label = currentPageBack.getAttribute('aria-label') || 'Back';
+    headerBack.setAttribute('aria-label', label);
+    headerBack.title = label;
+  }
   if (!pageBack || !title) return;
   let headingRow = title.parentElement;
   if (!headingRow) return;
@@ -247,7 +266,7 @@ function showProfile(ctx) {
   account.append(accountSummary, accountEditor,
     el('div', {class: 'profile-purchase section'},
       el('div', {}, el('strong', {}, String(session.me?.purchases?.length || 0)), el('span', {class: 'muted'}, 'Courses Unlocked'))));
-  main.append(...heading('Your Learning Space', 'Manage your profile and keep your preparation moving forward.'), account);
+  main.append(...heading('Your learning space', 'Manage your profile and keep your preparation moving forward.'), account);
   if (!session.me) {
     main.append(panel('Display Name', profileUnavailable()));
     return;
@@ -413,7 +432,7 @@ function receiptList(ctx) {
 
 function showLegalPage(type) {
   if (type === 'copyright') {
-    main.append(...heading('Copyright Policy'),
+    main.append(...heading('Copyright policy'),
       panel('Ownership and Personal Use', el('p', {}, 'Mission Selection and its licensors retain rights in their respective materials. Purchased access is personal and does not transfer copyright or ownership.')),
       panel('Permitted Use', el('p', {}, 'Use learning materials for your own study, subject to your access terms and applicable law. Do not redistribute, sell, publish, or commercially use the materials without permission from the rights holder. Do not bypass access controls or remove attribution or watermarks.')),
       panel('Report a Concern', el('p', {}, 'If you believe content infringes your rights, contact Support with the content location, a description of the work, and information needed to review the claim.'), link('Contact Support', '#support', 'button secondary')));
@@ -421,7 +440,7 @@ function showLegalPage(type) {
   }
   if (type === 'privacy') {
     main.append(
-      ...heading('Privacy Policy', 'Last updated: 25 November 2026'),
+      ...heading('Privacy policy', 'Last updated: 25 November 2026'),
       panel('Our Commitment', el('p', {}, 'Mission Selection respects your privacy and uses personal information only to operate, secure, and improve the learning service. This policy explains what we collect, why we collect it, and the choices available to you.')),
       panel('Information We Collect', el('ul', {class: 'legal-list'},
         el('li', {}, el('strong', {}, 'Account information: '), 'verified mobile number, username, Firebase account identifier, display name, and target exam. Password credentials are managed by Firebase Authentication; Mission Selection does not collect an email address or receive or store your plaintext password.'),
@@ -445,7 +464,7 @@ function showLegalPage(type) {
       panel('Contact', el('p', {}, 'For privacy questions or requests, open the Support section and send a message from your signed-in account.'), link('Contact Support', '#support', 'button')));
   } else {
     main.append(
-      ...heading('Terms & Conditions', 'Last updated: 25 November 2026'),
+      ...heading('Terms & conditions', 'Last updated: 25 November 2026'),
       panel('Acceptance and Eligibility', el('p', {}, 'By creating an account or using Mission Selection, you agree to these terms. You must provide a genuine, verified Indian mobile number and use the application lawfully. If you are a minor or require guardian consent, use the service under appropriate supervision.')),
       panel('Account Responsibilities', el('ul', {class: 'legal-list'},
         el('li', {}, 'Keep control of your verified mobile number, one-time passwords, username, and password. Sign-in requires a phone OTP and your account password.'),
@@ -474,7 +493,7 @@ function showLegalPage(type) {
 }
 
 function showSupport(ctx) {
-  main.append(...heading('How Can We Help?', 'Find a quick answer below or send our support team a message.'),
+  main.append(...heading('How can we help?', 'Find a quick answer below or send our support team a message.'),
     el('section', {class: 'support-faq section'},
       el('details', {}, el('summary', {}, 'When will my course unlock?'), el('p', {}, 'After the admin matches your UPI transaction and approves the request. Return to the course and check approval status.')),
       el('details', {}, el('summary', {}, 'Why is my mobile number on some book pages?'), el('p', {}, 'It identifies the licensed reader and helps protect paid content. Course pages do not display this mark when downloads are enabled.')),
@@ -517,7 +536,7 @@ function render(focus = false) {
   if (parsed.page === 'notifications') notificationLink.setAttribute('aria-current', 'page');
   else notificationLink.removeAttribute('aria-current');
   const backTargets = {
-    'my-courses': '#home', 'test-series': '#home', 'book-store': '#home', 'materials': '#home',
+    'catalog': '#home', 'my-courses': '#home', 'test-series': '#home', 'book-store': '#home', 'materials': '#home',
     'free-materials': '#home', 'free-tests': '#home',
     'progress': '#profile', 'notifications': '#home', 'timetable': '#home', 'referrals': '#profile',
     'downloads': '#home', 'videos': '#home', 'groups': '#profile', 'share-app': '#profile',
@@ -532,7 +551,7 @@ function render(focus = false) {
       parsed.page === 'admin-publish-test' ? 'Back to Course Workspace' : 'Back';
     main.append(backLink(label, backTargets[parsed.page]));
   }
-  const needSignIn = () => main.append(...heading('Sign In to Continue', 'This area is available after you sign in with your mobile number.'), signInLink());
+  const needSignIn = () => main.append(...heading('Sign in to continue', 'This area is available after you sign in with your mobile number.'), signInLink());
   const [courseId, itemId] = parsed.args;
 
   switch (parsed.page) {
@@ -591,11 +610,11 @@ function render(focus = false) {
     case 'signin':
       if (current) {
         if (current.pending) {
-          main.append(...heading('Signing You In'), el('p', {class: 'muted'}, 'Preparing your account…'));
+          main.append(...heading('Signing you in'), el('p', {class: 'muted'}, 'Preparing your account…'));
           break;
         }
         const next = current.me?.admin ? '#admin' : nextAfterSignIn(parsed);
-        main.append(...heading('You’re Signed In'), link('Continue', next, 'button'));
+        main.append(...heading('You’re signed in'), link('Continue', next, 'button'));
         location.replace(next);
       } else {
         showSignIn(main, ctx, firebase, startAuth, authState, {
@@ -618,7 +637,7 @@ function render(focus = false) {
     case 'admin':
     case 'admin-publish-test':
       if (!current) needSignIn();
-      else if (!current.me) main.append(...heading('Admin Workspace'), profileUnavailable());
+      else if (!current.me) main.append(...heading('Admin workspace'), profileUnavailable());
       else if (!current.me.admin) {
         const refresh = iconAction(button('', 'secondary icon-button refresh-action'), 'refresh', 'Refresh admin access');
         const feedback = status();
@@ -627,7 +646,7 @@ function render(focus = false) {
           if (current.me?.admin) location.hash = '#admin';
           else say(feedback, 'Admin access is not assigned to this account. Contact support.', true);
         }, 'Checking account…'));
-        main.append(...heading('Admin Access Required', 'The server must verify your Firebase account before the Admin tab appears.'),
+        main.append(...heading('Admin access required', 'The server must verify your Firebase account before the Admin tab appears.'),
           el('div', {class: 'actions'}, refresh,
             iconAction(link('', '#catalog', 'button secondary icon-button'), 'back', 'Back to Missions')), feedback);
       }
@@ -635,13 +654,13 @@ function render(focus = false) {
       break;
     case 'admin-course':
       if (!current) needSignIn();
-      else if (!current.me) main.append(...heading('Course Workspace'), profileUnavailable());
+      else if (!current.me) main.append(...heading('Course workspace'), profileUnavailable());
       else if (!current.me.admin) {
-        main.append(...heading('Admin Access Required',
+        main.append(...heading('Admin access required',
           'The server must verify your account before you can organize course content.'));
       } else showAdminCourseWorkspace(main, ctx, courseId);
       break;
-    default: main.append(...heading('Page Not Found'),
+    default: main.append(...heading('Page not found'),
       iconAction(link('', '#catalog', 'button secondary icon-button'), 'back', 'Back to Courses'));
   }
   if (focus) main.focus();
