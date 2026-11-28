@@ -1,7 +1,7 @@
 import {api} from './services.js';
 import {pdfReader} from './ebooks.js?v=pdf-reader-minimal-v2';
 import {openSaved, removeSaved, savedItems, savedPart} from './saved-content.js?v=download-icon-controls-v1';
-import {backLink, bindForm, button, confirmDelete, el, entries, field, heading, icon, iconAction, idPart, link, loadInto, panel, run, say, status, textValue} from './ui.js?v=previous-only-back-v1';
+import {backLink, bindForm, button, confirmDelete, el, entries, field, heading, icon, iconAction, idPart, link, loadInto, panel, run, say, status, textValue} from './ui.js?v=merge-resolved-v1';
 
 export const socialLinks = [
   ['YouTube', 'youtube', '▶'],

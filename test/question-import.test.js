@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { PDFDocument } from 'pdf-lib';
-import { parseQuestions } from '../firebase-functions/question-import.js';
+import { PDFDocument, PDFName } from 'pdf-lib';
+import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs';
+import { parseQuestions, pdfQuestionText } from '../firebase-functions/question-import.js';
 import { importQuestions, validateQuestions } from '../server/documents.js';
 import { questionData } from '../public/assets/question-data.js';
 
@@ -137,4 +138,33 @@ test('rejoins adjacent PDF text fragments, preserves real word gaps, and reads p
   assert.deepEqual(question.options, ['Three', 'Four']);
   assert.equal(question.answer, 1);
   assert.equal(question.reviewIssues, undefined);
+});
+
+test('reads Chromium PDFs from ActualText spans with real spaces instead of unmapped glyphs', async () => {
+  const pdf = await PDFDocument.create();
+  const page = pdf.addPage([600, 800]);
+  const {context} = pdf;
+  const cmap = context.flateStream(`begincmap
+1 begincodespacerange
+<00> <FF>
+endcodespacerange
+6 beginbfchar
+<01> <0000>
+<02> <0AC1>
+<03> <0020>
+<04> <0A9C>
+<05> <0AA4>
+<01> <0A97>
+endbfchar
+endcmap`);
+  const font = context.obj({Type: 'Font', Subtype: 'Type3', FirstChar: 0, LastChar: 5, FontMatrix: [.001, 0, 0, .001, 0, 0],
+    Widths: [0, 0, 0, 0, 0, 0], FontBBox: [0, 0, 1000, 1000], CharProcs: context.obj({}), Encoding: context.obj({Type: 'Encoding', Differences: [0]}),
+    ToUnicode: context.register(cmap)});
+  page.node.setFontDictionary(PDFName.of('F1'), context.register(font));
+  const span = text => `/Span<</ActualText <FEFF${[...text].map(c => c.charCodeAt(0).toString(16).padStart(4, '0')).join('')}> >> BDC`;
+  page.node.set(PDFName.of('Contents'), context.register(context.flateStream(`BT /F1 12 Tf 1 0 0 1 50 700 Tm
+${span('ગુ')} <01> Tj 7 0 Td <02> Tj EMC 6 0 Td <04> Tj 7 0 Td <03> Tj 4 0 Td <05> Tj ET
+BT /F1 12 Tf 1 0 0 1 50 680 Tm ${span('(A) ગુજ')} <01> Tj EMC ET`)));
+  const text = await pdfQuestionText(Buffer.from(await pdf.save()), getDocument);
+  assert.equal(text, 'ગુજ ત\n(A) ગુજ');
 });

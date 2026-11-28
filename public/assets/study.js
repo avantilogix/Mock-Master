@@ -6,12 +6,15 @@ import {backLink, button, el, empty, heading, icon, idPart, link, loadInto, run,
 
 const protectedGet = (ctx, path, image = false) => api(path, {ctx, auth: true, image});
 
-export function showTest(main, ctx, courseId, testId, phone) {
+export function showTest(main, ctx, courseId, testId, phone, query) {
   const path = `/tests/${idPart(testId)}`;
   const content = el('div', {class: 'exam-shell'});
   const isCurrentAffairs = courseId === 'current-affairs';
   const isFreeTest = courseId === 'free-tests';
-  const backTarget = isFreeTest ? '#free-tests' : isCurrentAffairs ? '#current-affairs' : `#course/${idPart(courseId)}`;
+  const year = query?.get('year');
+  const month = query?.get('month');
+  const archive = year && month ? `#current-affairs?${new URLSearchParams({year, month})}` : '#current-affairs';
+  const backTarget = isFreeTest ? '#free-tests' : isCurrentAffairs ? archive : `#course/${idPart(courseId)}`;
   const back = () => backLink(isFreeTest ? 'Back to Free Test Series' :
     isCurrentAffairs ? 'Back to Current Affairs' : 'Back to Course', backTarget);
   main.append(back(), ...heading('Exam room'), content);
@@ -434,8 +437,11 @@ export function showLeaderboard(main, ctx, courseId, testId) {
   });
 }
 
-export function showVideo(main, ctx, courseId, videoId) {
-  const back = () => backLink('Back to Study Materials', '#materials');
+export function showVideo(main, ctx, courseId, videoId, query) {
+  const parent = query?.get('parent');
+  const fromCourse = parent?.startsWith(`#course/${idPart(courseId)}?`);
+  const back = () => backLink(fromCourse ? 'Back to Course' : 'Back to Study Materials',
+    fromCourse || parent?.startsWith('#materials?') ? parent : '#materials');
   const content = el('div');
   main.append(back(), ...heading('Chapter video'), content);
   loadInto(content, ctx, async () => {
@@ -454,9 +460,13 @@ export function showVideo(main, ctx, courseId, videoId) {
   });
 }
 
-export function showBook(main, ctx, courseId, bookId) {
+export function showBook(main, ctx, courseId, bookId, query) {
   const back = () => {
-    const control = backLink('Back to Course', `#course/${idPart(courseId)}`, 'page-back book-reader-back');
+    const parent = query?.get('parent');
+    const fromMaterials = parent?.startsWith('#materials?');
+    const fromCourse = parent?.startsWith(`#course/${idPart(courseId)}?`);
+    const control = backLink(fromMaterials ? 'Back to Study Materials' : 'Back to Course',
+      fromMaterials || fromCourse ? parent : `#course/${idPart(courseId)}`, 'page-back book-reader-back');
     return control;
   };
   const content = el('div', {class: 'book-reader'});

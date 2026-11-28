@@ -3,8 +3,8 @@ import {showFreeMaterial, showFreeMaterials} from './free-materials.js?v=page-na
 import {showFreeTests} from './free-tests.js?v=page-navigation-v1';
 import {showAdminCourseWorkspace} from './admin-course-workspace.js?v=page-navigation-v1';
 import {showCatalog, showContentLibrary, showCourse, showCourseDiscussion, showDashboard, showMyCourses} from './course.js?v=home-course-discovery-v3';
-import {api, firebaseAuth} from './services.js?v=persistent-session';
-import {showSignIn} from './signin.js?v=icon-only-back-v1';
+import {api, firebaseAuth} from './services.js?v=disabled-account-v1';
+import {showSignIn} from './signin.js?v=disabled-account-v1';
 import {showBook, showLeaderboard, showTest, showVideo} from './study.js?v=page-navigation-v1';
 import {showLearningContent, showNotifications, showProgress, showResource} from './reports.js?v=page-navigation-v1';
 import {showDownloads, showReferrals, showSaved, showTimetable, socialFooter} from './features.js?v=page-navigation-v1';
@@ -25,15 +25,34 @@ const headerBack = headerPage.querySelector('.header-page-back');
 const headerTitle = headerPage.querySelector('.header-page-title');
 let currentPageBack;
 headerBack.addEventListener('click', () => currentPageBack?.click());
+main.addEventListener('click', event => {
+  const pageBack = event.target.closest('.page-heading-row > .page-back, #main > .page-back');
+  if (pageBack && currentPageBack && currentPageBack !== pageBack) {
+    event.preventDefault();
+    event.stopPropagation();
+    currentPageBack.click();
+  }
+}, true);
 function alignPageBackWithHeading() {
   const pageBack = main.querySelector('.page-heading-row > .page-back, .page-heading-row > .back') ||
     main.querySelector(':scope > .page-back, :scope > .back');
   const title = main.querySelector('h1');
   const adminBack = main.querySelector('.admin-section-toolbar .admin-back-button');
   const adminTitle = main.querySelector('.admin-section-toolbar h2');
-  const nestedBack = ['materials', 'test-series', 'current-affairs'].includes(main.dataset.page) ?
-    [...main.querySelectorAll('.course-folder-back, .affairs-back')].filter(control => control.getClientRects().length).at(-1) : null;
+  const nestedBack = ['materials', 'test-series', 'current-affairs', 'course'].includes(main.dataset.page) ?
+    [...main.querySelectorAll('.course-folder-back, .affairs-back')]
+      .filter(control => control.parentElement.getClientRects().length).at(-1) : null;
   currentPageBack = adminBack || nestedBack || pageBack;
+  if (pageBack && currentPageBack !== pageBack) {
+    if (!pageBack.dataset.backLabel) pageBack.dataset.backLabel = pageBack.getAttribute('aria-label') || 'Back';
+    const label = currentPageBack.getAttribute('aria-label') || 'Back';
+    pageBack.setAttribute('aria-label', label);
+    pageBack.title = label;
+  } else if (pageBack?.dataset.backLabel) {
+    pageBack.setAttribute('aria-label', pageBack.dataset.backLabel);
+    pageBack.title = pageBack.dataset.backLabel;
+    delete pageBack.dataset.backLabel;
+  }
   headerPage.hidden = !currentPageBack || !title;
   document.body.classList.toggle('has-page-header', !headerPage.hidden);
   if (!headerPage.hidden) {
@@ -61,7 +80,7 @@ const routes = new Map([
   ['timetable', 0], ['referrals', 0], ['downloads', 0],
   ['videos', 0], ['groups', 0], ['share-app', 0], ['about', 0], ['privacy', 0], ['terms', 0], ['copyright', 0], ['saved', 2],
   ['course', 1], ['course-group', 1], ['test', 2], ['book', 2], ['ebook', 1], ['ebook-demo', 1], ['resource', 1], ['video', 2], ['leaderboard', 2], ['signin', 0],
-  ['profile', 0], ['support', 0], ['admin', 0], ['admin-course', 1], ['admin-publish-test', 2]
+  ['profile', 0], ['orders', 0], ['support', 0], ['admin', 0], ['admin-course', 1], ['admin-publish-test', 2]
 ]);
 let firebase;
 let session;
@@ -69,6 +88,7 @@ let view;
 let authState = 'idle';
 let signingOut = false;
 let phoneLoginPending = false;
+let disabledAccountNotice = false;
 let activeHash;
 let examNavigationGuard;
 
@@ -79,22 +99,8 @@ function guardExamNavigation(guard) {
     if (examNavigationGuard === guard) examNavigationGuard = null;
   };
 }
-const routeIndexKey = '__missionSelectionRouteIndex';
-const currentRouteState = history.state;
-let routeHistoryIndex = currentRouteState && typeof currentRouteState === 'object' &&
-  Number.isSafeInteger(currentRouteState[routeIndexKey]) ? currentRouteState[routeIndexKey] : 0;
-let routeBackPending = false;
-if (!currentRouteState || typeof currentRouteState !== 'object' ||
-  !Number.isSafeInteger(currentRouteState[routeIndexKey])) {
-  history.replaceState({...currentRouteState, [routeIndexKey]: routeHistoryIndex}, '', location.href);
-}
 setBackHandler(fallback => {
-  if (routeHistoryIndex > 0) {
-    if (!routeBackPending) {
-      routeBackPending = true;
-      history.back();
-    }
-  } else if (location.hash !== fallback) location.hash = fallback;
+  if (location.hash !== fallback) location.hash = fallback;
 });
 
 function route(hash = location.hash) {
@@ -165,7 +171,24 @@ function setSession(user) {
 function completePhoneLogin(user) {
   phoneLoginPending = false;
   authState = 'ready';
+  disabledAccountNotice = false;
   setSession(user);
+}
+
+async function rejectDisabledAccount() {
+  phoneLoginPending = true;
+  try {
+    await firebase.sdk.signOut(firebase.auth);
+  } catch (error) {
+    phoneLoginPending = false;
+    throw Object.assign(new Error('Your account is disabled, but sign-out failed. Please try again.'), {
+      code: 'auth/sign-out-failed', cause: error,
+    });
+  }
+  phoneLoginPending = false;
+  disabledAccountNotice = true;
+  history.replaceState(null, '', '#signin');
+  setSession(null);
 }
 
 async function refreshProfile(current) {
@@ -189,7 +212,13 @@ async function initializeProfile(current) {
       if (current.current()) current.me.examPreferences = result?.examPreferences || localExams;
     }
   } catch (error) {
-    if (current.current()) current.error = error.message;
+    if (error.code === 'account-disabled' && current.current()) {
+      try {
+        await rejectDisabledAccount();
+      } catch (signOutError) {
+        if (current.current()) current.error = signOutError.message;
+      }
+    } else if (current.current()) current.error = error.message;
   } finally {
     if (current.current()) {
       current.pending = false;
@@ -204,6 +233,12 @@ async function initializeProfile(current) {
 }
 
 function renderNav(parsed) {
+  nav.hidden = !session;
+  document.body.classList.toggle('has-navigation', Boolean(session));
+  if (!session) {
+    nav.replaceChildren();
+    return;
+  }
   const catalogActive = ['catalog', 'course', 'test', 'book', 'ebook', 'ebook-demo', 'test-series', 'book-store', 'materials'].includes(parsed.page);
   const navLink = (label, short, glyph, href, active) => el('a', {href, 'data-short': short, 'aria-label': label, 'aria-current': active ? 'page' : null},
     el('span', {class: 'nav-indicator'}, icon(glyph, 'line-icon')), el('span', {class: 'nav-label', 'data-short': short}, label));
@@ -211,7 +246,7 @@ function renderNav(parsed) {
     navLink('All Courses', 'Courses', 'missions', '#catalog', catalogActive),
     navLink('My Courses', 'My', 'courses', '#my-courses', parsed.page === 'my-courses'),
     navLink('Downloads', 'Downloads', 'download', '#downloads', parsed.page === 'downloads'),
-    session ? navLink('Profile', 'Me', 'profile', '#profile', parsed.page === 'profile') : navLink('Sign In', 'Sign in', 'profile', '#signin', parsed.page === 'signin'));
+    navLink('Profile', 'Me', 'profile', '#profile', parsed.page === 'profile'));
   if (session?.me?.admin) nav.append(navLink('Admin', 'Admin', 'admin', '#admin',
     parsed.page === 'admin' || parsed.page === 'admin-course'));
   nav.style.setProperty('--nav-count', nav.children.length);
@@ -236,6 +271,7 @@ function profileUnavailable() {
 function showProfile(ctx) {
   const phone = ctx.user.phoneNumber || session.me?.phone;
   const feedback = status();
+  const accountFeedback = status();
   const passwordFeedback = status();
   const signOut = button('Sign Out', 'secondary');
   signOut.addEventListener('click', async () => {
@@ -253,20 +289,50 @@ function showProfile(ctx) {
       if (firebase.auth.currentUser !== (session?.user ?? null)) setSession(firebase.auth.currentUser);
     }
   });
-  const name = session.me?.name || 'Student';
   const disable = button('Disable My Account', 'danger secondary');
-  disable.addEventListener('click', () => run(disable, feedback, async () => {
-    if (!window.confirm('Disable your account? You will need support to reactivate it.')) return;
-    await api('/me/disable', {ctx, auth: true, method: 'POST'});
-    await firebase.sdk.signOut(firebase.auth);
+  const disableFeedback = status();
+  const cancelDisable = button('Cancel', 'secondary');
+  const confirmDisable = button('Disable Account', 'danger');
+  const disableDialog = el('dialog', {class: 'confirm-dialog', 'aria-labelledby': 'disable-account-title',
+    'aria-describedby': 'disable-account-description'},
+    el('h2', {id: 'disable-account-title'}, 'Disable your account?'),
+    el('p', {id: 'disable-account-description'}, 'You will be signed out and will need to contact support to reactivate your account.'),
+    el('div', {class: 'actions'}, cancelDisable, confirmDisable), disableFeedback);
+  let accountDisabled = false;
+  disable.addEventListener('click', () => {
+    disableFeedback.textContent = '';
+    disableDialog.showModal();
+    cancelDisable.focus();
+  });
+  cancelDisable.addEventListener('click', () => disableDialog.close());
+  disableDialog.addEventListener('cancel', event => {
+    if (confirmDisable.disabled) event.preventDefault();
+  });
+  confirmDisable.addEventListener('click', () => run(confirmDisable, disableFeedback, async () => {
+    cancelDisable.disabled = true;
+    try {
+      if (!accountDisabled) {
+        await api('/me/disable', {ctx, auth: true, method: 'POST'});
+        accountDisabled = true;
+      }
+      try {
+        await firebase.sdk.signOut(firebase.auth);
+      } catch {
+        throw new Error('Your account was disabled, but sign-out failed. Please try again.');
+      }
+      history.replaceState(null, '', '#signin');
+      if (session) setSession(null);
+      else render(true);
+    } finally {
+      cancelDisable.disabled = false;
+    }
   }, 'Disabling account…'));
   const account = panel('Account');
   const accountSummary = el('div', {class: 'profile-summary'});
   const accountEditor = el('div', {class: 'profile-editor', hidden: ''});
-  account.append(accountSummary, accountEditor,
-    el('div', {class: 'profile-purchase section'},
-      el('div', {}, el('strong', {}, String(session.me?.purchases?.length || 0)), el('span', {class: 'muted'}, 'Courses Unlocked'))));
-  main.append(...heading('Your learning space', 'Manage your profile and keep your preparation moving forward.'), account);
+  account.classList.add('profile-account');
+  account.append(accountSummary, accountEditor);
+  main.append(...heading('Profile', 'Manage your learning, account, and preferences.'), account);
   if (!session.me) {
     main.append(panel('Display Name', profileUnavailable()));
     return;
@@ -296,7 +362,9 @@ function showProfile(ctx) {
         el('h3', {}, session.me.name || 'Student')),
         el('p', {class: 'muted'}, `Mobile: ${phone || 'Unavailable'}`),
         el('p', {class: 'profile-exam'}, normalizeExamPreferences(session.me.examPreferences || session.me.examPreference)
-          .join(' · ') || 'Choose your target exams')));
+          .join(' · ') || 'Choose your target exams'),
+        el('span', {class: 'profile-course-count'},
+          `${session.me.purchases?.length || 0} courses unlocked`)));
   };
   cancel.addEventListener('click', () => {
     input.value = session.me.name || '';
@@ -363,7 +431,7 @@ function showProfile(ctx) {
       await changePasswordForPhoneUser(firebase.sdk, firebase.auth, firebase.passwordAuth, user,
         currentPassword.value, newPassword.value);
       passwordDialog.close();
-      say(feedback, 'Password updated. Use your new password at the next sign-in.');
+      say(accountFeedback, 'Password updated. Use your new password at the next sign-in.');
     } catch (error) {
       if (error.code === 'auth/wrong-password' || error.code === 'auth/invalid-credential') {
         throw new Error('The current password is incorrect.');
@@ -375,27 +443,22 @@ function showProfile(ctx) {
   }, 'Updating password…');
   main.append(
     panel('My Learning', el('div', {class: 'profile-menu'},
-      profileAction('progress', 'Progress Reports', 'Review scores, accuracy, and test attempts', '#progress'))),
-    panel('Purchase Receipts', receiptList(ctx)),
+      profileAction('progress', 'Progress Reports', 'Review scores, accuracy, and test attempts', '#progress'),
+      profileAction('package', 'Your Orders', 'View approved course orders and receipts', '#orders'))),
     panel('Community', el('div', {class: 'profile-menu'},
       profileAction('gift', 'Referrals', 'Share your code and view earned credits', '#referrals'),
       profileAction('share', 'Share & Rate App', 'Invite friends or review Mission Selection', '#share-app')),
       el('div', {class: 'profile-social'}, el('span', {class: 'muted'}, 'Follow Mission Selection'),
         socialFooter(ctx))),
-    panel('About Mission Selection',
-      el('div', {class: 'profile-about'}, el('span', {class: 'about-mini-mark', 'aria-hidden': 'true'}, 'MS'),
-        el('div', {}, el('h3', {}, 'Choose. Prepare. Achieve.'),
-          el('p', {class: 'muted'},
-            'A focused preparation app for mock tests, chapter-wise materials, current affairs, videos, progress reports, and protected course communities.'),
-          link('Read Full Story', '#about', 'profile-about-link')))),
-    panel('Privacy & Legal', el('div', {class: 'profile-menu'},
+    panel('Account & Security', el('div', {class: 'account-actions'}, changePassword, signOut),
+      el('div', {class: 'danger-zone'}, el('div', {}, el('strong', {}, 'Disable Account'),
+        el('p', {class: 'muted'}, 'You can contact support later to request reactivation.')), disable), accountFeedback),
+    panel('About & Legal', el('div', {class: 'profile-menu'},
+      profileAction('info', 'About Us', 'Learn about Mission Selection', '#about'),
       profileAction('admin', 'Privacy Policy', 'How your account and learning data are used', '#privacy'),
       profileAction('files', 'Terms & Conditions', 'Purchase, content, community, and account rules', '#terms'),
-      profileAction('files', 'Copyright Policy', 'Rights and permitted use of learning content', '#copyright'))),
-    panel('Account Actions', el('div', {class: 'account-actions'}, changePassword, signOut),
-      el('div', {class: 'danger-zone'}, el('div', {}, el('strong', {}, 'Disable Account'),
-        el('p', {class: 'muted'}, 'You can contact support later to request reactivation.')), disable, feedback)));
-  main.append(passwordDialog);
+      profileAction('files', 'Copyright Policy', 'Rights and permitted use of learning content', '#copyright'))));
+  main.append(passwordDialog, disableDialog);
   accountEditor.replaceChildren(form);
   showSavedName();
   accountEditor.hidden = true;
@@ -538,7 +601,7 @@ function render(focus = false) {
   const backTargets = {
     'catalog': '#home', 'my-courses': '#home', 'test-series': '#home', 'book-store': '#home', 'materials': '#home',
     'free-materials': '#home', 'free-tests': '#home',
-    'progress': '#profile', 'notifications': '#home', 'timetable': '#home', 'referrals': '#profile',
+    'progress': '#profile', 'orders': '#profile', 'notifications': '#home', 'timetable': '#home', 'referrals': '#profile',
     'downloads': '#home', 'videos': '#home', 'groups': '#profile', 'share-app': '#profile',
     'about': '#profile', 'privacy': '#profile', 'terms': '#profile', 'copyright': '#profile',
     'current-affairs': '#home', 'pyqs': '#home', 'syllabus': '#home', 'support': '#profile',
@@ -559,7 +622,7 @@ function render(focus = false) {
     case 'catalog': showCatalog(main, ctx, current?.me); break;
     case 'my-courses': showMyCourses(main, ctx, current?.me, {signInLink}); break;
     case 'test-series':
-    case 'materials': showContentLibrary(main, ctx, current?.me, parsed.page, {signInLink}); break;
+    case 'materials': showContentLibrary(main, ctx, current?.me, parsed.page, {signInLink, query: parsed.query}); break;
     case 'free-materials': showFreeMaterials(main, ctx, {signInLink}); break;
     case 'free-material': if (current) showFreeMaterial(main, ctx, courseId); else needSignIn(); break;
     case 'free-tests': showFreeTests(main, ctx, {signInLink}); break;
@@ -578,7 +641,7 @@ function render(focus = false) {
     case 'about':
       main.append(...heading('About Mission Selection', 'Choose. Prepare. Achieve.'),
         el('section', {class: 'about-hero'},
-          el('div', {class: 'about-mark', 'aria-hidden': 'true'}, 'MS'),
+          el('img', {class: 'about-mark', src: '/assets/logo.png?v=brand-20261126', alt: 'Mission Selection logo', width: '72', height: '72'}),
           el('h2', {}, 'Focused preparation. One trusted learning space.'),
           el('p', {class: 'lead'},
             'Mission Selection brings mock tests, chapter-wise study materials, current affairs, videos, progress reports, and purchaser-only course groups into one mobile-first preparation app.')),
@@ -594,10 +657,10 @@ function render(focus = false) {
       break;
     case 'current-affairs':
     case 'pyqs':
-    case 'syllabus': showLearningContent(main, ctx, parsed.page, {signInLink}); break;
+    case 'syllabus': showLearningContent(main, ctx, parsed.page, {signInLink, query: parsed.query}); break;
     case 'course':
       showCourse(main, ctx, current, {
-        id: courseId, signInLink, profileUnavailable, refreshProfile,
+        id: courseId, query: parsed.query, signInLink, profileUnavailable, refreshProfile,
         purchased: title => {
           if (!current.current()) return;
           notice.textContent = `Payment approved. You now have access to ${title}.`;
@@ -621,18 +684,24 @@ function render(focus = false) {
           begin: () => { phoneLoginPending = true; },
           cancel: () => { phoneLoginPending = false; },
           complete: completePhoneLogin,
+          disabled: rejectDisabledAccount,
+          disabledNotice: disabledAccountNotice,
         });
       }
       break;
     case 'support': showSupport(ctx); break;
     case 'profile': if (current) showProfile(ctx); else needSignIn(); break;
-    case 'test': if (current) showTest(main, ctx, courseId, itemId, current.user.phoneNumber); else needSignIn(); break;
+    case 'orders':
+      main.append(...heading('Your Orders', 'View your approved course orders and download receipts.'),
+        panel('Approved Course Orders', receiptList(ctx)));
+      break;
+    case 'test': if (current) showTest(main, ctx, courseId, itemId, current.user.phoneNumber, parsed.query); else needSignIn(); break;
     case 'leaderboard': if (current) showLeaderboard(main, ctx, courseId, itemId); else needSignIn(); break;
-    case 'book': if (current) showBook(main, ctx, courseId, itemId); else needSignIn(); break;
+    case 'book': if (current) showBook(main, ctx, courseId, itemId, parsed.query); else needSignIn(); break;
     case 'ebook': showEbook(main, ctx, courseId, {signInLink}); break;
     case 'ebook-demo': showEbookDemo(main, ctx, courseId); break;
     case 'resource': showResource(main, ctx, courseId, {signInLink}); break;
-    case 'video': if (current) showVideo(main, ctx, courseId, itemId); else needSignIn(); break;
+    case 'video': if (current) showVideo(main, ctx, courseId, itemId, parsed.query); else needSignIn(); break;
     case 'saved': if (current) showSaved(main, ctx, courseId, itemId); else needSignIn(); break;
     case 'admin':
     case 'admin-publish-test':
@@ -689,14 +758,6 @@ window.addEventListener('hashchange', () => {
       examNavigationGuard();
       return;
     }
-    const state = history.state;
-    if (state && typeof state === 'object' && Number.isSafeInteger(state[routeIndexKey])) {
-      routeHistoryIndex = state[routeIndexKey];
-    } else {
-      routeHistoryIndex += 1;
-      history.replaceState({...state, [routeIndexKey]: routeHistoryIndex}, '', location.href);
-    }
-    routeBackPending = false;
     notice.textContent = '';
     render(true);
   }

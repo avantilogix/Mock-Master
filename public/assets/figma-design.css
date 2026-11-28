@@ -230,11 +230,6 @@ body { background: linear-gradient(180deg, #edf6ff 0, var(--bg) 17rem, var(--bg)
   background: var(--accent-soft);
 }
 .avatar, .profile-avatar .avatar { color: white; background: linear-gradient(145deg, #197fe0, #2eb1e8); }
-.profile-purchase > div {
-  border-color: #d2e6f6;
-  background: #f3f9ff;
-}
-
 .admin-area-card {
   border: 1px solid var(--line);
   background: white;
@@ -894,13 +889,8 @@ main:is([data-page="admin"], [data-page="admin-publish-test"]):has(.admin-sectio
 .page-back:hover { border-color: var(--line); background: white; }
 .page-back svg { width: 1.1rem; height: 1.1rem; }
 .header-page { display: none; }
-@media (min-width: 701px) {
-  main:is([data-page="admin"], [data-page="admin-publish-test"]):has(.admin-section-toolbar) > .page-heading-row {
-    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden;
-    clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
-  }
-  main:is([data-page="admin"], [data-page="admin-publish-test"]):has(.admin-section-toolbar) > .page-heading-row > .page-back { display: none; }
-}
+main:is([data-page="materials"], [data-page="test-series"], [data-page="current-affairs"], [data-page="course"]) :is(.course-folder-back, .affairs-back),
+main:is([data-page="admin"], [data-page="admin-publish-test"]) .admin-section-toolbar .admin-back-button { display: none !important; }
 @media (max-width: 700px) {
   body.has-page-header .site-header .brand { display: none; }
   body.has-page-header .header-page:not([hidden]) { display: flex; align-items: center; gap: .5rem; min-width: 0; flex: 1; }
@@ -1189,7 +1179,7 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { outline-colo
 
 .affairs-archive { display: block; }
 .affairs-archive > .affairs-back { width: auto; }
-.affairs-navigation-grid { grid-template-columns: 1fr; gap: 1rem; }
+.affairs-navigation-grid { grid-template-columns: repeat(auto-fill, minmax(min(100%, 20rem), 28rem)); gap: 1rem; }
 .affairs-year-card { min-height: 8rem; }
 .affairs-year-card strong { font-size: 1.5rem; }
 .affairs-nav-card { justify-items: center; align-content: center; gap: .5rem; min-height: 11rem; padding: 1.25rem 1rem; text-align: center; border-radius: 1rem; box-shadow: 0 6px 18px rgba(26, 60, 120, .1); }
@@ -1229,7 +1219,73 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { outline-colo
 }
 .affairs-resource-card > .button { width: auto; align-self: flex-start; }
 .affairs-resource-card details { width: 100%; padding-top: .5rem; border-top: 1px solid #e6edf5; }
-@media (min-width: 48rem) { .affairs-navigation-grid { grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr)); } }
+#main[data-page="test-series"] .test-series-course-list {
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 20rem), 28rem)); align-items: start;
+}
+#main[data-page="test-series"] .test-series-course-list:has(.materials-course-detail-head) { grid-template-columns: minmax(0, 1fr); }
+#main[data-page="test-series"] .materials-course-card { min-height: 11rem; }
+
+.tile-expandable { min-width: 0; width: 100%; }
+.tile-summary { max-height: 4.2rem; overflow: hidden; }
+.tile-summary h2, .tile-summary p { margin: 0; font-size: .95rem; line-height: 1.4rem; }
+.tile-summary h2 { font-weight: 800; }
+.tile-summary p { white-space: pre-wrap; }
+.card .tile-summary .description { display: block; min-height: 0; max-height: none; }
+.tile-expandable.is-expanded .tile-summary { max-height: none; }
+#main .tile-expand-toggle {
+  min-height: 1.65rem; padding: 0; border: 0; color: var(--accent-dark);
+  background: transparent; box-shadow: none; font-size: .8rem; font-weight: 800;
+}
+#main .tile-expand-toggle:hover { text-decoration: underline; }
+#main[data-page="test-series"] .library-preview {
+  height: 11rem; min-height: 11rem; grid-template-rows: minmax(0, 1fr) auto;
+  gap: .3rem .8rem; padding: .8rem 1rem;
+}
+#main[data-page="test-series"] .library-preview:has(.tile-expandable.is-expanded) { height: auto; }
+#main[data-page="test-series"] .library-preview > .folder-icon { grid-row: 1 / 3; }
+#main[data-page="test-series"] .library-preview > .button {
+  grid-column: 2; width: auto; min-height: 2.5rem; margin: 0; padding: .4rem .8rem;
+}
+.free-material-grid { grid-template-columns: repeat(auto-fill, minmax(min(100%, 20rem), 28rem)); }
+.free-material-card { height: 11rem; min-height: 11rem; }
+.free-material-card:has(.tile-expandable.is-expanded), .free-material-card:has(.status:not(:empty)) { height: auto; }
+.free-material-card .card-body { gap: .15rem; padding: .8rem 1rem; }
+.free-material-card .tile-summary { max-height: 2.8rem; }
+.free-material-card .tile-expandable.is-expanded .tile-summary { max-height: none; }
+.free-material-card .free-material-pages { margin: 0; font-size: .85rem; line-height: 1.25rem; }
+.free-material-card .actions { margin-top: auto; flex-wrap: wrap; }
+.free-material-card .actions .button, .free-material-card .actions button { min-height: 2.5rem; padding: .4rem .65rem; font-size: .85rem; }
+.video-grid { grid-template-columns: repeat(auto-fill, minmax(min(100%, 20rem), 28rem)); align-items: start; }
+.video-card {
+  display: grid; grid-template-columns: minmax(0, 40%) minmax(0, 1fr);
+  align-items: center; height: 11rem; min-height: 11rem;
+}
+.video-card:has(.tile-expandable.is-expanded), .video-card.video-playing,
+.video-card:has(.status:not(:empty)) { height: auto; }
+.video-frame { width: 100%; overflow: hidden; }
+.video-preview { position: relative; display: block; width: 100%; height: 100%; min-height: 0; padding: 0; border: 0; border-radius: 0; background: #17243b; }
+.video-preview img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.video-preview-play {
+  position: absolute; inset: 0; display: grid; place-items: center;
+  color: white; filter: drop-shadow(0 2px 4px rgba(0,0,0,.7));
+}
+.video-preview-play .line-icon { width: 2.75rem; height: 2.75rem; }
+.video-card.video-playing .video-frame { grid-column: 1 / -1; }
+.video-card.video-playing .video-copy { grid-column: 1 / -1; }
+.video-copy { min-width: 0; padding: .75rem; }
+.video-card-top { display: flex; align-items: center; justify-content: space-between; gap: .35rem; }
+.video-card-top .badge { min-width: 0; max-width: 100%; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#main .video-rotate { display: inline-grid; place-items: center; flex: none; width: 2.75rem; min-width: 2.75rem; height: 2.75rem; min-height: 2.75rem; padding: .55rem; }
+.video-copy .status:not(:empty) { margin-top: .5rem; font-size: .8rem; }
+
+#main[data-page="profile"] { max-width: 54rem; }
+#main[data-page="profile"] > .section { margin-top: 1rem; }
+.profile-account { background: linear-gradient(135deg, #fff, #edf7ff); }
+.profile-identity p { margin: .2rem 0; }
+.profile-exam { color: var(--accent-dark); font-size: .88rem; font-weight: 700; }
+.profile-course-count { display: inline-block; margin-top: .35rem; padding: .2rem .6rem; border-radius: 999px; background: var(--accent-soft); color: var(--accent-dark); font-size: .78rem; font-weight: 750; }
+.profile-social .social-links { display: flex; justify-content: flex-start; }
+@media (min-width: 701px) { .account-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 
 .materials-course-card {
   grid-template-columns: minmax(7rem, 38%) minmax(0, 1fr) auto;

@@ -1,6 +1,6 @@
 import {api} from './services.js';
 import {pdfReader} from './ebooks.js?v=pdf-reader-minimal-v2';
-import {backLink, bindForm, button, confirmDelete, el, empty, field, heading, icon, idPart, link, loadInto, panel, rule, run, say, status, textValue} from './ui.js';
+import {backLink, bindForm, button, confirmDelete, el, empty, expandableSummary, field, heading, icon, idPart, link, loadInto, panel, rule, run, say, status, textValue} from './ui.js?v=merge-resolved-v1';
 
 async function download(ctx, item) {
   const blob = await api(`/free-materials/${idPart(item.id)}/download`, {ctx, auth: true, blob: true});
@@ -25,14 +25,16 @@ export function showFreeMaterials(main, ctx, action) {
     main.append(action.signInLink());
     return;
   }
-  const content = el('div', {class: 'grid'});
+  const content = el('div', {class: 'grid free-material-grid'});
   main.append(content);
   loadInto(content, ctx, async () => {
     const items = await api('/free-materials', {ctx, auth: true});
     content.replaceChildren(...(items.length ? items.map(item => {
       const feedback = status();
-      return el('article', {class: 'panel card'}, el('div', {class: 'card-body'},
-        icon('files', 'line-icon'), el('h2', {}, item.title), el('p', {class: 'muted'}, `${item.pages} pages`),
+      return el('article', {class: 'panel card free-material-card'}, el('div', {class: 'card-body'},
+        icon('files', 'line-icon'),
+        expandableSummary(ctx, item.title, el('h2', {}, item.title)),
+        el('p', {class: 'muted free-material-pages'}, `${item.pages} pages`),
         el('div', {class: 'actions'}, link('View PDF', `#free-material/${idPart(item.id)}`, 'button'),
           item.downloadsEnabled ? downloadButton(ctx, item, feedback) : null), feedback));
     }) : [empty('No free study material is available yet.')]));

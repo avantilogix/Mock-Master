@@ -189,7 +189,7 @@ export function showAdmin(main, ctx, folderTarget = null) {
   }
   let courseList = [];
   const refresh = async () => {
-    courseList = await api('/courses', {ctx});
+    courseList = await api('/admin/courses', {ctx, auth: true});
     setCourses(courseList);
   };
   const loadPayments = () => loadInto(payments, ctx, async () => {

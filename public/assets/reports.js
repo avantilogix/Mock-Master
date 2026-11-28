@@ -157,20 +157,19 @@ export function showLearningContent(main, ctx, kind, action) {
       const sorted = map => [...map].sort(([a], [b]) => b.localeCompare(a));
       const resourceCard = item => {
         const badges = [];
-        if (item.media?.pdf) badges.push(el('span', {class: 'badge'}, `${item.media.pdf.pages} PDF ${item.media.pdf.pages === 1 ? 'page' : 'pages'}`));
-        if (item.media?.video) badges.push(el('span', {class: 'badge'}, 'Video'));
+        const [year, month] = (item.publishedAt || item.createdAt?.slice(0, 10) || '').split('-');
+        const testQuery = year && month ? `?${new URLSearchParams({year, month})}` : '';
         if (item.test) badges.push(el('span', {class: 'badge'}, item.test.live ? 'Live Test' : 'Mock Test'));
         return el('article', {class: 'resource-card affairs-resource-card'},
           el('div', {class: 'affairs-resource-heading'}, el('h3', {}, item.title),
             badges.length ? el('div', {class: 'actions'}, ...badges) : null),
           item.summary ? el('p', {class: 'muted'}, item.summary) : null,
           item.media?.pdf || item.media?.video ? el('div', {class: 'affairs-media-card'},
-            el('small', {class: 'muted'}, item.downloadsEnabled ? 'Downloads allowed' : 'View in app'),
-            link(item.media.pdf && item.media.video ? 'View PDF & Video' : item.media.pdf ? 'View PDF' : 'Watch Video',
-              `#resource/${idPart(item.id)}`, 'button secondary')) : null,
+            item.media.pdf ? link('View PDF', `#resource/${idPart(item.id)}?media=pdf`, 'button secondary') : null,
+            item.media.video ? link('Watch Video', `#resource/${idPart(item.id)}?media=video`, 'button secondary') : null) : null,
           item.test ? el('div', {class: 'actions'}, firstAttemptScore(item.test.firstAttempt),
             link(item.test.live ? 'Take Live Test' : 'Take Mock Test',
-              `#test/current-affairs/${idPart(item.test.id)}`, 'button')) : null,
+              `#test/current-affairs/${idPart(item.test.id)}${testQuery}`, 'button')) : null,
           item.body ? el('details', {}, el('summary', {}, 'Read Update'), el('div', {class: 'resource-body'}, item.body)) : null);
       };
       const navCard = (label, detail, onSelect) => {
@@ -211,7 +210,11 @@ export function showLearningContent(main, ctx, kind, action) {
               .format(new Date(`${date}T00:00:00Z`))),
             el('div', {class: 'affairs-day-resources'}, ...items.map(resourceCard)))));
       };
-      if (archive.size) showYears();
+      const year = action.query?.get('year');
+      const month = action.query?.get('month');
+      if (year && month && archive.get(year)?.has(month)) showDates(year, month);
+      else if (year && archive.has(year)) showMonths(year);
+      else if (archive.size) showYears();
       else content.replaceChildren(el('div', {class: 'empty-library'}, el('h2', {}, 'No Current Affairs Published Yet'),
         el('p', {class: 'muted'}, 'Admin can add dated updates from the Admin workspace.')));
       return;
@@ -244,7 +247,10 @@ export function showResource(main, ctx, id, action) {
   loadInto(content, ctx, async () => {
     const item = await api(`/resources/${idPart(id)}`, {ctx, auth: true});
     const section = contentKinds[item.kind];
-    back.href = `#${item.kind}`;
+    const date = item.publishedAt || item.createdAt?.slice(0, 10);
+    const [year, month] = (date || '').split('-');
+    back.href = item.kind === 'current-affairs' && year && month ?
+      `#current-affairs?${new URLSearchParams({year, month})}` : `#${item.kind}`;
     const label = `Back to ${section?.title || 'Learning Resources'}`;
     back.setAttribute('aria-label', label);
     back.title = label;
@@ -253,7 +259,8 @@ export function showResource(main, ctx, id, action) {
     if (item.summary || item.body) {
       content.append(el('p', {class: 'lead'}, item.summary), el('div', {class: 'resource-body'}, item.body));
     }
-    if (item.media?.video) {
+    const media = new URLSearchParams(location.hash.split('?')[1] || '').get('media');
+    if (item.media?.video && media !== 'pdf') {
       const videoArea = el('section', {class: 'panel'});
       content.append(videoArea);
       loadInto(videoArea, ctx, async () => {
@@ -269,7 +276,7 @@ export function showResource(main, ctx, id, action) {
         videoArea.replaceChildren(el('h2', {}, 'Watch Video'), download, video, feedback);
       });
     }
-    if (item.media?.pdf) {
+    if (item.media?.pdf && media !== 'video') {
       const reader = el('section', {class: 'affairs-pdf'}, el('h2', {}, 'Read PDF'));
       content.append(reader);
       pdfReader(reader, ctx, {title: item.title, pages: item.media.pdf.pages,

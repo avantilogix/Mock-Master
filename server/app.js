@@ -343,7 +343,9 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
     run(`INSERT INTO students (uid, phone) VALUES (?, ?) ON CONFLICT (uid) DO UPDATE SET phone=excluded.phone
       WHERE students.phone != excluded.phone`, user.uid, user.phone);
     const student = one('SELECT disabled FROM students WHERE uid=?', user.uid);
-    if (student?.disabled) fail(403, 'This account is disabled. Contact support to request reactivation.');
+    if (student?.disabled) return res.status(403).json({
+      error: 'This account is disabled. Contact support to request reactivation.', code: 'account-disabled',
+    });
     req.user = { ...user, admin: admins.has(user.uid) || adminMobiles.has(normalizePhone(user.phone)) };
     next();
   };
@@ -1091,6 +1093,9 @@ export function createApp({ db, verifyToken, manualPayment = {}, firebase = {}, 
   });
 
   api.use('/admin', admin);
+  api.get('/admin/courses', (_req, res) => res.json(all(`SELECT id, title, description, price,
+    downloads_enabled AS downloadsEnabled FROM courses WHERE id NOT IN (?, ?) AND archived=0 ORDER BY rowid DESC`,
+  CURRENT_AFFAIRS_COURSE_ID, FREE_TEST_COURSE_ID)));
   const workspaceFolders = id => all('SELECT id, name, parent_id AS parentId, kind FROM course_folders WHERE course=? ORDER BY rowid', id);
   api.get('/admin/courses/:id/workspace', (req, res) => {
     const id = course(idInput(req.params.id)).id;

@@ -42,9 +42,11 @@ export async function api(path, {ctx, auth = false, method = 'GET', json, binary
   if (!response.ok) {
     const body = await response.json().catch(() => null);
     check();
-    throw new Error(response.status === 401 ? 'Your session has expired. Sign in again to continue.' :
+    const error = new Error(response.status === 401 ? 'Your session has expired. Sign in again to continue.' :
       response.status >= 500 ? 'Something went wrong. Please try again later.' :
       typeof body?.error === 'string' && body.error ? body.error : 'Could not complete the request. Please try again.');
+    if (typeof body?.code === 'string') error.code = body.code;
+    throw error;
   }
   if (image && !/^image\//i.test(response.headers.get('Content-Type') || '')) {
     throw new Error('The server did not return a book image.');

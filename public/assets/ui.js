@@ -44,6 +44,31 @@ export const backLink = (text, href, className = 'page-back') => {
   return control;
 };
 export const button = (text, className, type = 'button') => el('button', {class: className, type}, text);
+export function expandableSummary(ctx, label, ...children) {
+  const content = el('div', {class: 'tile-summary', id: `tile-summary-${crypto.randomUUID()}`}, children);
+  const toggle = button('Read more', 'text-button tile-expand-toggle');
+  toggle.hidden = true;
+  toggle.setAttribute('aria-controls', content.id);
+  toggle.setAttribute('aria-expanded', 'false');
+  toggle.setAttribute('aria-label', `Read more about ${label}`);
+  const wrapper = el('div', {class: 'tile-expandable'}, content, toggle);
+  const update = () => {
+    if (!wrapper.isConnected || wrapper.classList.contains('is-expanded')) return;
+    toggle.hidden = content.scrollHeight <= content.clientHeight + 1;
+  };
+  toggle.addEventListener('click', () => {
+    const expanded = wrapper.classList.toggle('is-expanded');
+    toggle.textContent = expanded ? 'Show less' : 'Read more';
+    toggle.setAttribute('aria-expanded', String(expanded));
+    toggle.setAttribute('aria-label', `${expanded ? 'Show less' : 'Read more'} about ${label}`);
+    if (!expanded) update();
+  });
+  const observer = new ResizeObserver(update);
+  observer.observe(content);
+  ctx.signal.addEventListener('abort', () => observer.disconnect(), {once: true});
+  requestAnimationFrame(update);
+  return wrapper;
+}
 export function iconAction(control, name, label) {
   control.replaceChildren(icon(name, 'line-icon'));
   control.classList.add('icon-action');

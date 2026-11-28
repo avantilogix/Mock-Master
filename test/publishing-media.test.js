@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import sharp from 'sharp';
-import { encodeCover, expiryInput, publishingMedia, requireActive } from '../firebase-functions/publishing-media.js';
+import { encodeCover, expiryInput, publishingMedia, requireActive, visibleCourses } from '../firebase-functions/publishing-media.js';
 
 test('course expiry includes the entire selected calendar day in India', () => {
   const course = { expiresOn: '2028-02-29' };
@@ -12,6 +12,16 @@ test('course expiry includes the entire selected calendar day in India', () => {
   assert.throws(() => expiryInput(course.expiresOn, { future: true, now: midnight }), { status: 422 });
   assert.throws(() => expiryInput('2027-02-29'), { status: 422 });
   assert.equal(requireActive({}, midnight), null);
+});
+
+test('public course listings exclude expired, archived, and internal courses at the IST cutoff', () => {
+  const cutoff = Date.parse('2028-02-29T18:30:00Z');
+  const rows = [
+    {id: 'dated', expiresOn: '2028-02-29'}, {id: 'legacy'},
+    {id: 'archived', archived: true}, {id: 'internal', publicLearning: true},
+  ];
+  assert.deepEqual(visibleCourses(rows, cutoff - 1).map(item => item.id), ['dated', 'legacy']);
+  assert.deepEqual(visibleCourses(rows, cutoff).map(item => item.id), ['legacy']);
 });
 
 test('cover uploads reject unsupported image formats and resize large covers', async () => {

@@ -14,7 +14,7 @@ import { paymentReference, upiDetails, upiPaymentUri } from './manual-payments.j
 import { sampleBookPdf, sampleCourses, sampleResources } from './sample-data.js';
 import { registerVideoFileRoute, registerVideoRoutes } from './chapter-videos.js';
 import { registerPublishedRoutes } from './published.js';
-import { courseCutoff, expiryInput, publishingMedia, requireActive } from './publishing-media.js';
+import { courseCutoff, expiryInput, publishingMedia, requireActive, visibleCourses } from './publishing-media.js';
 import { currentAffairs } from './current-affairs.js';
 import { registerWorkspaceRoutes } from './workspace-routes.js';
 import { chapterInput, folderView, idInput, validateFolderSnapshot } from './workspace.js';
@@ -340,7 +340,7 @@ function createApp() {
     }
   }
 
-  const login = async (req, _res, next) => {
+  const login = async (req, res, next) => {
     const [scheme, token, extra] = (req.get('Authorization') || '').split(' ');
     if (scheme.toLowerCase() !== 'bearer' || !token || extra !== undefined) {
       fail(401, 'Sign in with your mobile number.');
@@ -359,7 +359,9 @@ function createApp() {
     await db.collection('students').doc(user.uid).set({ phone: user.phone }, { merge: true });
     const student = value(await db.collection('students').doc(user.uid).get());
     if (student?.disabled) {
-      fail(403, 'This account is disabled. Contact support to request reactivation.');
+      return res.status(403).json({
+        error: 'This account is disabled. Contact support to request reactivation.', code: 'account-disabled',
+      });
     }
     const admin = isAdmin(user.uid, user.phone);
     req.user = { uid: user.uid, phone: user.phone, admin };
@@ -401,7 +403,7 @@ function createApp() {
     res.json(Object.fromEntries(['youtube', 'instagram', 'telegram'].map(key => [key, social?.[key] || ''])));
   });
   api.get('/courses', async (_req, res) => {
-    res.json((await queryCollection('courses')).filter(item => !item.publicLearning && !item.archived).sort(byNewest).map(publicCourse));
+    res.json(visibleCourses(await queryCollection('courses')).sort(byNewest).map(publicCourse));
   });
   api.get('/ebooks', async (_req, res) => {
     res.json((await queryCollection('ebooks')).filter(book => !book.archived).sort(byNewest).map(book =>
@@ -1308,6 +1310,10 @@ function createApp() {
   api.get('/books/:id/download', () => fail(403, 'Save this book inside the app instead.'));
 
   api.use('/admin', admin);
+  api.get('/admin/courses', async (_req, res) => {
+    res.json((await queryCollection('courses')).filter(item => !item.publicLearning && !item.archived)
+      .sort(byNewest).map(publicCourse));
+  });
   registerWorkspaceRoutes(api, { db, bucket, value, course });
   api.get('/admin/analytics', async (_req, res) => {
     const [students, courses, orders, ebookOrders, attempts, liveTests] = await Promise.all([

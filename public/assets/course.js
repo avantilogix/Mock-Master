@@ -1,6 +1,6 @@
 import {api} from './services.js';
 import {coverGallery} from './publishing-media.js';
-import {bindForm, button, createPaymentDialog, el, entries, field, firstAttemptScore, formatDate, heading, icon, iconAction, idPart, link, loadInto, panel, rule, run, say, status, textValue} from './ui.js?v=merge-resolved-v1';
+import {bindForm, button, createPaymentDialog, el, entries, expandableSummary, field, firstAttemptScore, formatDate, heading, icon, iconAction, idPart, link, loadInto, panel, rule, run, say, status, textValue} from './ui.js?v=merge-resolved-v1';
 
 export const upiReference = control => rule(control, value =>
   /^[A-Za-z0-9][A-Za-z0-9 _/.-]{2,79}$/.test(value) ? '' :
@@ -10,10 +10,10 @@ const inr = new Intl.NumberFormat('en-IN', {style: 'currency', currency: 'INR'})
 export const priceText = paise => inr.format(paise / 100);
 export const owns = (me, id) => me?.purchases?.some(purchase => String(purchase) === String(id));
 
-function expiryLabel(course, myCourse = false) {
+function expiryLabel(course) {
   if (!course.expiresOn) return null;
-  return el('p', {class: `course-expiry${course.expired ? ' expired' : ''}`},
-    course.expired ? 'Expired on ' : myCourse ? 'Expiry Date: ' : 'Access through ',
+  return el('p', {class: 'course-expiry'},
+    'Expires on ',
     el('time', {datetime: course.expiresOn}, formatDate(course.expiresOn, false)), ' (IST)');
 }
 
@@ -136,34 +136,27 @@ function courseDiscovery(rows, me, uid) {
   return sections;
 }
 
-function courseCard(course, index, me, myCourse = false) {
+function courseCard(course, index, me, ctx, myCourse = false) {
   const owned = owns(me, course.id);
   const cover = coverGallery(course, myCourse ? 'my-course-cover' : '') || el('div', {class: `card-cover alt-${index % 3}`},
     myCourse ? null : el('span', {}, owned ? 'Your Learning Space' : 'Mock Tests + E-Books'));
-  const description = el('p', {class: 'description tile-description'}, course.description);
-  const readMore = link('Read more', `#course/${idPart(course.id)}`, 'text-link tile-read-more');
-  readMore.hidden = true;
-  const actionLabel = myCourse ? (course.expired ? 'View Details' : 'View Course') :
-    owned && !course.expired ? 'Open Course' : 'View Details';
+  const description = myCourse ? null : expandableSummary(ctx, course.title,
+    el('p', {class: 'description'}, course.description));
+  const actionLabel = myCourse ? 'View Course' : owned ? 'Open Course' : 'View Details';
   const actionAriaLabel = myCourse ? `View course: ${course.title}` :
-    course.expired ? `View details for course: ${course.title}` :
-      owned ? `Open course: ${course.title}` : `View course: ${course.title}`;
+    owned ? `Open course: ${course.title}` : `View course: ${course.title}`;
   const footer = el('div', {class: `card-footer${myCourse ? ' my-course-footer' : ''}`},
-    course.expired ? el('span', {class: 'muted'}, 'Access closed') :
-      owned ? myCourse ? null : el('span', {class: 'muted'}, 'Continue Learning') :
-        el('p', {class: 'price'}, priceText(course.price)),
+    owned ? myCourse ? null : el('span', {class: 'muted'}, 'Continue Learning') :
+      el('p', {class: 'price'}, priceText(course.price)),
     el('a', {class: `button${myCourse ? ' my-course-view' : ''}`, href: `#course/${idPart(course.id)}`,
       'aria-label': actionAriaLabel}, actionLabel));
   const body = el('div', {class: `card-body${myCourse ? ' my-course-card-body' : ''}`},
-    owned && !myCourse ? el('span', {class: 'badge'}, 'Purchased') : null,
-    el('h3', {}, course.title), expiryLabel(course, myCourse),
-    myCourse ? null : description, myCourse ? null : readMore, footer);
+    el('div', {class: 'course-card-meta'},
+      owned && !myCourse ? el('span', {class: 'badge'}, 'Purchased') : null,
+      owned ? expiryLabel(course) : null),
+    el('h3', {}, course.title),
+    description, footer);
   const card = el('article', {class: `panel card${myCourse ? ' my-course-card' : ''}`}, cover, body);
-  if (!myCourse) {
-    requestAnimationFrame(() => {
-      if (card.isConnected) readMore.hidden = description.scrollHeight <= description.clientHeight + 1;
-    });
-  }
   return card;
 }
 
@@ -193,16 +186,16 @@ export function showDashboard(main, ctx, me, userDisplayName) {
       el('div', {class: 'section-heading'}, el('h2', {}, me?.purchases?.length ? 'Continue Learning' : 'Popular Courses')),
       courses));
   loadInto(courses, ctx, async () => {
-    const rows = await api('/courses', {ctx});
+    const rows = (await api('/courses', {ctx})).filter(course => !course.expired);
     if (!ctx.current()) return;
     discovery.replaceChildren(...courseDiscovery(rows, me, ctx.user?.uid));
     const selected = me?.purchases?.length ? rows.filter(course => owns(me, course.id)) : rows.slice(0, 3);
-    courses.replaceChildren(...(selected.length ? selected.map(courseCardWithProfile(me)) :
+    courses.replaceChildren(...(selected.length ? selected.map(courseCardWithProfile(me, ctx)) :
       [el('p', {class: 'empty'}, me ? 'No purchased missions yet. Explore the catalog to begin.' : 'Explore available missions and sign in when you are ready.')]));
   });
 }
 
-const courseCardWithProfile = (me, myCourse = false) => (course, index) => courseCard(course, index, me, myCourse);
+const courseCardWithProfile = (me, ctx, myCourse = false) => (course, index) => courseCard(course, index, me, ctx, myCourse);
 
 export function showMyCourses(main, ctx, me, action) {
   const coursesTab = link('Courses', '#my-courses', 'my-course-tab');
@@ -219,8 +212,8 @@ export function showMyCourses(main, ctx, me, action) {
   main.append(list);
   loadInto(list, ctx, async () => {
     const rows = await api('/courses', {ctx});
-    const purchased = rows.filter(course => owns(me, course.id));
-    list.replaceChildren(...(purchased.length ? purchased.map(courseCardWithProfile(me, true)) :
+    const purchased = rows.filter(course => !course.expired && owns(me, course.id));
+    list.replaceChildren(...(purchased.length ? purchased.map(courseCardWithProfile(me, ctx, true)) :
       [el('div', {class: 'empty-library'}, el('h2', {}, 'Your First Mission Is Waiting'),
         el('p', {class: 'muted'}, 'Purchase a course and it will appear here automatically.'),
         link('Explore Missions', '#catalog', 'button'))]));
@@ -278,15 +271,21 @@ function chapterFolders(subjects, courseId, navigation = {}) {
   if (!subjects.size) return el('p', {class: 'empty'}, 'No study books or videos have been added to this course yet.');
   const sortNames = ([a], [b]) => a.localeCompare(b, undefined, {numeric: true});
   const browser = el('div', {class: 'course-folder-browser course-chapter-browser'});
-  const fileEntries = material => [
+  const fileEntries = (material, subject, chapter) => {
+    const parentPath = navigation.parentPage === 'course' ? `#course/${idPart(courseId)}` : '#materials';
+    const parent = `${parentPath}?${new URLSearchParams({...(navigation.parentPage === 'course' ? {} : {course: String(courseId)}),
+      ...(navigation.folderId ? {folder: navigation.folderId} : {}), subject, ...(chapter ? {chapter} : {})})}`;
+    const fileHref = (type, id) => `#${type}/${idPart(courseId)}/${idPart(id)}?${new URLSearchParams({parent})}`;
+    return [
     ...material.books.map(book => navigation.removeBreadcrumbs ?
-      materialFileEntry(book.title, 'PDF', `#book/${idPart(courseId)}/${idPart(book.id)}`) :
+      materialFileEntry(book.title, 'PDF', fileHref('book', book.id)) :
       el('div', {class: 'chapter-book'}, coverGallery(book, 'book-gallery'),
         link(`PDF · ${book.title}`, `#book/${idPart(courseId)}/${idPart(book.id)}`, 'chapter-link'))),
     ...material.videos.map(video => navigation.removeBreadcrumbs ?
-      materialFileEntry(video.title, 'Video', `#video/${idPart(courseId)}/${idPart(video.id)}`) :
+      materialFileEntry(video.title, 'Video', fileHref('video', video.id)) :
       link(`Video · ${video.title}`, `#video/${idPart(courseId)}/${idPart(video.id)}`, 'chapter-link video-link')),
-  ];
+    ];
+  };
 
   function show(subject = '', chapter = '', focusHeading = false) {
     let breadcrumbs = null;
@@ -346,18 +345,18 @@ function chapterFolders(subjects, courseId, navigation = {}) {
             () => show(subject, name, true), 'chapter'));
         }
         const direct = chapters.get('');
-        if (direct) entries.append(...fileEntries(direct));
+        if (direct) entries.append(...fileEntries(direct, subject, ''));
         section = navigation.removeBreadcrumbs ? entries :
           el('section', {class: 'course-folder-section'},
             el('h4', {}, direct ? (chapters.size > 1 ? 'Chapters and study materials' : 'Study materials') : 'Chapters'), entries);
       } else {
         const material = chapters.get(chapter);
         if (navigation.removeBreadcrumbs) {
-          const files = fileEntries(material);
+          const files = fileEntries(material, subject, chapter);
           section = files.length ? el('div', {class: 'course-folder-entries'}, files) :
             el('p', {class: 'course-folder-empty'}, 'No study materials in this folder.');
         } else {
-          const links = fileEntries(material);
+          const links = fileEntries(material, subject, chapter);
           section = el('section', {class: 'course-folder-section'},
             el('h4', {}, 'Study materials'),
             links.length ? el('div', {class: 'chapter-list'}, links) :
@@ -375,7 +374,9 @@ function chapterFolders(subjects, courseId, navigation = {}) {
     }
   }
 
-  show();
+  const subject = subjects.has(navigation.restore?.subject) ? navigation.restore.subject : '';
+  const chapter = subject && subjects.get(subject).has(navigation.restore?.chapter) ? navigation.restore.chapter : '';
+  show(subject, chapter);
   return browser;
 }
 
@@ -406,8 +407,9 @@ function folderTree(folders, items, renderItems) {
     ...renderChildren(''));
 }
 
-function materialFolderBrowser(folders, items, renderItems, {removeBreadcrumbs = false} = {}) {
-  if (!folders?.length) return renderItems(items, {removeBreadcrumbs});
+function materialFolderBrowser(folders, items, renderItems, {removeBreadcrumbs = false, restore, parentPage} = {}) {
+  if (!folders?.length) return renderItems(items, {removeBreadcrumbs, restore, parentPage});
+  let initialRestore = restore;
 
   const foldersById = new Map(folders.map(folder => [folder.id, folder]));
   const children = new Map();
@@ -505,6 +507,9 @@ function materialFolderBrowser(folders, items, renderItems, {removeBreadcrumbs =
     if (contents.length) {
       const folderNavigation = {
         removeBreadcrumbs,
+        parentPage,
+        folderId,
+        restore: folderId === (initialRestore?.folder || '') ? initialRestore : null,
         onBack: folderId ? () => showFolder(path.length > 1 ? path[path.length - 2].id : '', true) : null,
         onNavigate: inside => { if (folderSection) folderSection.style.display = inside ? 'none' : ''; },
       };
@@ -525,7 +530,8 @@ function materialFolderBrowser(folders, items, renderItems, {removeBreadcrumbs =
     }
   }
 
-  showFolder('');
+  showFolder(foldersById.has(restore?.folder) ? restore.folder : '');
+  initialRestore = null;
   return browser;
 }
 
@@ -563,7 +569,7 @@ export function showContentLibrary(main, ctx, me, kind, action) {
     return;
   }
   loadInto(content, ctx, async () => {
-    const rows = await api('/courses', {ctx});
+    const rows = (await api('/courses', {ctx})).filter(course => !course.expired);
     const selected = kind === 'materials' ? rows.filter(course => owns(me, course.id) && !course.expired) : rows;
     if (!selected.length) {
       content.replaceChildren(el('div', {class: 'empty-library'}, el('h2', {}, config.empty),
@@ -572,10 +578,11 @@ export function showContentLibrary(main, ctx, me, kind, action) {
     }
     const folders = await Promise.all(selected.map(async (course, index) => {
       if (kind === 'book-store' || !owns(me, course.id) || course.expired) {
-        return el('article', {class: 'library-folder'},
+        return el('article', {class: 'library-folder library-preview'},
           el('span', {class: 'folder-icon', 'aria-hidden': 'true'}, libraryIcon()),
-          el('div', {}, el('h2', {}, course.title), expiryLabel(course), el('p', {class: 'muted'}, course.description)),
-          link(course.expired ? 'View Details' : owns(me, course.id) ? 'Open Mission' : `View at ${priceText(course.price)}`,
+          expandableSummary(ctx, course.title, el('h2', {}, course.title),
+            el('p', {class: 'muted description'}, course.description)),
+          link(owns(me, course.id) ? 'Open Mission' : `View at ${priceText(course.price)}`,
             `#course/${idPart(course.id)}`, 'button secondary'));
       }
       const material = await api(`/courses/${idPart(course.id)}`, {ctx, auth: true});
@@ -586,12 +593,15 @@ export function showContentLibrary(main, ctx, me, kind, action) {
           ...material.books.map(item => JSON.stringify(['book', item.title, item.subject, item.chapter, item.folderId])),
           ...(material.videos || []).map(item => JSON.stringify(['video', item.title, item.subject, item.chapter, item.folderId])),
         ]).size;
+        const restore = action.query?.get('course') === String(course.id) ? {
+          folder: action.query.get('folder'), subject: action.query.get('subject'), chapter: action.query.get('chapter'),
+        } : null;
         const courseBrowser = materialFolderBrowser(material.folders?.filter(folder => folder.kind === 'content'),
           [...material.books, ...(material.videos || [])], (folderItems, navigation = {}) =>
             chapterFolders(chapterGroups(
               folderItems.filter(item => material.books.some(book => book.id === item.id)),
               folderItems.filter(item => (material.videos || []).some(video => video.id === item.id))),
-            course.id, navigation), {removeBreadcrumbs: true});
+            course.id, navigation), {removeBreadcrumbs: true, restore});
         const cover = coverGallery(course, 'catalog-course-cover') ||
           el('div', {class: `catalog-course-cover catalog-course-placeholder alt-${index % 3}`},
             icon('courses', 'line-icon'));
@@ -621,6 +631,7 @@ export function showContentLibrary(main, ctx, me, kind, action) {
             openMaterials();
           }
         });
+        if (restore) card.dataset.restoreMaterials = 'true';
         return card;
       }
       const testContent = folderTree(material.folders?.filter(folder => folder.kind === 'tests'),
@@ -682,6 +693,7 @@ export function showContentLibrary(main, ctx, me, kind, action) {
           })));
     }));
     content.replaceChildren(...folders);
+    if (kind === 'materials') content.querySelector('[data-restore-materials]')?.click();
   });
 }
 
@@ -713,7 +725,7 @@ export function showCatalog(main, ctx, me) {
     el('h1', {class: 'sr-only'}, 'All courses'),
     list));
   loadInto(list, ctx, async () => {
-    const courses = await api('/courses', {ctx});
+    const courses = (await api('/courses', {ctx})).filter(course => !course.expired);
     list.replaceChildren(...(courses.length ? courses.map((course, index) => catalogCourseCard(course, index, me)) :
       [el('p', {class: 'empty'}, 'No courses are available yet. Check back soon for new study material.')]));
   });
@@ -729,13 +741,12 @@ function catalogCourseCard(course, index, me) {
     el('div', {class: 'catalog-course-info'},
       el('div', {class: 'catalog-course-meta'},
         el('span', {class: 'catalog-course-kind'}, 'Content Course'),
-        owned ? el('span', {class: 'catalog-course-owned'}, 'Purchased') : null),
+        owned ? el('span', {class: 'catalog-course-owned'}, 'Purchased') : null,
+        owned ? expiryLabel(course) : null),
       el('h3', {}, course.title),
-      expiryLabel(course),
       el('div', {class: 'catalog-course-bottom'},
-        course.expired ? el('span', {class: 'muted'}, 'Access closed') :
-          owned ? el('span', {class: 'muted'}, 'Continue Learning') :
-            el('span', {class: 'catalog-course-price'}, priceText(course.price)))));
+        owned ? el('span', {class: 'muted'}, 'Continue Learning') :
+          el('span', {class: 'catalog-course-price'}, priceText(course.price)))));
   const openCourse = () => { location.hash = `#course/${idPart(course.id)}`; };
   card.addEventListener('click', event => {
     if (!event.target.closest('button, a, input, select, textarea')) openCourse();
@@ -818,7 +829,8 @@ export function showCourse(main, ctx, session, action) {
       selectTab(next.name);
     }
   });
-  main.append(tabs, ...(owned ? [] : [overview]), content, testPanel, paymentDialog);
+  const ownedTitle = owned ? el('h1', {class: 'sr-only'}, 'Course') : null;
+  main.append(...(ownedTitle ? [ownedTitle] : []), tabs, ...(owned ? [] : [overview]), content, testPanel, paymentDialog);
   if (owned) content.append(el('span', {class: 'badge'}, 'Purchased · Approved'));
   content.append(access, reviewPanel);
   testPanel.append(testAccess);
@@ -826,12 +838,13 @@ export function showCourse(main, ctx, session, action) {
 
   loadInto(access, ctx, async () => {
     const courses = await api('/courses', {ctx});
-    const course = courses.find(item => String(item.id) === id);
+    const course = courses.find(item => String(item.id) === id && !item.expired);
     if (!course) {
       access.replaceChildren(el('p', {class: 'empty'}, 'This course is no longer listed in the catalog.'));
       overview.replaceChildren(el('p', {class: 'empty'}, 'This course is no longer listed in the catalog.'));
       return;
     }
+    if (ownedTitle) ownedTitle.textContent = course.title;
     if (ctx.current() && ctx.user?.uid && session?.me && !owned && !course.expired) {
       recentCourses(ctx.user.uid, String(course.id));
     }
@@ -879,7 +892,7 @@ export function showCourse(main, ctx, session, action) {
         link('Explore Active Courses', '#catalog', 'button secondary'));
     } else if (owned || admin) {
       access.className = 'section';
-      showMaterials(access, testAccess, ctx, path, id);
+      showMaterials(access, testAccess, ctx, path, id, action.query);
       if (owned) {
         content.append(reviewPanel);
         showReviewForm();
@@ -967,7 +980,7 @@ export function showCourse(main, ctx, session, action) {
   }
 }
 
-function showMaterials(access, testAccess, ctx, path, id) {
+function showMaterials(access, testAccess, ctx, path, id, query) {
   loadInto(access, ctx, async () => {
     const {tests, books, videos = [], folders = [], messages} = await api(path, {ctx, auth: true});
     const receipt = button('Download Purchase Receipt', 'secondary');
@@ -989,7 +1002,9 @@ function showMaterials(access, testAccess, ctx, path, id) {
       const bookIds = new Set(books.map(book => book.id));
       return chapterFolders(chapterGroups(items.filter(item => bookIds.has(item.id)),
         items.filter(item => !bookIds.has(item.id))), id, navigation);
-    }, {removeBreadcrumbs: true});
+    }, {removeBreadcrumbs: true, parentPage: 'course', restore: {
+      folder: query?.get('folder'), subject: query?.get('subject'), chapter: query?.get('chapter'),
+    }});
     const studyPanel = panel('Study Materials', courseContent);
     studyPanel.classList.add('course-study-panel');
     access.replaceChildren(studyPanel,

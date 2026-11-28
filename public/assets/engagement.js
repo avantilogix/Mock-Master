@@ -1,5 +1,5 @@
 import {api} from './services.js';
-import {button, el, heading, link, loadInto, panel, status, run, say} from './ui.js';
+import {button, el, expandableSummary, heading, icon, iconAction, link, loadInto, panel, status, run, say} from './ui.js?v=merge-resolved-v1';
 
 const appUrl = 'https://mission-selection-ba819.web.app/';
 const playUrl = 'https://play.google.com/store/apps/details?id=com.avantilogix.missionselection';
@@ -55,20 +55,36 @@ export function showVideos(main, ctx) {
   loadInto(list, ctx, async () => {
     const rows = await api(ctx.user ? '/videos/accessible' : '/videos', {ctx, auth: Boolean(ctx.user)});
     list.replaceChildren(...(rows.length ? rows.map(video => {
-      const player = el('div', {class: 'video-frame', tabindex: '0', 'aria-label': `${video.title} video player`},
-        el('iframe', {src: `https://www.youtube-nocookie.com/embed/${encodeURIComponent(video.videoId)}`,
-          title: video.title, loading: 'lazy',
-          allow: 'accelerometer; autoplay; clipboard-write; encrypted-media; fullscreen; gyroscope; picture-in-picture; web-share',
-          allowfullscreen: '', referrerpolicy: 'strict-origin-when-cross-origin'}));
+      const player = el('div', {class: 'video-frame', tabindex: '0', 'aria-label': `${video.title} video player`});
+      const preview = button('', 'video-preview');
+      preview.setAttribute('aria-label', `Play ${video.title}`);
+      preview.append(el('img', {src: `https://i.ytimg.com/vi/${encodeURIComponent(video.videoId)}/mqdefault.jpg`,
+        alt: '', loading: 'lazy'}), el('span', {class: 'video-preview-play', 'aria-hidden': 'true'}, icon('play', 'line-icon')));
+      player.append(preview);
       const feedback = status();
-      const rotate = button('Rotate for landscape', 'secondary');
+      const rotate = iconAction(button('', 'secondary video-rotate'), 'rotate-screen', 'Rotate for landscape');
+      let playing = false;
+      const openPlayer = autoplay => {
+        if (playing) return;
+        playing = true;
+        card.classList.add('video-playing');
+        const frame = el('iframe', {src: `https://www.youtube-nocookie.com/embed/${encodeURIComponent(video.videoId)}${autoplay ? '?autoplay=1' : ''}`,
+          title: video.title,
+          allow: 'accelerometer; autoplay; clipboard-write; encrypted-media; fullscreen; gyroscope; picture-in-picture; web-share',
+          allowfullscreen: '', referrerpolicy: 'strict-origin-when-cross-origin'});
+        preview.replaceWith(frame);
+        if (autoplay) frame.focus();
+      };
+      preview.addEventListener('click', () => openPlayer(true));
       rotate.addEventListener('click', () => run(rotate, feedback, async () => {
         if (document.fullscreenElement === player) {
           await document.exitFullscreen();
           screen.orientation?.unlock?.();
+          say(feedback, '');
           return;
         }
         if (!player.requestFullscreen) throw new Error('Landscape fullscreen is not supported on this device. Use the YouTube player’s fullscreen control instead.');
+        openPlayer(false);
         await player.requestFullscreen();
         if (typeof screen.orientation?.lock !== 'function') {
           say(feedback, 'Fullscreen opened. Rotate your device to switch to landscape.');
@@ -87,10 +103,12 @@ export function showVideos(main, ctx) {
         if (document.fullscreenElement !== player) screen.orientation?.unlock?.();
       });
       player.append(exit);
-      return el('article', {class: 'video-card'}, player,
-        el('div', {class: 'video-copy'}, el('span', {class: 'badge'}, video.courseTitle || 'Mission Selection'),
-          el('h2', {}, video.title), el('p', {class: 'muted'}, video.description),
-          el('div', {class: 'video-controls'}, rotate, feedback)));
+      const card = el('article', {class: 'video-card'}, player,
+        el('div', {class: 'video-copy'},
+          el('div', {class: 'video-card-top'}, el('span', {class: 'badge'}, video.courseTitle || 'Mission Selection'), rotate),
+          expandableSummary(ctx, video.title, el('h2', {}, video.title),
+            el('p', {class: 'muted description'}, video.description)), feedback));
+      return card;
     }) :
       [el('div', {class: 'empty-library'}, el('h2', {}, 'Videos Coming Soon'),
         el('p', {class: 'muted'}, 'New lessons will appear here after the admin publishes them.'))]));

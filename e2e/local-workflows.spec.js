@@ -112,6 +112,393 @@ test('startup splash shows the logo briefly and clears for sign-in and navigatio
   await expect(page.getByRole('heading', {name: 'Notifications'})).toBeVisible();
 });
 
+test('navigation requires sign-in and About uses the application logo', async ({page}) => {
+  await page.setViewportSize({width: 390, height: 800});
+  await page.goto('/#home', {waitUntil: 'domcontentloaded'});
+  const nav = page.locator('#nav');
+  await expect(page.getByLabel('Mobile Number')).toBeVisible();
+  await expect(nav).toBeHidden();
+  await page.getByLabel('Mobile Number').fill('98765 43210');
+  await page.getByRole('checkbox', {name: 'CCE'}).check();
+  await page.getByRole('button', {name: 'Send OTP'}).click();
+  await expect(nav).toBeHidden();
+  await page.getByLabel('6-Digit OTP').fill('123456');
+  await page.getByRole('button', {name: 'Verify and Sign In'}).click();
+  await expect(page).not.toHaveURL(/#signin/);
+  for (const label of ['Home', 'All Courses', 'My Courses', 'Downloads', 'Profile']) {
+    await expect(nav.getByRole('link', {name: label, exact: true})).toBeVisible();
+  }
+  await page.reload({waitUntil: 'domcontentloaded'});
+  await expect(nav.getByRole('link', {name: 'Profile'})).toBeVisible();
+  await page.goto('/#about');
+  const logo = page.locator('.about-hero').getByRole('img', {name: 'Mission Selection logo'});
+  await expect(logo).toBeVisible();
+  await expect.poll(() => logo.evaluate(image => image.complete && image.naturalWidth > 0)).toBe(true);
+  await page.goto('/#profile');
+  await page.getByRole('button', {name: 'Sign Out'}).click();
+  await expect(page.getByLabel('Mobile Number')).toBeVisible();
+  await expect(nav).toBeHidden();
+  await page.setViewportSize({width: 1024, height: 800});
+  await expect(nav).toBeHidden();
+});
+
+test('test series tiles have a consistent collapsed height and expand only overflowing text', async ({page}) => {
+  const description = 'Detailed course material for competitive examinations. '.repeat(12);
+  await page.route('**/api/courses', route => route.fulfill({json: [
+    {id: 'short-tile', title: 'Short course', description: 'Short description.', price: 10000},
+    {id: 'long-tile', title: 'Long course', description, price: 20000},
+    {id: 'owned-tile', title: 'Purchased course', description: 'Owned.', price: 10000},
+  ]}));
+  await page.route('**/api/me', async route => {
+    const response = await route.fetch();
+    if (route.request().method() !== 'GET' || !response.ok()) return route.fulfill({response});
+    await route.fulfill({response, json: {...await response.json(), purchases: ['owned-tile']}});
+  });
+  await page.route('**/api/courses/owned-tile', route => route.fulfill({json:
+    {tests: [], books: [], videos: [], folders: []}}));
+  await page.route('**/api/content/current-affairs', route => route.fulfill({json: [
+    {id: 'dated', title: 'Dated', publishedAt: '2025-07-25'},
+  ]}));
+  await signIn(page);
+  await page.goto('/#test-series');
+  const short = page.locator('.library-preview').filter({hasText: 'Short course'});
+  const long = page.locator('.library-preview').filter({hasText: 'Long course'});
+  for (const width of [320, 390, 1024]) {
+    await page.setViewportSize({width, height: 800});
+    await expect(short).toBeVisible();
+    await expect(long.getByRole('button', {name: 'Read more about Long course'})).toBeVisible();
+    await expect(short.getByRole('button', {name: 'Read more about Short course'})).toBeHidden();
+    expect((await short.boundingBox()).height).toBe(176);
+    expect((await long.boundingBox()).height).toBe(176);
+    expect((await page.getByRole('button', {name: 'Open tests for Purchased course'}).boundingBox()).height).toBe(176);
+    const bounds = await long.boundingBox();
+    for (const control of [long.getByRole('button', {name: 'Read more about Long course'}), long.getByRole('link')]) {
+      const box = await control.boundingBox();
+      expect(box.y + box.height).toBeLessThanOrEqual(bounds.y + bounds.height);
+    }
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+  }
+  await long.getByRole('button', {name: 'Read more about Long course'}).click();
+  await expect(long.getByRole('button', {name: 'Show less about Long course'})).toHaveAttribute('aria-expanded', 'true');
+  expect((await long.boundingBox()).height).toBeGreaterThan(176);
+  expect(await long.locator('.tile-summary').evaluate(node => node.scrollHeight <= node.clientHeight + 1)).toBe(true);
+  await long.getByRole('button', {name: 'Show less about Long course'}).click();
+  expect((await long.boundingBox()).height).toBe(176);
+  await page.goto('/#current-affairs');
+  await page.getByRole('button', {name: '2025', exact: true}).click();
+  expect((await page.getByRole('button', {name: /July-2025/}).boundingBox()).height).toBe(176);
+});
+
+test('video tiles use compact previews and an accessible landscape icon', async ({page}) => {
+  await page.setViewportSize({width: 390, height: 844});
+  await page.route('**/api/videos/accessible', route => route.fulfill({json: [
+    {id: 'video-one', title: 'Video one', videoId: 'abcdefghijk', description: 'A short lesson.'},
+    {id: 'video-two', title: 'Video two', videoId: 'lmnopqrstuv', description: 'Long lesson. '.repeat(40)},
+  ]}));
+  await page.route('**/vi/*/mqdefault.jpg', route => route.fulfill({
+    contentType: 'image/png',
+    body: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aL+0AAAAASUVORK5CYII=', 'base64'),
+  }));
+  await page.route('**/youtube-nocookie.com/**', route => route.abort());
+  await signIn(page);
+  await page.goto('/#videos');
+  const cards = page.locator('.video-card');
+  await expect(cards).toHaveCount(2);
+  for (const card of await cards.all()) expect((await card.boundingBox()).height).toBe(176);
+  const rotate = cards.first().getByRole('button', {name: 'Rotate for landscape'});
+  await expect(rotate).toBeVisible();
+  expect(await rotate.textContent()).toBe('');
+  const rotateBox = await rotate.boundingBox();
+  const cardBox = await cards.first().boundingBox();
+  expect(rotateBox.x + rotateBox.width).toBeGreaterThan(cardBox.x + cardBox.width * .8);
+  await expect(cards.first().getByRole('button', {name: 'Read more about Video one'})).toBeHidden();
+  await cards.nth(1).getByRole('button', {name: 'Read more about Video two'}).click();
+  expect((await cards.nth(1).boundingBox()).height).toBeGreaterThan(176);
+  await cards.first().getByRole('button', {name: 'Play Video one'}).click();
+  await expect(cards.first().locator('iframe')).toHaveAttribute('src', /abcdefghijk\?autoplay=1/);
+  expect((await cards.first().locator('.video-frame').boundingBox()).width).toBeGreaterThan(300);
+  await page.evaluate(() => {
+    HTMLElement.prototype.requestFullscreen = function() { return Promise.resolve(); };
+  });
+  await cards.nth(1).getByRole('button', {name: 'Rotate for landscape'}).click();
+  await expect(cards.nth(1).locator('iframe')).toHaveAttribute('src', /lmnopqrstuv/);
+  await expect(cards.nth(1).getByRole('status')).toContainText(/Fullscreen opened|Landscape mode enabled/);
+});
+
+test('home course descriptions expand inside their tile', async ({page}) => {
+  const description = 'Detailed information about this course. '.repeat(15);
+  await page.route('**/api/courses', route => route.fulfill({json: [
+    {id: 'home-long', title: 'Long home course', description, price: 10000, expired: false},
+  ]}));
+  await page.route('**/api/me', async route => {
+    const response = await route.fetch();
+    if (route.request().method() !== 'GET' || !response.ok()) return route.fulfill({response});
+    await route.fulfill({response, json: {...await response.json(), purchases: []}});
+  });
+  await signIn(page);
+  await page.goto('/#home');
+  const card = page.locator('.home-course-section .card');
+  await card.getByRole('button', {name: 'Read more about Long home course'}).click();
+  await expect(page).toHaveURL(/#home$/);
+  await expect(card.getByRole('button', {name: 'Show less about Long home course'})).toBeVisible();
+  expect(await card.locator('.tile-summary').evaluate(node => node.scrollHeight <= node.clientHeight + 1)).toBe(true);
+});
+
+test('profile groups learning, community, security and about links', async ({page}) => {
+  await page.setViewportSize({width: 390, height: 844});
+  await signIn(page);
+  await page.goto('/#profile');
+  await expect(page.getByRole('heading', {name: 'Profile', exact: true})).toBeVisible();
+  const headings = page.locator('#main > section > h2');
+  await expect(headings).toHaveText(['Account', 'My Learning', 'Community', 'Account & Security', 'About & Legal']);
+  await page.getByRole('button', {name: 'Edit profile'}).click();
+  await expect(page.getByLabel('Display Name')).toBeVisible();
+  await page.getByRole('button', {name: 'Cancel', exact: true}).click();
+  await expect(page.getByRole('link', {name: /Your Orders/})).toHaveAttribute('href', '#orders');
+  await expect(page.getByRole('button', {name: 'Change Password'})).toBeVisible();
+  await expect(page.getByRole('button', {name: 'Sign Out'})).toBeVisible();
+  await expect(page.getByRole('link', {name: /About Us/})).toHaveAttribute('href', '#about');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+});
+
+test('Your Orders opens approved course receipts and returns to Profile', async ({page}) => {
+  await page.setViewportSize({width: 390, height: 844});
+  let receipts = [{course: 'course-one', title: 'Sample course', amount: 12500, reference: 'UPI123'}];
+  let requests = 0;
+  await page.route('**/api/receipts', route => {
+    requests++;
+    return route.fulfill({json: receipts});
+  });
+  await page.route('**/api/courses/course-one/receipt.pdf', route => route.fulfill({
+    contentType: 'application/pdf', body: samplePdf(),
+  }));
+  await signIn(page);
+  await page.goto('/#profile');
+  await expect(page.getByRole('link', {name: /Your Orders/})).toHaveClass(/profile-menu-row/);
+  expect(requests).toBe(0);
+  await page.getByRole('link', {name: /Your Orders/}).click();
+  await expect(page).toHaveURL(/#orders$/);
+  await expect(page.getByRole('heading', {name: 'Your Orders'}).last()).toBeVisible();
+  const order = page.locator('.receipt-row');
+  await expect(order).toContainText('Sample course');
+  await expect(order).toContainText('125.00');
+  await expect(order).toContainText('UPI123');
+  const downloaded = page.waitForEvent('download');
+  await order.getByRole('button', {name: 'Download Receipt'}).click();
+  expect((await downloaded).suggestedFilename()).toBe('Sample course-receipt.pdf');
+  await expect(order.getByRole('status')).toHaveText('Receipt downloaded.');
+  await page.locator('.header-page-back').click();
+  await expect(page).toHaveURL(/#profile$/);
+  receipts = [];
+  await page.getByRole('link', {name: /Your Orders/}).click();
+  await expect(page.getByText('Approved course receipts will appear here.')).toBeVisible();
+});
+
+test('disabling an account requires confirmation and reports errors', async ({page}) => {
+  await page.setViewportSize({width: 390, height: 844});
+  let attempts = 0;
+  await page.route('**/api/me/disable', route => {
+    attempts++;
+    return attempts === 1 ? route.fulfill({status: 500, json: {error: 'Unable to disable account.'}}) :
+      route.fulfill({status: 204});
+  });
+  await signIn(page);
+  await page.goto('/#profile');
+  const open = page.getByRole('button', {name: 'Disable My Account'});
+  const dialog = page.getByRole('dialog', {name: 'Disable your account?'});
+  await open.click();
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText('contact support to reactivate');
+  await expect(dialog.getByRole('button', {name: 'Cancel'})).toBeFocused();
+  await dialog.getByRole('button', {name: 'Cancel'}).click();
+  await expect(dialog).toBeHidden();
+  expect(attempts).toBe(0);
+  await open.click();
+  await page.keyboard.press('Escape');
+  await expect(dialog).toBeHidden();
+  expect(attempts).toBe(0);
+  await open.click();
+  await dialog.getByRole('button', {name: 'Disable Account', exact: true}).click();
+  await expect(dialog.getByRole('status')).toContainText('Something went wrong. Please try again later.');
+  expect(attempts).toBe(1);
+  await dialog.getByRole('button', {name: 'Disable Account', exact: true}).click();
+  await expect(page.getByLabel('Mobile Number')).toBeVisible();
+  expect(attempts).toBe(2);
+  await expect(page.locator('#nav')).toBeHidden();
+});
+
+test('disabled accounts are signed out and shown support contacts at sign-in', async ({page, request}) => {
+  const phone = `8${String(Date.now() % 1000000000).padStart(9, '0')}`;
+  const phoneNumber = `+91${phone}`;
+  const token = {Authorization: `Bearer dummy:${phoneNumber}`};
+  await signIn(page, phone);
+  await page.goto('/#profile');
+  await page.getByRole('button', {name: 'Disable My Account'}).click();
+  await page.getByRole('dialog', {name: 'Disable your account?'}).getByRole('button', {name: 'Disable Account', exact: true}).click();
+  await expect(page).toHaveURL(/#signin$/);
+  await expect(page.getByLabel('Mobile Number')).toBeVisible();
+  expect(await page.evaluate(() => localStorage.getItem('mission-selection-dummy-phone'))).toBeNull();
+  const denied = await request.get('/api/me', {headers: token});
+  expect(denied.status()).toBe(403);
+  expect((await denied.json()).code).toBe('account-disabled');
+  await page.getByLabel('Mobile Number').fill(phone);
+  await page.getByRole('button', {name: 'Send OTP'}).click();
+  await page.getByLabel('6-Digit OTP').fill('123456');
+  await page.getByRole('button', {name: 'Verify and Sign In'}).click();
+  await expect(page.getByText('Your account is disabled. Kindly contact the Support Team.')).toBeVisible();
+  await expect(page.getByRole('link', {name: 'missionselection@gmail.com'})).toHaveAttribute('href', 'mailto:missionselection@gmail.com');
+  await expect(page.getByRole('link', {name: '+91 8347575241'})).toHaveAttribute('href', 'tel:+918347575241');
+  await expect(page.locator('#nav')).toBeHidden();
+  expect(await page.evaluate(() => localStorage.getItem('mission-selection-dummy-phone'))).toBeNull();
+  await page.evaluate(number => localStorage.setItem('mission-selection-dummy-phone', number), phoneNumber);
+  await page.goto('/#home');
+  await page.reload();
+  await expect(page.getByText('Your account is disabled. Kindly contact the Support Team.')).toBeVisible();
+  await expect(page).toHaveURL(/#signin$/);
+  expect(await page.evaluate(() => localStorage.getItem('mission-selection-dummy-phone'))).toBeNull();
+});
+
+test('account verification failure does not keep a signed-in session', async ({page}) => {
+  await page.goto('/#signin');
+  let checks = 0;
+  await page.route('**/api/me', route => {
+    checks++;
+    return route.fulfill({status: 503, json: {error: 'Account verification unavailable.'}});
+  });
+  await page.getByLabel('Mobile Number').fill('98765 43215');
+  await page.getByRole('checkbox', {name: 'CCE'}).check();
+  await page.getByRole('button', {name: 'Send OTP'}).click();
+  await page.getByLabel('6-Digit OTP').fill('123456');
+  await page.getByRole('button', {name: 'Verify and Sign In'}).click();
+  await expect.poll(() => checks).toBeGreaterThan(0);
+  await expect(page.getByText('Something went wrong. Please try again later.')).toBeVisible();
+  await expect(page.getByLabel('Mobile Number')).toBeVisible();
+  await expect(page.locator('#nav')).toBeHidden();
+  expect(await page.evaluate(() => localStorage.getItem('mission-selection-dummy-phone'))).toBeNull();
+});
+
+test('learner course tiles hide expired courses and show owned expiry dates', async ({page, request}) => {
+  await page.setViewportSize({width: 390, height: 844});
+  const courses = [
+    {id: 'active-owned', title: 'Active owned', price: 12000, description: 'Active', expiresOn: '2028-02-29', expired: false},
+    {id: 'expired-owned', title: 'Expired owned', price: 12000, description: 'Expired', expiresOn: '2026-01-01', expired: true},
+    {id: 'active-other', title: 'Active other', price: 12000, description: 'Other', expiresOn: '2028-02-29', expired: false},
+  ];
+  await page.route('**/api/courses', route => route.fulfill({json: courses}));
+  await page.route('**/api/me', async route => {
+    const response = await route.fetch();
+    if (route.request().method() !== 'GET' || !response.ok()) return route.fulfill({response});
+    await route.fulfill({response, json: {...await response.json(), purchases: ['active-owned', 'expired-owned']}});
+  });
+  await signIn(page);
+  for (const hash of ['#home', '#catalog', '#my-courses']) {
+    await page.goto(`/${hash}`);
+    await expect(page.getByText('Active owned', {exact: true}).first()).toBeVisible();
+    await expect(page.getByText('Expired owned', {exact: true})).toHaveCount(0);
+    await expect(page.getByText('Access closed', {exact: true})).toHaveCount(0);
+    const tile = page.locator(hash === '#catalog' ? '.catalog-course-card' : '.card')
+      .filter({hasText: 'Active owned'}).first();
+    await expect(tile.getByText(/Expires on .*2028/)).toBeVisible();
+    const expiry = await tile.locator('.course-expiry').boundingBox();
+    const bounds = await tile.boundingBox();
+    expect(expiry.x + expiry.width).toBeGreaterThan(bounds.x + bounds.width / 2);
+  }
+  await page.goto('/#test-series');
+  await expect(page.getByText('Expired owned', {exact: true})).toHaveCount(0);
+  await page.goto('/#course/expired-owned');
+  await expect(page.getByText('This course is no longer listed in the catalog.').first()).toBeVisible();
+  const student = {Authorization: 'Bearer dummy:+919876543210'};
+  const admin = {Authorization: 'Bearer dummy:+919999999999'};
+  expect((await request.get('/api/admin/courses', {headers: student})).status()).toBe(403);
+  expect((await request.get('/api/admin/courses', {headers: admin})).status()).toBe(200);
+});
+
+test('free material cards stay compact and reader back opens its parent', async ({page}) => {
+  await page.setViewportSize({width: 320, height: 844});
+  const longTitle = 'Very long study material title '.repeat(8).trim();
+  await page.route('**/api/free-materials', route => route.fulfill({json: [
+    {id: 'one', title: 'One material', pages: 1, downloadsEnabled: false},
+    {id: 'long', title: longTitle, pages: 3, downloadsEnabled: true},
+  ]}));
+  await page.route('**/api/free-materials/one', route => route.fulfill({json:
+    {id: 'one', title: 'One material', pages: 1, downloadsEnabled: false}}));
+  await signIn(page);
+  await page.goto('/#free-materials');
+  const card = page.locator('#main .card').filter({hasText: 'One material'});
+  const long = page.locator('#main .card').filter({hasText: longTitle});
+  await expect(card).toBeVisible();
+  expect((await card.boundingBox()).height).toBe(176);
+  expect((await long.boundingBox()).height).toBe(176);
+  await expect(card.getByRole('button', {name: 'Read more about One material'})).toBeHidden();
+  const readMore = long.getByRole('button', {name: `Read more about ${longTitle}`});
+  await expect(readMore).toBeVisible();
+  const bounds = await long.boundingBox();
+  for (const control of [readMore, long.getByRole('link', {name: 'View PDF'}), long.getByRole('button', {name: 'Download'})]) {
+    const box = await control.boundingBox();
+    expect(box.y + box.height).toBeLessThanOrEqual(bounds.y + bounds.height);
+  }
+  await readMore.click();
+  expect((await long.boundingBox()).height).toBeGreaterThan(176);
+  await page.setViewportSize({width: 1024, height: 844});
+  expect((await card.boundingBox()).width).toBeLessThanOrEqual(448);
+  await page.setViewportSize({width: 390, height: 844});
+  await page.evaluate(() => { location.hash = '#catalog'; });
+  await expect(page).toHaveURL(/#catalog$/);
+  await page.evaluate(() => { location.hash = '#free-material/one'; });
+  await expect(page.locator('.site-header').getByRole('heading', {name: 'One material'})).toBeVisible();
+  const back = page.locator('.site-header').getByRole('button', {name: 'Back to Free study material'});
+  await expect(back).toBeVisible();
+  await back.click();
+  await expect(page).toHaveURL(/#free-materials$/);
+});
+
+test('study material reader returns to its containing chapter', async ({page}) => {
+  await page.setViewportSize({width: 390, height: 844});
+  await page.route('**/api/courses', route => route.fulfill({json: [
+    {id: 'material-course', title: 'Materials course', price: 10000, expired: false},
+  ]}));
+  await page.route('**/api/me', async route => {
+    const response = await route.fetch();
+    if (route.request().method() !== 'GET' || !response.ok()) return route.fulfill({response});
+    await route.fulfill({response, json: {...await response.json(), purchases: ['material-course']}});
+  });
+  await page.route('**/api/courses/material-course', route => route.fulfill({json: {
+    books: [{id: 'material-book', title: 'Chapter notes', subject: 'History', chapter: 'Chapter 1',
+      folderId: 'folder-a', pages: 1}],
+    videos: [{id: 'material-video', title: 'Chapter lesson', subject: 'History', chapter: 'Chapter 1',
+      folderId: 'folder-a'}], tests: [], messages: [], folders: [{id: 'folder-a', name: 'Folder A', kind: 'content'}],
+  }}));
+  await page.route('**/api/courses/material-course/reviews', route => route.fulfill({json: []}));
+  await page.route('**/api/videos/material-video/link', route => route.fulfill({json: {url: '/example.mp4'}}));
+  await signIn(page);
+  await page.goto('/#materials');
+  await page.getByRole('button', {name: 'Open study materials for Materials course'}).click();
+  await page.getByRole('button', {name: /Open folder Folder A/}).click();
+  await page.getByRole('button', {name: /Open subject History/}).click();
+  await page.getByRole('button', {name: /Open chapter Chapter 1/}).click();
+  await expect(page.locator('#main .course-folder-back')).toHaveCount(2);
+  await expect(page.locator('#main .course-folder-back').first()).toBeHidden();
+  await page.getByRole('link', {name: 'Open PDF Chapter notes'}).click();
+  await expect(page.locator('.site-header').getByRole('heading', {name: 'Chapter notes'})).toBeVisible();
+  await page.locator('.site-header').getByRole('button', {name: 'Back to Study Materials'}).click();
+  await expect(page.getByRole('link', {name: 'Open PDF Chapter notes'})).toBeVisible();
+  await page.getByRole('link', {name: 'Open Video Chapter lesson'}).click();
+  await expect(page.locator('.site-header').getByRole('heading', {name: 'Chapter lesson'})).toBeVisible();
+  await page.locator('.site-header').getByRole('button', {name: 'Back to Study Materials'}).click();
+  await expect(page.getByRole('link', {name: 'Open PDF Chapter notes'})).toBeVisible();
+  await page.locator('.site-header').getByRole('button', {name: 'Back'}).click();
+  await expect(page.getByRole('button', {name: /Open chapter Chapter 1/})).toBeVisible();
+  await page.locator('.site-header').getByRole('button', {name: 'Back'}).click();
+  await expect(page.getByRole('button', {name: /Open subject History/})).toBeVisible();
+  await page.goto('/#course/material-course');
+  await page.getByRole('button', {name: /Open folder Folder A/}).click();
+  await page.getByRole('button', {name: /Open subject History/}).click();
+  await page.getByRole('button', {name: /Open chapter Chapter 1/}).click();
+  await page.getByRole('link', {name: 'Open PDF Chapter notes'}).click();
+  await page.locator('.site-header').getByRole('button', {name: 'Back to Course'}).click();
+  await expect(page.getByRole('link', {name: 'Open PDF Chapter notes'})).toBeVisible();
+});
+
 test('home course slider and device-local recent interest respect course availability and ownership', async ({page}) => {
   test.setTimeout(60_000);
   await page.setViewportSize({width: 320, height: 740});
@@ -176,7 +563,7 @@ test('home course slider and device-local recent interest respect course availab
   await expect(carousel.locator('.home-course-slide')).toHaveCount(4);
   await expect(recent).toHaveCount(0);
   await page.goto('/#course/slider-expired');
-  await expect(page.locator('.course-overview h1')).toHaveText('Expired course');
+  await expect(page.getByText('This course is no longer listed in the catalog.').first()).toBeVisible();
   await page.goto('/#home');
   await expect(carousel.locator('.home-course-slide')).toHaveCount(4);
   await expect(recent).toHaveCount(0);
@@ -240,7 +627,7 @@ test('home course slider and device-local recent interest respect course availab
   await expect(page).toHaveURL(/#course\/slider-d$/);
   await expect(page.locator('.course-overview h1')).toHaveText('Fourth course');
   await page.goto('/#course/slider-expired');
-  await expect(page.getByRole('heading', {name: 'Expired course', exact: true})).toBeVisible();
+  await expect(page.getByText('This course is no longer listed in the catalog.').first()).toBeVisible();
   await page.goto('/#home');
   await expect(recentCards).toHaveCount(3);
   await expect(recentCards.nth(0).getByRole('heading', {name: 'Fourth course'})).toBeVisible();
@@ -518,18 +905,17 @@ test('desktop admin sections have one back button and return through each level'
   await expect(workspaceBack).toBeVisible();
   for (const label of ['Free Study Material', 'Courses', 'Free Test Series', 'Support']) {
     await page.locator('.admin-area-card').filter({hasText: label}).click();
-    await expect(workspaceBack).toBeHidden();
-    const sectionBack = page.getByRole('button', {name: 'All Areas'});
-    await expect(sectionBack).toHaveCount(1);
-    await expect(sectionBack).toBeVisible();
+    await expect(workspaceBack).toBeVisible();
+    await expect(workspaceBack).toHaveAttribute('aria-label', 'All Areas');
+    await expect(page.locator('.admin-section-toolbar .admin-back-button')).toBeHidden();
     if (label === 'Free Study Material') {
       await page.getByRole('button', {name: 'Add Free Study Material'}).click();
       await expect(page.getByRole('button', {name: 'Publish Material'})).toBeVisible();
-      await sectionBack.click();
+      await workspaceBack.click();
       await expect(page.getByRole('button', {name: 'Publish Material'})).toBeHidden();
       await expect(page.getByRole('button', {name: 'Add Free Study Material'})).toBeVisible();
     }
-    await sectionBack.click();
+    await workspaceBack.click();
     await expect(workspaceBack).toBeVisible();
     await expect(page.locator('.admin-area-grid')).toBeVisible();
   }
@@ -565,12 +951,42 @@ test('mobile back follows the current affairs archive levels', async ({page}) =>
   await page.getByRole('button', {name: '2026', exact: true}).click();
   await page.getByRole('button', {name: /March-2026/}).click();
   await expect(page.getByText('Archive example')).toBeVisible();
+  await expect(page.locator('#main .affairs-back')).toBeHidden();
   await page.locator('.site-header').getByRole('button', {name: '2026 Months'}).click();
   await expect(page.getByRole('button', {name: /March-2026/})).toBeVisible();
   await page.locator('.site-header').getByRole('button', {name: 'All Years'}).click();
   await expect(page.getByRole('button', {name: '2026', exact: true})).toBeVisible();
   await page.locator('.site-header').getByRole('button', {name: 'Back'}).click();
   await expect(page).toHaveURL(/#home$/);
+});
+
+test('current affairs has one parent back and separate PDF and video actions', async ({page}) => {
+  await page.setViewportSize({width: 1024, height: 844});
+  const item = {id: 'archive-media', title: 'Daily update', kind: 'current-affairs',
+    publishedAt: '2025-07-25', media: {pdf: {pages: 3}, video: {}}};
+  await page.route('**/api/content/current-affairs', route => route.fulfill({json: [item]}));
+  await page.route('**/api/resources/archive-media', route => route.fulfill({json: item}));
+  await page.route('**/api/resources/archive-media/video/link', route => route.fulfill({json: {url: '/example.mp4'}}));
+  await signIn(page);
+  await page.goto('/#current-affairs');
+  await page.getByRole('button', {name: '2025', exact: true}).click();
+  await expect(page.locator('#main .affairs-back')).toBeHidden();
+  await page.locator('#main .page-back').click();
+  await expect(page.getByRole('button', {name: '2025', exact: true})).toBeVisible();
+  await page.getByRole('button', {name: '2025', exact: true}).click();
+  await page.getByRole('button', {name: /July-2025/}).click();
+  const card = page.locator('.affairs-resource-card');
+  await expect(card.getByText('3 PDF pages')).toHaveCount(0);
+  await expect(card.getByRole('link', {name: 'View PDF'})).toBeVisible();
+  await expect(card.getByRole('link', {name: 'Watch Video'})).toBeVisible();
+  await card.getByRole('link', {name: 'Watch Video'}).click();
+  await expect(page.getByRole('heading', {name: 'Watch Video'})).toBeVisible();
+  await expect(page.locator('.affairs-pdf')).toHaveCount(0);
+  await page.locator('#main .page-back').click();
+  await expect(page.locator('.affairs-resource-card')).toBeVisible();
+  await page.locator('.affairs-resource-card').getByRole('link', {name: 'View PDF'}).click();
+  await expect(page.getByRole('heading', {name: 'Read PDF'})).toBeVisible();
+  await expect(page.getByRole('heading', {name: 'Watch Video'})).toHaveCount(0);
 });
 
 test('ebook details keep the page heading and back button after loading', async ({page}) => {
@@ -1429,6 +1845,7 @@ test('PYQs and Syllabus PDFs respect save permissions and appear in Downloads', 
 });
 
 test('Current Affairs supports imported mock and limited live tests in the date archive', async ({ page, request }) => {
+  test.setTimeout(60_000);
   const suffix = Date.now();
   const mockTitle = `Current Affairs Mock ${suffix}`;
   const liveTitle = `Current Affairs Live ${suffix}`;
@@ -1492,6 +1909,7 @@ test('Current Affairs supports imported mock and limited live tests in the date 
   await page.getByRole('button', {name: /June/}).click();
   const day = page.locator('.affairs-day').filter({hasText: '15 June 2025'});
   await expect(day).toBeVisible();
+  await page.goto('/#home');
 
   for (const [resource, buttonName] of [[mockResource, 'Take Mock Test'], [liveResource, 'Take Live Test']]) {
     await page.goto('/#current-affairs');
@@ -1518,5 +1936,7 @@ test('Current Affairs supports imported mock and limited live tests in the date 
       expect(details.status()).toBe(409);
       expect((await request.get(`/api/tests/${resource.test.id}/question-paper.pdf`, {headers})).status()).toBe(403);
     }
+    await page.locator('#main .page-back').click();
+    await expect(page.locator('.affairs-resource-card').filter({hasText: resource.title})).toBeVisible();
   }
 });

@@ -35,6 +35,7 @@
   <symbol id="move" viewBox="0 0 24 24"><path d="M5 7h14m-4-4 4 4-4 4M19 17H5m4 4-4-4 4-4"/></symbol>
   <symbol id="trash" viewBox="0 0 24 24"><path d="M4 7h16m-10 4v7m4-7v7M6 7l1 14h10l1-14M9 7V4h6v3"/></symbol>
   <symbol id="refresh" viewBox="0 0 24 24"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M5.6 9a7 7 0 0 1 11.6-2L20 12M4 12l2.8 5a7 7 0 0 0 11.6-2"/></symbol>
+  <symbol id="rotate-screen" viewBox="0 0 24 24"><rect x="7" y="6" width="10" height="14" rx="2" transform="rotate(-35 12 13)"/><path d="M4 8a8 8 0 0 1 12-4m0-3v3h-3M20 16a8 8 0 0 1-12 4m0 3v-3h3"/></symbol>
   <symbol id="course-stack" viewBox="0 0 24 24"><path d="m3 7 9-4 9 4-9 4zm0 5 9 4 9-4m-18 5 9 4 9-4"/></symbol>
   <symbol id="book-open" viewBox="0 0 24 24"><path d="M12 6v15m0-14c-2.5-2-5.5-2.5-9-1v14c3.5-1.5 6.5-1 9 1m0-14c2.5-2 5.5-2.5 9-1v14c-3.5-1.5-6.5-1-9 1"/></symbol>
   <symbol id="resource-globe" viewBox="0 0 24 24"><circle cx="11" cy="10" r="7"/><path d="M4.5 7h13M4.5 13h13M11 3a12 12 0 0 1 0 14m0-14a12 12 0 0 0 0 14M3 19h8m-8 3h8m-5-3v3m5-5v7"/></symbol>

@@ -3,6 +3,7 @@ import {examPreferenceField} from './exam-preferences.js';
 import {hasPhoneSignIn, resetPasswordForPhoneUser, verifyPasswordForPhoneUser} from './password-verification.js';
 import {beginTemporaryPhoneSession, persistCompletedPhoneSession} from './auth-persistence.js';
 import {requireLoginConnection} from './connection.js';
+import {api} from './services.js?v=disabled-account-v1';
 
 const usernameEmail = username => `${username.toLowerCase()}@accounts.mission-selection.invalid`;
 
@@ -21,7 +22,8 @@ function authError(error) {
     'auth/invalid-app-credential': 'We could not securely verify this app. Please contact support.',
     'auth/app-not-authorized': 'Phone sign-in is unavailable for this app. Please contact support.',
     'auth/billing-not-enabled': 'Phone sign-in is unavailable right now. Please contact support.',
-    'auth/missing-client-identifier': 'Phone verification could not identify this browser. Reload the page and retry.'
+    'auth/missing-client-identifier': 'Phone verification could not identify this browser. Reload the page and retry.',
+    'auth/sign-out-failed': 'Your account is disabled, but sign-out failed. Please try again.'
   };
   const raw = String(error.message || '').toLowerCase();
   const detail = /region|country|unsupported sms/i.test(raw)
@@ -42,6 +44,11 @@ export function showSignIn(main, ctx, firebase, startAuth, initState, authFlow =
     el('div', {class: 'auth-card'}, el('div', {class: 'auth-card-title'},
       el('img', {class: 'auth-icon', src: '/assets/logo.png?v=logo-20261120', alt: '', width: '80', height: '80'}),
       el('div', {}, el('h2', {}, 'Welcome Back'), el('p', {class: 'muted'}, 'Sign in or create your student account.'))),
+      authFlow.disabledNotice ? el('div', {class: 'disabled-account-notice', role: 'alert'},
+        el('strong', {}, 'Your account is disabled. Kindly contact the Support Team.'),
+        el('p', {}, 'To request reactivation, email ',
+          el('a', {href: 'mailto:missionselection@gmail.com'}, 'missionselection@gmail.com'),
+          ' or call ', el('a', {href: 'tel:+918347575241'}, '+91 8347575241'), '.')) : null,
       el('div', {id: 'auth-form'}))));
   const section = main.querySelector('#auth-form');
   if (!firebase || initState !== 'ready') {
@@ -78,7 +85,7 @@ export function showSignIn(main, ctx, firebase, startAuth, initState, authFlow =
   };
   ctx.signal.addEventListener('abort', clearVerifier, {once: true});
 
-  function showPhone(focus = false) {
+  function showPhone(focus = false, message = '') {
     const feedback = status();
     const submit = button('Send OTP', null, 'submit');
     const phoneControl = el('div', {class: 'phone-control'},
@@ -90,6 +97,7 @@ export function showSignIn(main, ctx, firebase, startAuth, initState, authFlow =
     if (auth.dummy) form.prepend(el('p', {class: 'dummy-login-note'},
       'Local dummy sign-in: enter any mobile number and use OTP 123456. Use 99999 99999 to sign in as admin.'));
     section.replaceChildren(form);
+    if (message) say(feedback, message, true);
     if (focus) phone.focus();
     bindForm(form, submit, feedback, async () => {
       await requireLoginConnection();
@@ -141,6 +149,18 @@ export function showSignIn(main, ctx, firebase, startAuth, initState, authFlow =
         if (!ctx.current()) {
           await sdk.signOut(auth);
           authFlow.cancel?.();
+          return;
+        }
+        try {
+          await api('/me', {ctx: {...ctx, user}, auth: true});
+        } catch (error) {
+          if (error.code === 'account-disabled') {
+            await authFlow.disabled();
+          } else {
+            await sdk.signOut(auth);
+            authFlow.cancel?.();
+            showPhone(true, error.message);
+          }
           return;
         }
         if (auth.dummy) {

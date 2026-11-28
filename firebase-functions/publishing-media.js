@@ -13,6 +13,11 @@ export function courseCutoff(date) {
   return midnight + 18.5 * 60 * 60 * 1000;
 }
 
+export function visibleCourses(items, now = Date.now()) {
+  return items.filter(item => !item.publicLearning && !item.archived &&
+    (courseCutoff(item.expiresOn) ?? Infinity) > now);
+}
+
 export function expiryInput(date, { future = false, now = Date.now() } = {}) {
   const cutoff = courseCutoff(date);
   if (cutoff === null) fail(422, 'Enter a valid course expiry date.');
